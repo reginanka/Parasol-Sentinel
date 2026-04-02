@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather Sentinel | Intelligence Monitoring</title>
+    <meta name="description" content="Premium weather ecosystem with real-time tracking, alerts, and analytics.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Leaflet for RainViewer -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Font Awesome (Latest version for Threads icon) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="loading">
+    <div class="background-overlay"></div>
+    
+    <main class="dashboard">
+        <header class="header fade-in">
+            <div class="logo">
+                <div class="pulse-container"><span class="pulse"></span></div>
+                <h1>Parasol <span>Sentinel</span></h1>
+                <div id="access-type" class="access-type">Free Access</div>
+            </div>
+            <div id="city-info" class="city-info">
+                <h2 id="current-city" class="text-glow">Київ (Дефолт)</h2>
+                <div class="date-badge"><p id="current-date">Четвер, 2 квітня</p></div>
+            </div>
+            <div class="status-badge">
+                <div class="search-box">
+                    <input type="text" id="city-search" placeholder="Пошук міста...">
+                    <button id="search-btn">🔍</button>
+                </div>
+                <div class="live-status">
+                    <span class="status-dot"></span>
+                    <span class="status-label">Актуально</span>
+                    <small id="update-time">--:--</small>
+                </div>
+            </div>
+        </header>
+
+        <!-- Top Section: Stats + Chart in a Row -->
+        <section class="top-row">
+            <div class="glass card main-weather-card fade-in-up">
+                <div class="weather-main">
+                    <img id="weather-icon" src="https://www.weatherbit.io/static/img/icons/c01d.png" alt="icon">
+                    <span id="current-temp" class="temp-display">--°C</span>
+                </div>
+                <div class="weather-desc">
+                    <h3 id="weather-condition">Аналізуємо...</h3>
+                    <p id="weather-feels">Відчувається як --°C</p>
+                </div>
+                <div class="sun-times">
+                    <div class="sun-item">🌅 Схід: <strong id="sunrise-val">--:--</strong></div>
+                    <div class="sun-item">🌇 Захід: <strong id="sunset-val">--:--</strong></div>
+                </div>
+            </div>
+            
+            <!-- (Chart remains as before) -->
+            <div class="glass card chart-card fade-in-up" style="animation-delay: 0.1s;">
+                <div class="chart-header">
+                    <div class="chart-tabs">
+                        <button class="tab-btn active" data-mode="temp">Темп</button>
+                        <button class="tab-btn" data-mode="precip_prob">Шанс (%)</button>
+                        <button class="tab-btn" data-mode="precip">Об'єм (мм)</button>
+                        <button class="tab-btn" data-mode="wind">Вітер</button>
+                        <button class="tab-btn" data-mode="press">Тиск</button>
+                    </div>
+                </div>
+                <div class="canvas-wrapper">
+                    <canvas id="weatherChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Expanded Compact Stats Row with Clear Labels -->
+        <section class="compact-stats fade-in-up" style="animation-delay: 0.15s;">
+            <div class="glass stats-pill">🧿 UV-індекс: <strong id="uv-val">--</strong></div>
+            <div class="glass stats-pill">🌬️ Пориви вітру: <strong id="wind-gust">--</strong></div>
+            <div class="glass stats-pill">🌀 Вологість: <strong id="humidity-val">--%</strong></div>
+            <div class="glass stats-pill">💧 Шанс опадів: <strong id="precip-prob">--%</strong></div>
+            <div class="glass stats-pill">👁️ Видимість: <strong id="vis-val">--</strong></div>
+            <div class="glass stats-pill">🌡️ Тиск: <strong id="press-val">--</strong></div>
+        </section>
+
+        <!-- Weekly Forecast Selector -->
+        <section class="forecast-row fade-in-up" style="animation-delay: 0.18s;" id="daily-forecast">
+            <!-- Items injected by JS -->
+        </section>
+
+        <!-- Map Section -->
+        <section class="glass map-section fade-in-up" style="animation-delay: 0.25s;">
+            <iframe id="windy-iframe" 
+                width="100%" height="450" 
+                src="https://embed.windy.com/embed2.html?lat=50.4501&lon=30.5234&zoom=5&level=surface&overlay=radar&menu=&message=true" 
+                frameborder="0">
+            </iframe>
+        </section>
+
+        <footer class="footer glass fade-in">
+            <div class="footer-container">
+                <div class="footer-left">
+                    <p class="copyright">© <span id="copyright-year"></span> Parasol Sentinel — Інтелектуальний моніторинг</p>
+                    <a href="https://t.me/parasol_wbot" target="_blank" class="bot-btn">
+                        <i class="fab fa-telegram-plane"></i> Відкрити Parasol Bot
+                    </a>
+                </div>
+                
+                <div class="footer-right">
+                    <div class="dev-brand">
+                        <span>Developed by <strong>Gearberry</strong></span>
+                        <p>Feel free to connect with me:</p>
+                    </div>
+                    <div class="social-grid">
+                        <a href="https://t.me/Gearberry" target="_blank" class="social-icon telegram" title="Telegram"><i class="fab fa-telegram-plane"></i></a>
+                        <a href="https://www.youtube.com/@Gearberry" target="_blank" class="social-icon youtube" title="YouTube"><i class="fab fa-youtube"></i></a>
+                        <a href="https://www.instagram.com/gearberry_" target="_blank" class="social-icon instagram" title="Instagram"><i class="fab fa-instagram"></i></a>
+                        <a href="https://www.facebook.com/profile.php?id=61586878866628" target="_blank" class="social-icon facebook" title="Facebook"><i class="fab fa-facebook-f"></i></a>
+                        <a href="https://www.threads.com/@gearberry_" target="_blank" class="social-icon threads" title="Threads"><i class="fa-brands fa-threads"></i></a>
+                        <a href="https://github.com/reginanka" target="_blank" class="social-icon github" title="GitHub"><i class="fab fa-github"></i></a>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </main>
+
+    <div class="loader-overlay">
+        <div class="loader"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

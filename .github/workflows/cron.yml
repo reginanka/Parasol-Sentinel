@@ -1,0 +1,30 @@
+name: Weather Sentinel Automation
+
+on:
+  schedule:
+    # Run weather checks at 06:00 and 11:00 UTC
+    - cron: '0 6,11 * * *'
+    # Run daily forecast at 16:00 UTC (19:00 Kyiv time)
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+jobs:
+  weather_tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute Weather Tasks
+        run: |
+          # Detect which schedule triggered the workflow
+          HOUR=$(date -u +%H)
+          
+          if [ "$HOUR" == "06" ] || [ "$HOUR" == "11" ]; then
+            echo "Running weather check..."
+            curl -X GET "https://${{ secrets.DOMAIN }}/api/cron-check" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
+          fi
+          
+          if [ "$HOUR" == "16" ]; then
+            echo "Running daily forecast..."
+            curl -X GET "https://${{ secrets.DOMAIN }}/api/cron-forecast" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
+          fi
