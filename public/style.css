@@ -422,6 +422,14 @@ main {
     transition: opacity 0.5s ease;
 }
 
+.mobile-only { display: none !important; }
+.status-row-wrapper {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    justify-content: flex-end;
+}
+
 /* Footer & Developer Info Redesign */
 .footer {
     margin-top: 3rem;
@@ -568,6 +576,9 @@ main {
         align-items: center;
         width: 100%;
     }
+    .desktop-only { display: none !important; }
+    .mobile-only { display: block !important; }
+    .status-row-wrapper { justify-content: space-between; }
     .search-box {
         width: 100%;
     }
