@@ -98,10 +98,9 @@ function updateTexts() {
         }
     });
     
-    const toggleBtn = document.getElementById('lang-toggle');
-    if (toggleBtn) {
-        toggleBtn.textContent = currentLang === 'uk' ? 'EN' : 'UK';
-    }
+    document.querySelectorAll('.lang-toggle-btn').forEach(btn => {
+        btn.textContent = currentLang === 'uk' ? 'EN' : 'UK';
+    });
 }
 
 // DOM Elements
@@ -139,9 +138,8 @@ async function init() {
         });
     });
 
-    const toggleBtn = document.getElementById('lang-toggle');
-    if (toggleBtn) {
-        toggleBtn.addEventListener('click', () => {
+    document.querySelectorAll('.lang-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
             currentLang = currentLang === 'uk' ? 'en' : 'uk';
             localStorage.setItem('lang', currentLang);
             updateTexts();
@@ -151,8 +149,8 @@ async function init() {
                 updateUI(currentDailyIndex);
             }
         });
-        updateTexts();
-    }
+    });
+    updateTexts();
 }
 
 async function searchCity() {
