@@ -31,6 +31,7 @@ const i18n = {
         chartPrecip: "Опади (мм)",
         chartProb: "Шанс опадів (%)",
         chartPress: "Тиск (mb)",
+        intelMonitoring: "Інтелектуальний моніторинг",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
             300: 'Мряка', 301: 'Мряка', 302: 'Сильна мряка',
@@ -68,6 +69,7 @@ const i18n = {
         chartPrecip: "Precip (mm)",
         chartProb: "Precip Chance (%)",
         chartPress: "Pressure (mb)",
+        intelMonitoring: "Intelligence Monitoring",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
             300: 'Drizzle', 301: 'Drizzle', 302: 'Heavy drizzle',
