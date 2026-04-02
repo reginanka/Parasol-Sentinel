@@ -27,17 +27,20 @@
                 <div class="pulse-container"><span class="pulse"></span></div>
                 <h1>Parasol <span>Sentinel</span></h1>
                 <div id="access-type" class="access-type">Free Access</div>
-                <div id="lang-toggle" class="lang-toggle-btn" style="cursor: pointer; margin-top: 6px; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; width: fit-content; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15); transition: background 0.2s;">EN</div>
+                <div class="lang-toggle-btn desktop-only" style="cursor: pointer; margin-top: 6px; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; width: fit-content; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15); transition: background 0.2s;">EN</div>
             </div>
             <div id="city-info" class="city-info">
                 <h2 id="current-city" class="text-glow">Київ (Дефолт)</h2>
                 <div class="date-badge"><p id="current-date">Четвер, 2 квітня</p></div>
             </div>
-            <div class="status-badge" style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-                <div class="live-status" style="margin-bottom: 0;">
-                    <span class="status-dot"></span>
-                    <span class="status-label" data-i18n="actual">Актуально</span>
-                    <small id="update-time">--:--</small>
+            <div class="status-badge" style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px; width:100%;">
+                <div class="status-row-wrapper">
+                    <div class="lang-toggle-btn mobile-only" style="cursor: pointer; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15);">EN</div>
+                    <div class="live-status" style="margin-bottom: 0;">
+                        <span class="status-dot"></span>
+                        <span class="status-label" data-i18n="actual">Актуально</span>
+                        <small id="update-time">--:--</small>
+                    </div>
                 </div>
                 <div class="search-box">
                     <input type="text" id="city-search" data-i18n="placeholder:searchCity" placeholder="Пошук міста...">
