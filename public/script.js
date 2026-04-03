@@ -262,7 +262,15 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             const refreshPart = forceRefresh ? '&refresh=true' : '';
             const sigPart = sig ? `&sig=${sig}` : '';
             const response = await fetch(`${API_URL}?user=${userId}${sigPart}${refreshPart}`);
-            if (!response.ok) throw new Error('Internal API failed');
+            
+            if (!response.ok) {
+                // FALLBACK: if not authorized (missing/invalid sig), show free version instead of error
+                if (response.status === 401) {
+                    console.info('Unauthorized or missing signature: Falling back to Open-Meteo free engine.');
+                    return await fetchOpenMeteo(DEFAULT_LAT, DEFAULT_LON, DEFAULT_CITY);
+                }
+                throw new Error('Internal API failed');
+            }
             const data = await response.json();
 
             if (data.cached && data.lastState && data.lastState.fullData) {
@@ -288,7 +296,9 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
         }
     } catch (error) {
         console.warn('Load error:', error);
-        updateTime.textContent = 'API Error';
+        const errMsg = error.message.includes('Unauthorized') ? 'Sign Error' : 'API Error';
+        updateTime.textContent = errMsg;
+        showToast(error.message || 'Failed to connect to server');
     } finally {
         setTimeout(() => document.body.classList.remove('loading'), 500);
     }
