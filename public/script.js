@@ -34,8 +34,25 @@ const i18n = {
         chartWind: "Вітер (км/год)",
         chartPrecip: "Опади (мм)",
         chartProb: "Шанс опадів (%)",
-        chartPress: "Тиск (mb)",
-        intelMonitoring: "Інтелектуальний моніторинг",
+        pressure: "Pressure",
+        openBot: "Open Parasol Bot",
+        searchCity: "Search city...",
+        feelsLike: "Feels like",
+        analyzing: "Analyzing...",
+        cityNotFound: "City not found",
+        defaultCity: "Your Location",
+        chartNoData: "Hourly forecast unavailable",
+        chartTemp: "Temp (°C)",
+        chartWind: "Wind (km/h)",
+        chartPrecip: "Precip (mm)",
+        chartProb: "Precip Chance (%)",
+        chartPress: "Pressure (mb)",
+        intelMonitoring: "Intelligence Monitoring",
+        sentinel: "Вартовий",
+        dashboard: "Панель керування",
+        freeAccess: "Безкоштовний доступ",
+        premiumStatus: "Преміум статус",
+        sentinelDashboard: "Панель Sentinel",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
             300: 'Мряка', 301: 'Мряка', 302: 'Сильна мряка',
@@ -74,6 +91,11 @@ const i18n = {
         chartProb: "Precip Chance (%)",
         chartPress: "Pressure (mb)",
         intelMonitoring: "Intelligence Monitoring",
+        sentinel: "Sentinel",
+        dashboard: "Dashboard",
+        freeAccess: "Free Access",
+        premiumStatus: "Premium Status",
+        sentinelDashboard: "Sentinel Dashboard",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
             300: 'Drizzle', 301: 'Drizzle', 302: 'Heavy drizzle',
@@ -88,7 +110,10 @@ const i18n = {
 
 let currentLang = localStorage.getItem('lang');
 if (!currentLang) {
-    currentLang = (navigator.language.startsWith('uk') || navigator.language.startsWith('ru')) ? 'uk' : 'en';
+    const isUkOrRu = (navigator.language && (navigator.language.startsWith('uk') || navigator.language.startsWith('ru')));
+    currentLang = isUkOrRu ? 'uk' : 'en';
+    // If we want to default to UK for Ukrainian users even if browser is EN
+    if (window.location.hostname.includes('.ua')) currentLang = 'uk';
 }
 let currentDailyIndex = 0;
 
@@ -191,12 +216,12 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             if (data.cached && data.lastState && data.lastState.fullData) {
                 weatherData = data.lastState.fullData;
                 currentCity.textContent = data.user.city;
-                accessType.textContent = 'Sentinel Dashboard';
+                accessType.textContent = i18n[currentLang].sentinelDashboard;
             } else {
                 weatherData = data;
                 // Weatherbit puts city name inside 'current'
                 currentCity.textContent = data.current?.city_name || i18n[currentLang].defaultCity;
-                accessType.textContent = 'Premium Status';
+                accessType.textContent = i18n[currentLang].premiumStatus;
             }
             updateUI(0); // Show today by default
             updateWindyWidget(data.lat || DEFAULT_LAT, data.lon || DEFAULT_LON);
@@ -220,7 +245,7 @@ async function fetchOpenMeteo(lat, lon, name) {
         currentCity.textContent = name;
         updateUI(0);
         updateWindyWidget(lat, lon);
-        accessType.textContent = 'Free Access';
+        accessType.textContent = i18n[currentLang].freeAccess;
         updateUpdateTime();
     } catch (error) {
         console.error('Open-Meteo Error:', error);
@@ -342,7 +367,12 @@ function getPremiumIcon(code) {
     };
 
     // Extract base code (without 'd' or 'n' sometimes if generic)
-    const iconName = mapping[code] || (code.startsWith('r') ? 'rain' : code.startsWith('s') ? 'snow' : code.startsWith('t') ? 'thunderstorms' : 'not-available');
+    const iconName = mapping[code] || 
+        (code.startsWith('r') ? 'rain' : 
+         code.startsWith('s') ? 'snow' : 
+         code.startsWith('t') ? 'thunderstorms' : 
+         code.startsWith('c') ? 'cloudy' : 
+         code.startsWith('a') ? 'fog' : 'cloudy');
     return `${base}${iconName}.svg`;
 }
 
