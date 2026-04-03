@@ -1,7 +1,7 @@
 # ☂️ Parasol Sentinel: Weather Intelligence Ecosystem
 
 **Parasol Sentinel** is a high-performance weather monitoring solution designed to showcase scalable architecture using Node.js, Vercel Serverless, and MongoDB. This ecosystem features a proactive Telegram bot and a stunning glassmorphism dashboard, demonstrating expert-level integration of real-time data streaming and cost-optimized API management.
-
+<p align="center"><img src="preview1.png" width="600" alt="My Website Preview"></p>
 ---
 
 ## 🌟 Key Features & Business Value
@@ -57,4 +57,11 @@ Unlike passive bots that only respond to user commands, Parasol is **proactive**
    - Set GitHub Secrets for `DOMAIN` and `CRON_SECRET` to enable automated workflows.
 
 ---
+## 👤 Developer & Socials
 Designed and developed by **Gearberry** — available for custom ecosystem architecture and high-performance web development.
+Feel free to connect with me:
+- [Telegram](https://t.me/Gearberry)
+- [YouTube](https://www.youtube.com/@Gearberry)
+- [Instagram](https://www.instagram.com/gearberry_)
+- [Facebook](https://www.facebook.com/profile.php?id=61586878866628)
+- [Threads](https://www.threads.com/@gearberry_)
