@@ -47,9 +47,21 @@ const generateSignature = (data, secret) => {
         .substring(0, 12); // Shorter for URL aesthetics
 };
 
+/**
+ * Escapes characters for HTML to prevent Telegram parse errors.
+ */
+const escapeHTML = (text) => {
+    if (!text) return '';
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+};
+
 module.exports = {
     sleep,
     truncate,
     formatUrl,
-    generateSignature
+    generateSignature,
+    escapeHTML
 };
