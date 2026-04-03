@@ -1,5 +1,5 @@
 {
-  "name": "weather-sentinel",
+  "name": "parasol-sentinel",
   "version": "1.0.0",
   "description": "Premium weather monitoring ecosystem with Telegram bot alerts and a high-performance web dashboard.",
   "main": "api/bot.js",
@@ -11,5 +11,8 @@
   },
   "scripts": {
     "start": "node api/bot.js"
+  },
+  "engines": {
+    "node": ">=18.x"
   }
 }

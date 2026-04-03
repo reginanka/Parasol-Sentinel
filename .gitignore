@@ -8,3 +8,6 @@ package-lock.json
 npm-debug.log
 logs
 *.log
+
+# Local backup folder
+стабільні файли/
