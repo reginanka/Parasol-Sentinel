@@ -5,7 +5,7 @@
 async function logToTelegram(bot, chatId, text) {
     if (!chatId) return;
     try {
-        await bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(chatId, text, { parse_mode: 'html' });
     } catch (e) {
         console.error('Log send error:', e.message);
     }
