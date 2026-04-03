@@ -132,6 +132,17 @@ bot.start(async (ctx) => {
             reply_markup: keyboard
         });
     }
+
+    // Set WebApp menu button
+    try {
+        await ctx.setChatMenuButton({
+            type: 'web_app',
+            text: dict[lang].dashboard,
+            web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
+        });
+    } catch (e) {
+        console.error('Error setting ChatMenuButton:', e.message);
+    }
 });
 
 // /settings command
@@ -262,6 +273,14 @@ bot.on('callback_query', async (ctx) => {
                     ]
                 }
             });
+
+            // Set WebApp menu button after successful city selection
+            await ctx.setChatMenuButton({
+                type: 'web_app',
+                text: dict[lang].dashboard,
+                web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
+            }).catch(e => console.error('Menu button error:', e.message));
+
         } catch (error) {
             await ctx.replyWithMarkdown(dict[lang].saveError);
         }

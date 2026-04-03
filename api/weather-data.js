@@ -2,7 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const connectDB = require('../utils/db');
 const User = require('../models/User');
-const { generateSignature } = require('../utils/helpers');
+const { generateSignature, validateTelegramInitData } = require('../utils/helpers');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 const DEFAULT_CITY = 'Kyiv';
@@ -10,15 +10,38 @@ const DEFAULT_CITY = 'Kyiv';
 module.exports = async (req, res) => {
     try {
         await connectDB();
-        const { user: userId, sig, refresh } = req.query;
+        const { user: userIdFromUrl, sig, initData, refresh } = req.query;
         const SECRET = process.env.CRON_SECRET;
+        const BOT_TOKEN = process.env.TG_TOKEN;
+
+        let userId = userIdFromUrl;
+        let isWebApp = false;
+
+        // === НОВИЙ БЛОК: підтримка Telegram WebApp ===
+        if (initData && BOT_TOKEN) {
+            const isValid = validateTelegramInitData(initData, BOT_TOKEN);
+            if (isValid) {
+                const params = new URLSearchParams(initData);
+                const userParam = params.get('user');
+                if (userParam) {
+                    const data = JSON.parse(userParam);
+                    userId = data.id?.toString();
+                    isWebApp = true;
+                }
+            } else {
+                return res.status(401).json({ error: 'Invalid Telegram initData' });
+            }
+        }
+        // ============================================
 
         let userData = null;
         if (userId) {
-            // Verify signature to protect privacy
-            const expectedSig = generateSignature(userId, SECRET);
-            if (!sig || sig !== expectedSig) {
-                return res.status(401).json({ error: 'Unauthorized access: Invalid or missing signature' });
+            // Verify signature for normal links or use WebApp validation status
+            if (!isWebApp) {
+                const expectedSig = generateSignature(userId, SECRET);
+                if (!sig || sig !== expectedSig) {
+                    return res.status(401).json({ error: 'Unauthorized access: Invalid or missing signature' });
+                }
             }
             userData = await User.findOne({ telegramId: Number(userId) });
         }
