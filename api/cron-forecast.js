@@ -32,7 +32,7 @@ module.exports = async (req, res) => {
             uk: {
                 title: "🌆 **Прогноз на 3 дні для {city}**",
                 temp: "🌡 **Темп:**",
-                precip: "💧 **Опади:**",
+                precip: "💧 **Вірог. опадів:**",
                 wind: "💨 **Вітер:**",
                 press: "🧭 **Тиск:**",
                 details: "🔗 Детальний прогноз",
