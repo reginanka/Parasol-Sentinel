@@ -109,19 +109,28 @@ bot.start(async (ctx) => {
     await connectDB();
     const user = await User.findOne({ telegramId: ctx.from.id });
     
+    const keyboard = {
+        keyboard: [
+            [{ text: dict[lang].settingsBtn }]
+        ],
+        resize_keyboard: true
+    };
+
     if (user) {
         const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
         const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
         await ctx.replyWithMarkdown(dict[lang].welcome, {
             reply_markup: {
+                ...keyboard,
                 inline_keyboard: [
-                    [{ text: dict[lang].dashboard, url: dashboardUrl }],
-                    [{ text: dict[lang].settingsBtn, callback_data: 'open_settings' }]
+                    [{ text: dict[lang].dashboard, url: dashboardUrl }]
                 ]
             }
         });
     } else {
-        await ctx.replyWithMarkdown(dict[lang].welcome);
+        await ctx.replyWithMarkdown(dict[lang].welcome, {
+            reply_markup: keyboard
+        });
     }
 });
 
@@ -141,11 +150,23 @@ bot.command('settings', async (ctx) => {
     );
 });
 
-// Handle text messages (City search)
+// Handle text messages (City search or Menu buttons)
 bot.on('text', async (ctx) => {
     const query = ctx.message.text.trim();
-    if (query.startsWith('/')) return;
     const lang = getLang(ctx);
+
+    // Handle Menu Buttons
+    if (query === dict.uk.settingsBtn || query === dict.en.settingsBtn) {
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user) {
+            return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+        }
+        return ctx.replyWithMarkdown(dict[lang].settings, {
+            reply_markup: buildSettingsKeyboard(lang, user.units)
+        });
+    }
+
+    if (query.startsWith('/')) return;
 
     try {
         console.log(`Searching for: ${query}`);
@@ -237,8 +258,7 @@ bot.on('callback_query', async (ctx) => {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: dict[lang].dashboard, url: dashboardUrl }],
-                        [{ text: dict[lang].settingsBtn, callback_data: 'open_settings' }]
+                        [{ text: dict[lang].dashboard, url: dashboardUrl }]
                     ]
                 }
             });
