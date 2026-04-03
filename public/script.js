@@ -7,6 +7,9 @@ let weatherChart = null;
 let currentMode = 'temp';
 let weatherData = null; // Store fetched data globally for switching
 let currentStatusKey = 'freeAccess';
+let currentUnits = { wind: 'ms', pressure: 'mmhg' }; // single source of truth (synced with bot)
+let currentUserId = null;  // Telegram user ID (from URL param or WebApp)
+let currentSig = null;     // HMAC signature (only present with personal link)
 
 const i18n = {
     uk: {
@@ -19,11 +22,26 @@ const i18n = {
         tabWind: "Вітер",
         tabPress: "Тиск",
         uvIndex: "UV-індекс",
-        windGusts: "Пориви вітру",
+        windGusts: "Вітер",
         humidity: "Вологість",
         precipChance: "Шанс опадів",
         visibility: "Видимість",
         pressure: "Тиск",
+        gustsTo: "пориви до",
+        uvLevels: {
+            low: "Низький",
+            moderate: "Помірний",
+            high: "Високий",
+            veryHigh: "Дуже високий",
+            extreme: "Екстремальний"
+        },
+        units: {
+            ms: "м/с",
+            kmh: "км/год",
+            mmhg: "мм рт.ст.",
+            hpa: "гПа",
+            km: "км"
+        },
         openBot: "Відкрити Parasol Bot",
         searchCity: "Пошук міста...",
         feelsLike: "Відчувається як",
@@ -35,6 +53,7 @@ const i18n = {
         chartWind: "Вітер (км/год)",
         chartPrecip: "Опади (мм)",
         chartProb: "Шанс опадів (%)",
+        chartPress: "Тиск (мм рт.ст.)",
         intelMonitoring: "Інтелектуальний моніторинг",
         sentinel: "Вартовий",
         dashboard: "Панель керування",
@@ -61,11 +80,26 @@ const i18n = {
         tabWind: "Wind",
         tabPress: "Pres",
         uvIndex: "UV Index",
-        windGusts: "Wind Gusts",
+        windGusts: "Wind",
         humidity: "Humidity",
         precipChance: "Precip chance",
         visibility: "Visibility",
         pressure: "Pressure",
+        gustsTo: "gusts up to",
+        uvLevels: {
+            low: "Low",
+            moderate: "Moderate",
+            high: "High",
+            veryHigh: "Very High",
+            extreme: "Extreme"
+        },
+        units: {
+            ms: "m/s",
+            kmh: "km/h",
+            mmhg: "mmHg",
+            hpa: "hPa",
+            km: "km"
+        },
         openBot: "Open Parasol Bot",
         searchCity: "Search city...",
         feelsLike: "Feels like",
@@ -135,12 +169,30 @@ const accessType = document.getElementById('access-type');
 
 async function init() {
     const urlParams = new URLSearchParams(window.location.search);
-    const userId = urlParams.get('user');
-    const sig = urlParams.get('sig');
+
+    // Detect how the page was opened:
+    // 1. Via Telegram WebApp button → TG passes user data automatically
+    // 2. Via personal link → ?user=ID&sig=SIG in URL
+    const tgWebApp = window.Telegram?.WebApp;
+    const tgUser = tgWebApp?.initDataUnsafe?.user;
+
+    if (tgWebApp?.initData) {
+        tgWebApp.ready();  // Signal to Telegram that the app is loaded
+        tgWebApp.expand(); // Expand to full height
+    }
+
+    currentUserId = tgUser?.id?.toString() || urlParams.get('user');
+    currentSig    = urlParams.get('sig'); // null when opened from WebApp button without params
+
+    // Load units from localStorage as fallback (until API responds)
+    try {
+        const saved = localStorage.getItem('units');
+        if (saved) currentUnits = JSON.parse(saved);
+    } catch(e) {}
 
     updateCurrentDate();
     updateCopyrightYear();
-    await loadWeatherData(userId, sig);
+    await loadWeatherData(currentUserId, currentSig);
 
     // Search Binding
     document.getElementById('search-btn').addEventListener('click', () => searchCity());
@@ -165,11 +217,21 @@ async function init() {
             updateTexts();
             updateCurrentDate();
             updateUpdateTime();
-            if (weatherData) {
-                updateUI(currentDailyIndex);
-            }
+            if (weatherData) updateUI(currentDailyIndex);
         });
     });
+
+    // Settings panel bindings
+    const settingsBtn   = document.getElementById('settings-btn');
+    const settingsPanel = document.getElementById('settings-panel');
+    const settingsClose = document.getElementById('settings-close');
+    if (settingsBtn)  settingsBtn.addEventListener('click', openSettingsPanel);
+    if (settingsClose) settingsClose.addEventListener('click', () => { settingsPanel.style.display = 'none'; });
+    settingsPanel?.addEventListener('click', (e) => { if (e.target === settingsPanel) settingsPanel.style.display = 'none'; });
+    document.querySelectorAll('.unit-btn').forEach(btn => {
+        btn.addEventListener('click', () => saveUnitSetting(btn.dataset.type, btn.dataset.val));
+    });
+
     updateTexts();
 }
 
@@ -209,9 +271,13 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 currentStatusKey = 'sentinelDashboard';
             } else {
                 weatherData = data;
-                // Weatherbit puts city name inside 'current'
                 currentCity.textContent = data.current?.city_name || i18n[currentLang].defaultCity;
                 currentStatusKey = 'premiumStatus';
+            }
+            // Apply unit preferences from the API (single source of truth)
+            if (data.units) {
+                currentUnits = data.units;
+                localStorage.setItem('units', JSON.stringify(currentUnits));
             }
             accessType.textContent = i18n[currentLang][currentStatusKey];
             updateUI(0); // Show today by default
@@ -230,7 +296,7 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
 
 async function fetchOpenMeteo(lat, lon, name) {
     try {
-        const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_gusts_10m_max,visibility_max&timezone=auto`);
+        const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,visibility_max&timezone=auto`);
         if (!omResponse.ok) return;
         const omData = await omResponse.json();
 
@@ -291,8 +357,8 @@ function normalizeOpenMeteo(om, name) {
                 // These are for the main widget when selected
                 temp: om.daily.temperature_2m_max[i],
                 app_temp: om.daily.temperature_2m_max[i] - 2,
-                rh: 60, // Placeholder: Open-Meteo daily forecast does not include relative humidity
-                wind_spd: om.daily.wind_gusts_10m_max[i] / 4,
+                rh: 60, // Placeholder
+                wind_spd: (om.daily.wind_speed_10m_max[i] || om.daily.wind_gusts_10m_max[i] / 1.5) / 3.6,
                 weather: wmo
             };
         })
@@ -324,14 +390,20 @@ function updateUI(dayIndex) {
     // Compact Pills
     document.getElementById('sunrise-val').textContent = formatFullTime(details.sunrise);
     document.getElementById('sunset-val').textContent = formatFullTime(details.sunset);
-    document.getElementById('uv-val').textContent = Math.round(details.uv);
-    document.getElementById('wind-gust').textContent = `${Math.round(details.gust || 0)} м/с`;
+    document.getElementById('uv-val').innerHTML = formatUV(details.uv);
+    
+    // Wind combined (spd + gusts)
+    const spdStr = formatWind(day.wind_spd || 0);
+    const gustVal = Math.round((details.gust || 0) * (currentUnits.wind === 'kmh' ? 3.6 : 1));
+    const fullWindStr = `${spdStr} (${i18n[currentLang].gustsTo} ${gustVal})`;
+    document.getElementById('wind-gust').textContent = fullWindStr;
+
     document.getElementById('humidity-val').textContent = `${day.rh}%`;
     document.getElementById('precip-prob').textContent = `${details.pop}%`;
-    document.getElementById('vis-val').textContent = `${Math.round(details.vis)} км`;
+    document.getElementById('vis-val').textContent = `${Math.round(details.vis)} ${i18n[currentLang].units.km}`;
     // Pressure: use hourly data from OM (index 0 for now) if today, or fallback.
     const hPress = weatherData.hourly?.surface_pressure?.[isToday ? 0 : dayIndex * 24];
-    document.getElementById('press-val').textContent = hPress ? `${Math.round(hPress)} mb` : '--- mb';
+    document.getElementById('press-val').textContent = hPress ? formatPressure(hPress) : '---';
 
     // Theme
     const code = day.weather.code;
@@ -410,8 +482,15 @@ function renderChart(dayOffset = 0) {
         datasetLabel = i18n[currentLang].chartTemp;
         datasetData = dataSlice.temperature_2m.slice(start, start + 24);
     } else if (currentMode === 'wind') {
-        datasetLabel = i18n[currentLang].chartWind;
-        datasetData = dataSlice.wind_speed_10m.slice(start, start + 24);
+        // Open-Meteo hourly wind is in km/h; convert to m/s if needed
+        const rawWind = dataSlice.wind_speed_10m.slice(start, start + 24);
+        if (currentUnits.wind === 'ms') {
+            datasetData = rawWind.map(v => +(v / 3.6).toFixed(1));
+            datasetLabel = currentLang === 'uk' ? 'Вітер (м/с)' : 'Wind (m/s)';
+        } else {
+            datasetData = rawWind;
+            datasetLabel = i18n[currentLang].chartWind;
+        }
         color = '#38bdf8';
     } else if (currentMode === 'precip') {
         datasetLabel = i18n[currentLang].chartPrecip;
@@ -422,8 +501,15 @@ function renderChart(dayOffset = 0) {
         datasetData = dataSlice.precipitation_probability.slice(start, start + 24);
         color = '#00F260';
     } else {
-        datasetLabel = i18n[currentLang].chartPress;
-        datasetData = dataSlice.surface_pressure.slice(start, start + 24);
+        // Pressure: Open-Meteo gives hPa
+        const rawPress = dataSlice.surface_pressure.slice(start, start + 24);
+        if (currentUnits.pressure === 'mmhg') {
+            datasetData = rawPress.map(v => +(v * 0.75006).toFixed(0));
+            datasetLabel = currentLang === 'uk' ? 'Тиск (мм рт.ст.)' : 'Pressure (mmHg)';
+        } else {
+            datasetData = rawPress;
+            datasetLabel = currentLang === 'uk' ? 'Тиск (гПа)' : 'Pressure (hPa)';
+        }
         color = '#fbbf24';
     }
 
@@ -468,7 +554,14 @@ function renderChart(dayOffset = 0) {
                     borderWidth: 1,
                     cornerRadius: 10,
                     callbacks: {
-                        label: (context) => ` ${context.parsed.y} ${currentMode === 'temp' ? '°C' : currentMode === 'wind' ? 'км/год' : currentMode === 'precip' ? 'мм' : currentMode === 'precip_prob' ? '%' : 'mb'}`
+                        label: (context) => {
+                            const y = context.parsed.y;
+                            if (currentMode === 'temp') return ` ${y} °C`;
+                            if (currentMode === 'wind') return ` ${y} ${currentUnits.wind === 'ms' ? 'м/с' : 'км/год'}`;
+                            if (currentMode === 'precip') return ` ${y} мм`;
+                            if (currentMode === 'precip_prob') return ` ${y} %`;
+                            return ` ${y} ${currentUnits.pressure === 'mmhg' ? 'мм рт.ст.' : 'гПа'}`;
+                        }
                     }
                 }
             },
@@ -585,6 +678,72 @@ function showToast(message) {
 function updateCopyrightYear() {
     const yearEl = document.getElementById('copyright-year');
     if (yearEl) yearEl.textContent = new Date().getFullYear();
+}
+
+// ─── UV Index label with contextual color ───────────────────────────────────
+function formatUV(uv) {
+    const val = Math.round(uv || 0);
+    const lvls = i18n[currentLang].uvLevels;
+    let label, color;
+    if (val <= 2)      { label = lvls.low;       color = '#4ade80'; }
+    else if (val <= 5) { label = lvls.moderate;  color = '#facc15'; }
+    else if (val <= 7) { label = lvls.high;      color = '#fb923c'; }
+    else if (val <= 10){ label = lvls.veryHigh;  color = '#f87171'; }
+    else               { label = lvls.extreme;   color = '#c084fc'; }
+    return `${val} <span style="color:${color};font-size:0.78em;font-weight:600;margin-left:3px;">${label}</span>`;
+}
+
+// ─── Wind formatting (m/s or km/h based on user settings) ───────────────────
+function formatWind(ms) {
+    const units = i18n[currentLang].units;
+    if (currentUnits.wind === 'kmh') {
+        return `${Math.round(ms * 3.6)} ${units.kmh}`;
+    }
+    return `${Math.round(ms)} ${units.ms}`;
+}
+
+// ─── Pressure formatting (mmHg or hPa based on user settings) ───────────────
+function formatPressure(hpa) {
+    const units = i18n[currentLang].units;
+    if (currentUnits.pressure === 'mmhg') {
+        return `${Math.round(hpa * 0.75006)} ${units.mmhg}`;
+    }
+    return `${Math.round(hpa)} ${units.hpa}`;
+}
+
+// ─── Open settings panel and highlight active unit buttons ──────────────────
+function openSettingsPanel() {
+    const panel = document.getElementById('settings-panel');
+    if (!panel) return;
+    document.querySelectorAll('.unit-btn').forEach(btn => {
+        const isActive = currentUnits[btn.dataset.type] === btn.dataset.val;
+        btn.style.background    = isActive ? 'rgba(0,242,96,0.2)'      : 'rgba(255,255,255,0.08)';
+        btn.style.borderColor   = isActive ? 'rgba(0,242,96,0.6)'      : 'rgba(255,255,255,0.2)';
+        btn.style.fontWeight    = isActive ? '700'                      : '400';
+    });
+    panel.style.display = 'flex';
+}
+
+// ─── Save a unit preference (locally + to DB if user has sig) ───────────────
+async function saveUnitSetting(type, val) {
+    currentUnits[type] = val;
+    localStorage.setItem('units', JSON.stringify(currentUnits));
+    openSettingsPanel(); // refresh highlights
+    if (weatherData) updateUI(currentDailyIndex); // re-render with new units
+
+    // Sync to DB (only if user has a valid personal link with sig)
+    if (currentUserId && currentSig) {
+        try {
+            await fetch(`/api/settings?user=${currentUserId}&sig=${currentSig}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [type]: val })
+            });
+        } catch (e) {
+            console.warn('Settings sync to DB failed:', e);
+        }
+    }
+    showToast(currentLang === 'uk' ? '✅ Збережено!' : '✅ Saved!');
 }
 
 init();

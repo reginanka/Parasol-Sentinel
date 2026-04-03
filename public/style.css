@@ -239,12 +239,41 @@ body {
 }
 
 .search-box button {
-    background: var(--primary);
+    background: transparent;
     border: none;
-    padding: 0 1rem;
-    border-radius: 8px;
+    padding: 0 0.8rem;
     cursor: pointer;
+    font-size: 1rem;
     transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.search-box button:hover {
+    filter: brightness(1.1);
+    transform: scale(1.05);
+}
+
+.glass-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.6rem 0.8rem;
+    cursor: pointer;
+    font-size: 1.1rem;
+    color: white;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.glass-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: translateY(-2px);
 }
 
 /* Top Row Grid */
@@ -328,30 +357,56 @@ body {
     position: relative;
 }
 
-/* Compact Stats Pills */
+/* Compact Stats Styling (Transparent & Modern) */
 .compact-stats {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.8rem;
-    justify-content: space-between;
+    gap: 1.5rem;
+    justify-content: center;
+    padding: 1.5rem 0;
 }
 
 .stats-pill {
-    flex: 1;
-    min-width: 140px;
-    padding: 0.8rem 1.2rem;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-    font-size: 0.85rem;
-    border-radius: 14px;
+    gap: 0.8rem;
+    padding: 0.5rem 1rem;
+    transition: var(--transition);
 }
 
-.stats-pill strong {
-    font-weight: 700;
-    color: #fff;
+.stat-icon {
+    font-size: 1.2rem;
+    opacity: 0.9;
+    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.2));
 }
+
+.stat-info {
+    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.stat-label {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+}
+
+.stat-value {
+    font-size: 0.95rem;
+    color: var(--text);
+    font-weight: 700;
+}
+
+.stats-pill:hover {
+    transform: translateY(-2px);
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 10px;
+}
+
 
 /* Map Section */
 .map-section {
