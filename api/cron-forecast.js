@@ -6,7 +6,7 @@ const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const connectDB = require('../utils/db');
 const { getWeatherDesc } = require('../utils/weather');
-const { sleep, formatUrl, generateSignature } = require('../utils/helpers');
+const { sleep, formatUrl, generateSignature, escapeHTML } = require('../utils/helpers');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 const LOG_CHAT_ID = process.env.LOG_CHAT_ID;
@@ -90,7 +90,7 @@ module.exports = async (req, res) => {
 
             } catch (err) {
                 errors++;
-                userLines.push(`• ${user.city} | ❌ помилка: ${err.message}`);
+                userLines.push(`• ${user.city} | ❌ помилка: ${escapeHTML(err.message)}`);
                 console.error(`Error processing forecast for user ${user.telegramId}:`, err.message);
             }
         }
@@ -110,7 +110,7 @@ module.exports = async (req, res) => {
         res.status(200).send(`Sent ${users.length} forecasts`);
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Cron Forecast FAILED</b> — ${startTime}\n<code>${error.message}</code>`);
+        await log(`❌ <b>Cron Forecast FAILED</b> — ${startTime}\n<code>${escapeHTML(error.message)}</code>`);
         res.status(500).send('Cron Forecast Error');
     }
 }
