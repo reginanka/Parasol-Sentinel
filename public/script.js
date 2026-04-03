@@ -1,7 +1,7 @@
 const API_URL = '/api/weather-data';
 const DEFAULT_LAT = 50.4501;
 const DEFAULT_LON = 30.5234;
-const DEFAULT_CITY = 'Київ';
+const DEFAULT_CITY = 'Kyiv';
 
 let weatherChart = null;
 let currentMode = 'temp';
@@ -34,20 +34,7 @@ const i18n = {
         chartWind: "Вітер (км/год)",
         chartPrecip: "Опади (мм)",
         chartProb: "Шанс опадів (%)",
-        pressure: "Pressure",
-        openBot: "Open Parasol Bot",
-        searchCity: "Search city...",
-        feelsLike: "Feels like",
-        analyzing: "Analyzing...",
-        cityNotFound: "City not found",
-        defaultCity: "Your Location",
-        chartNoData: "Hourly forecast unavailable",
-        chartTemp: "Temp (°C)",
-        chartWind: "Wind (km/h)",
-        chartPrecip: "Precip (mm)",
-        chartProb: "Precip Chance (%)",
-        chartPress: "Pressure (mb)",
-        intelMonitoring: "Intelligence Monitoring",
+        intelMonitoring: "Інтелектуальний моніторинг",
         sentinel: "Вартовий",
         dashboard: "Панель керування",
         freeAccess: "Безкоштовний доступ",
@@ -336,7 +323,9 @@ function updateUI(dayIndex) {
     document.getElementById('humidity-val').textContent = `${day.rh}%`;
     document.getElementById('precip-prob').textContent = `${details.pop}%`;
     document.getElementById('vis-val').textContent = `${Math.round(details.vis)} км`;
-    document.getElementById('press-val').textContent = isToday ? `${Math.round(weatherData.hourly.surface_pressure[0] || 1013)} mb` : '1013 mb';
+    // Pressure: use hourly data from OM (index 0 for now) if today, or fallback.
+    const hPress = weatherData.hourly?.surface_pressure?.[isToday ? 0 : dayIndex * 24];
+    document.getElementById('press-val').textContent = hPress ? `${Math.round(hPress)} mb` : '--- mb';
 
     // Theme
     const code = day.weather.code;
