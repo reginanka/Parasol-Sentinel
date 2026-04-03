@@ -56,23 +56,24 @@ module.exports = async (req, res) => {
                 const oldCode = user.lastState?.weatherCode || 800;
                 const newCode = current.weather.code;
 
-                let alertMessage = '';
+                let alerts = [];
 
                 // Condition 1: Sharp temperature change (>= 5°C)
                 if (deltaT >= 5) {
-                    alertMessage = alertsDict[lang].temp
+                    alerts.push(alertsDict[lang].temp
                         .replace('{delta}', deltaT.toFixed(1))
-                        .replace('{temp}', newTemp);
+                        .replace('{temp}', newTemp));
                 }
 
                 // Condition 2: From Clear/Clouds to Rain/Snow/Storm
                 if (oldCode >= 800 && newCode < 700) {
-                    alertMessage = alertsDict[lang].precip
+                    alerts.push(alertsDict[lang].precip
                         .replace('{city}', user.city)
-                        .replace('{desc}', current.weather.description);
+                        .replace('{desc}', current.weather.description));
                 }
 
-                if (alertMessage) {
+                if (alerts.length > 0) {
+                    const alertMessage = alerts.join('\n\n');
                     await bot.telegram.sendMessage(user.telegramId, alertMessage, {
                         parse_mode: 'Markdown',
                         reply_markup: {
@@ -85,7 +86,7 @@ module.exports = async (req, res) => {
                 }
 
                 // Collect per-user info for the log
-                const alertIcon = alertMessage ? '🚨 сповіщення надіслано' : '✅ без змін';
+                const alertIcon = alerts.length > 0 ? '🚨 сповіщення надіслано' : '✅ без змін';
                 const desc = getWeatherDesc(newCode, 'uk'); // Keep admin logs in Ukrainian
                 userLines.push(`• ${user.city} | ${newTemp}°C (Δ${deltaT.toFixed(1)}°C) | ${desc} | ${alertIcon}`);
 
