@@ -141,7 +141,14 @@ module.exports = async (req, res) => {
             }
         }
 
-        const summary = [`<b>Вечірній прогноз</b> — ${startTime}`, `👥 Користувачів: ${users.length}`, `📨 Надіслано: ${sent}`, `❌ Помилок: ${errors}`, ``, ...logLines].join('\n');
+        const summary = [
+            `📋 <b>Вечірній прогноз</b> — ${startTime}`,
+            `👥 Користувачів перевірено: ${users.length}`,
+            `📨 Прогнозів надіслано: ${sent}`,
+            `❌ Помилок: ${errors}`,
+            ``,
+            ...logLines
+        ].join('\n');
         await log(summary);
         res.status(200).send(`Sent ${sent} forecasts`);
     } catch (error) {

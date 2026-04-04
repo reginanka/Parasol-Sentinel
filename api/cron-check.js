@@ -114,8 +114,9 @@ module.exports = async (req, res) => {
                 }
 
                 // Log entry for admin
-                const status = cityAlertsTriggered ? '🚨 alert' : '✅ ok';
-                logLines.push(`• ${cityInfo.name} | ${newTemp}°C (Δ${deltaT.toFixed(1)}) | ${status}`);
+                const desc = getWeatherDesc(newCode, 'uk');
+                const statusText = cityAlertsTriggered ? '🚨 Стрімка зміна' : '✅ без змін';
+                logLines.push(`• ${cityInfo.name} | ${newTemp}°C (Δ${deltaT.toFixed(1)}) | ${desc} | ${statusText}`);
 
                 // Update lastState for site display consistency
                 for (const user of cityInfo.users) {
@@ -125,11 +126,18 @@ module.exports = async (req, res) => {
 
             } catch (err) {
                 errors++;
-                logLines.push(`• ${cityInfo.name} | ❌ error: ${err.message}`);
+                logLines.push(`• ${cityInfo.name} | ❌ помилка: ${err.message}`);
             }
         }
 
-        const summary = [`<b>Перевірка погоди</b> — ${startTime}`, `👥 Користувачів: ${users.length}`, `🚨 Сповіщень: ${alertsTotal}`, `❌ Помилок: ${errors}`, ``, ...logLines].join('\n');
+        const summary = [
+            `📋 <b>Перевірка погоди</b> — ${startTime}`,
+            `👥 Користувачів перевірено: ${users.length}`,
+            `🚨 Сповіщень надіслано: ${alertsTotal}`,
+            `❌ Помилок: ${errors}`,
+            ``,
+            ...logLines
+        ].join('\n');
         await log(summary);
         res.status(200).send(`Processed ${users.length} users`);
     } catch (error) {
