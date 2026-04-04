@@ -4,18 +4,16 @@ const getBot = require('../utils/bot');
 const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
+const City = require('../models/City');
 const connectDB = require('../utils/db');
 const { getWeatherDesc } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML } = require('../utils/helpers');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
-// Main Handler
+
 module.exports = async (req, res) => {
     const LOG_CHAT_ID = process.env.LOG_CHAT_ID;
-    
-    // Wrapper for the shared logger
     const log = (text) => logToTelegram(bot, LOG_CHAT_ID, text);
-    // Basic auth/token check
     if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) return res.status(401).send('Unauthorized');
 
     const startTime = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
@@ -24,103 +22,119 @@ module.exports = async (req, res) => {
         await connectDB();
         const users = await User.find({ notificationsEnabled: true });
 
-        let alertsSent = 0;
+        // --- GROUP USERS BY UNIQUE CITY ---
+        const uniqueCities = {};
+        for (const user of users) {
+             if (!user.lat || !user.lon) continue;
+             const key = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+             if (!uniqueCities[key]) uniqueCities[key] = { lat: user.lat, lon: user.lon, name: user.city, users: [] };
+             uniqueCities[key].users.push(user);
+        }
+
+        let alertsTotal = 0;
         let errors = 0;
-        const userLines = [];
+        const logLines = [];
 
         const alertsDict = {
             uk: {
-                temp: "⚠️ **Увага! Погода різко змінилася!**\nТемпература стрибнула на {delta}°C і зараз становить {temp}°C.",
-                precip: "⛈️ **Попередження про опади!**\nСхоже, погода у місті {city} погіршується. Зараз: {desc}.",
-                details: "🔗 Детальний прогноз"
+                temp: "⚠️ **Увага! Погода змінилася порівняно з вечором!**\nТемпература зараз: {temp}, що на {delta}°C {dir} ніж очікувалось.",
+                precip: "⛈️ **Попередження про опади!**\nПогода у місті {city} погіршилась. Зараз: {desc}.",
+                details: "🔗 Детальний прогноз",
+                warmer: "вище",
+                cooler: "нижче"
             },
             en: {
-                temp: "⚠️ **Attention! Weather change alert!**\nTemperature jumped by {delta}°C and is now {temp}°C.",
-                precip: "⛈️ **Precipitation alert!**\nWeather in {city} seems to be getting worse. Now: {desc}.",
-                details: "🔗 Detailed forecast"
+                temp: "⚠️ **Attention! Weather changed since evening!**\nTemp is now {temp}, which is {delta}°C {dir} than expected.",
+                precip: "⛈️ **Precipitation alert!**\nWeather in {city} has worsened. Now: {desc}.",
+                details: "🔗 Detailed forecast",
+                warmer: "warmer",
+                cooler: "cooler"
             }
         };
 
-        for (const user of users) {
-             try {
-                // Throttling for Telegram limits
-                await sleep(40);
-                const lang = user.language || 'uk';
+        const formatTemp = (c, unit) => {
+            if (unit === 'f') return `${Math.round(c * 9/5 + 32)}°F`;
+            return `${Math.round(c)}°C`;
+        };
 
-                const response = await axios.get(`https://api.weatherbit.io/v2.0/current?lat=${user.lat}&lon=${user.lon}&key=${API_KEY}&lang=${lang}`);
+        for (const [key, cityInfo] of Object.entries(uniqueCities)) {
+            try {
+                // 1. Fetch CURRENT weather
+                const response = await axios.get(`https://api.weatherbit.io/v2.0/current?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`);
                 const current = response.data.data[0];
-
-                const oldTemp = user.lastState?.temp || current.temp;
                 const newTemp = current.temp;
-                const deltaT = Math.abs(newTemp - oldTemp);
-                const oldCode = user.lastState?.weatherCode || 800;
                 const newCode = current.weather.code;
 
-                let alerts = [];
+                // 2. Load EVENING state for comparison
+                const cityDoc = await City.findOne({ externalId: key });
+                const evening = cityDoc?.eveningState;
 
-                // Condition 1: Sharp temperature change (>= 5°C)
-                if (deltaT >= 5) {
-                    alerts.push(alertsDict[lang].temp
-                        .replace('{delta}', deltaT.toFixed(1))
-                        .replace('{temp}', newTemp));
-                }
+                let cityAlertsTriggered = false;
+                const oldTemp = evening?.temp ?? newTemp;
+                const oldCode = evening?.weatherCode ?? 800;
+                const deltaT = newTemp - oldTemp;
+                const absDelta = Math.abs(deltaT);
 
-                // Condition 2: From Clear/Clouds to Rain/Snow/Storm
-                if (oldCode >= 800 && newCode < 700) {
-                    alerts.push(alertsDict[lang].precip
-                        .replace('{city}', user.city)
-                        .replace('{desc}', current.weather.description));
-                }
+                // --- Conditions for Alert ---
+                const isTempJump = absDelta >= 5;
+                const isPrecipStart = (oldCode >= 800 && newCode < 700);
 
-                if (alerts.length > 0) {
-                    const alertMessage = alerts.join('\n\n');
-                    await bot.telegram.sendMessage(user.telegramId, alertMessage, {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [[
-                                { text: alertsDict[lang].details, url: formatUrl(process.env.DOMAIN, `/?user=${user.telegramId}&sig=${generateSignature(user.telegramId, process.env.CRON_SECRET)}`) }
-                            ]]
+                if (isTempJump || isPrecipStart) {
+                    cityAlertsTriggered = true;
+                    for (const user of cityInfo.users) {
+                        await sleep(40);
+                        const lang = user.language || 'uk';
+                        const tempUnit = user.units?.temp || 'c';
+                        let alerts = [];
+
+                        if (isTempJump) {
+                            const dir = deltaT > 0 ? alertsDict[lang].warmer : alertsDict[lang].cooler;
+                            alerts.push(alertsDict[lang].temp
+                                .replace('{temp}', formatTemp(newTemp, tempUnit))
+                                .replace('{delta}', absDelta.toFixed(1))
+                                .replace('{dir}', dir));
                         }
-                    });
-                    alertsSent++;
+                        if (isPrecipStart) {
+                            alerts.push(alertsDict[lang].precip
+                                .replace('{city}', user.city)
+                                .replace('{desc}', current.weather.description));
+                        }
+
+                        const sig = generateSignature(user.telegramId, process.env.CRON_SECRET);
+                        await bot.telegram.sendMessage(user.telegramId, alerts.join('\n\n'), {
+                            parse_mode: 'Markdown',
+                            reply_markup: {
+                                inline_keyboard: [[
+                                    { text: alertsDict[lang].details, url: formatUrl(process.env.DOMAIN, `/?user=${user.telegramId}&sig=${sig}`) }
+                                ]]
+                            }
+                        });
+                        alertsTotal++;
+                    }
                 }
 
-                // Collect per-user info for the log
-                const alertIcon = alerts.length > 0 ? '🚨 сповіщення надіслано' : '✅ без змін';
-                const desc = getWeatherDesc(newCode, 'uk'); // Keep admin logs in Ukrainian
-                userLines.push(`• ${user.city} | ${newTemp}°C (Δ${deltaT.toFixed(1)}°C) | ${desc} | ${alertIcon}`);
+                // Log entry for admin
+                const status = cityAlertsTriggered ? '🚨 alert' : '✅ ok';
+                logLines.push(`• ${cityInfo.name} | ${newTemp}°C (Δ${deltaT.toFixed(1)}) | ${status}`);
 
-                // Update state in DB
-                user.lastState = {
-                    temp: newTemp,
-                    weatherCode: newCode,
-                    updatedAt: new Date()
-                };
-                await user.save();
+                // Update lastState for site display consistency
+                for (const user of cityInfo.users) {
+                    user.lastState = { ...user.lastState, temp: newTemp, weatherCode: newCode, updatedAt: new Date() };
+                    await user.save();
+                }
 
             } catch (err) {
                 errors++;
-                userLines.push(`• ${user.city} | ❌ error: ${escapeHTML(err.message)}`);
-                console.error(`Error processing user ${user.telegramId}:`, err.message);
+                logLines.push(`• ${cityInfo.name} | ❌ error: ${err.message}`);
             }
         }
 
-        // Send summary log to private channel
-        const summary = [
-            `📋 <b>Перевірка погоди</b> — ${startTime}`,
-            `👥 Користувачів перевірено: ${users.length}`,
-            `🚨 Сповіщень надіслано: ${alertsSent}`,
-            `❌ Помилок: ${errors}`,
-            ``,
-            ...userLines
-        ].join('\n');
-
+        const summary = [`<b>Перевірка погоди</b> — ${startTime}`, `👥 Користувачів: ${users.length}`, `🚨 Сповіщень: ${alertsTotal}`, `❌ Помилок: ${errors}`, ``, ...logLines].join('\n');
         await log(summary);
-
         res.status(200).send(`Processed ${users.length} users`);
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Перевірка погоди ПРОВАЛИЛАСЬ</b> — ${startTime}\n<code>${escapeHTML(error.message)}</code>`);
+        await log(`❌ <b>Weather Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
         res.status(500).send('Cron Check Error');
     }
 }

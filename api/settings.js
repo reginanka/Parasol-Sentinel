@@ -1,54 +1,61 @@
 require('dotenv').config();
 const connectDB = require('../utils/db');
 const User = require('../models/User');
-const { generateSignature } = require('../utils/helpers');
+const { generateSignature, validateTelegramInitData } = require('../utils/helpers');
 
 /**
- * PATCH /api/settings?user=ID&sig=SIG
- * Body: { wind: 'ms'|'kmh', pressure: 'mmhg'|'hpa' }
- * 
- * Saves unit preferences for a user. Called from the website settings panel.
- * Protected by the same HMAC signature as weather-data.js.
+ * PATCH /api/settings?user=ID&sig=SIG&initData=...
+ * Body: { wind: 'ms'|'kmh', pressure: 'mmhg'|'hpa', temp: 'c'|'f' }
  */
 module.exports = async (req, res) => {
-    // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
-    if (req.method !== 'PATCH' && req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method !== 'PATCH' && req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
     try {
         await connectDB();
-
-        const { user: userId, sig } = req.query;
+        const { user: userIdFromUrl, sig, initData } = req.query;
         const SECRET = process.env.CRON_SECRET;
+        const BOT_TOKEN = process.env.TG_TOKEN;
 
-        if (!userId) {
-            return res.status(400).json({ error: 'Missing user parameter' });
+        let userId = userIdFromUrl;
+        let authorized = false;
+
+        // 1. Verify via initData (WebApp button)
+        if (initData && BOT_TOKEN) {
+            const isValid = validateTelegramInitData(initData, BOT_TOKEN);
+            if (isValid) {
+                const params = new URLSearchParams(initData);
+                const userParam = params.get('user');
+                if (userParam) {
+                    const data = JSON.parse(userParam);
+                    userId = data.id?.toString();
+                    authorized = true;
+                }
+            }
         }
 
-        // Verify signature
-        const expectedSig = generateSignature(userId, SECRET);
-        if (!sig || sig !== expectedSig) {
-            return res.status(401).json({ error: 'Unauthorized: invalid signature' });
+        // 2. Verify via Signature (Personal link)
+        if (!authorized && userId && sig) {
+            const expectedSig = generateSignature(userId, SECRET);
+            if (sig === expectedSig) {
+                authorized = true;
+            }
         }
 
-        const { wind, pressure } = req.body || {};
+        if (!authorized) {
+            return res.status(401).json({ error: 'Unauthorized: invalid signature or initData' });
+        }
 
-        // Validate values
-        const validWind = ['ms', 'kmh'];
-        const validPressure = ['mmhg', 'hpa'];
-
+        const { wind, pressure, temp } = req.body || {};
         const updateFields = {};
-        if (wind && validWind.includes(wind)) updateFields['units.wind'] = wind;
-        if (pressure && validPressure.includes(pressure)) updateFields['units.pressure'] = pressure;
+
+        if (['ms', 'kmh'].includes(wind)) updateFields['units.wind'] = wind;
+        if (['mmhg', 'hpa'].includes(pressure)) updateFields['units.pressure'] = pressure;
+        if (['c', 'f'].includes(temp)) updateFields['units.temp'] = temp;
 
         if (Object.keys(updateFields).length === 0) {
             return res.status(400).json({ error: 'No valid settings provided' });

@@ -4,6 +4,7 @@ const axios = require('axios');
 require('dotenv').config();
 
 const User = require('../models/User');
+const City = require('../models/City');
 const connectDB = require('../utils/db');
 const { formatUrl, generateSignature } = require('../utils/helpers');
 
@@ -31,7 +32,10 @@ const dict = {
         unitMs: "м/с",
         unitKmh: "км/год",
         unitMmhg: "мм рт.ст.",
-        unitHpa: "гПа"
+        unitHpa: "гПа",
+        unitC: "°C",
+        unitF: "°F",
+        settingsTemp: "🌡 Темп:"
     },
     en: {
         welcome: "👋 Hello! My name is **Parasol**.\n\nI will monitor the weather in your city and send alerts about sudden changes.\n\nPlease type the name of your city:",
@@ -51,7 +55,10 @@ const dict = {
         unitMs: "m/s",
         unitKmh: "km/h",
         unitMmhg: "mmHg",
-        unitHpa: "hPa"
+        unitHpa: "hPa",
+        unitC: "°C",
+        unitF: "°F",
+        settingsTemp: "🌡 Temp:"
     }
 };
 
@@ -69,6 +76,10 @@ function buildSettingsKeyboard(lang, units = {}) {
             [
                 { text: `${d.settingsPress} ${pressure === 'mmhg' ? '✅' : ''} ${d.unitMmhg}`, callback_data: 'unit|pressure|mmhg' },
                 { text: `${pressure === 'hpa' ? '✅' : ''} ${d.unitHpa}`, callback_data: 'unit|pressure|hpa' }
+            ],
+            [
+                { text: `${d.settingsTemp} ${units.temp === 'f' ? '' : '✅'} ${d.unitC}`, callback_data: 'unit|temp|c' },
+                { text: `${units.temp === 'f' ? '✅' : ''} ${d.unitF}`, callback_data: 'unit|temp|f' }
             ],
             [
                 { text: d.settingsCity, callback_data: 'change_city' }
@@ -253,6 +264,20 @@ bot.on('callback_query', async (ctx) => {
                 },
                 { upsert: true, new: true }
             );
+
+            // --- City Deduplication Logic ---
+            const cityKey = `${parseFloat(lat).toFixed(2)},${parseFloat(lon).toFixed(2)}`;
+            await City.findOneAndUpdate(
+                { externalId: cityKey },
+                {
+                    name: weather.city_name,
+                    lat: parseFloat(lat),
+                    lon: parseFloat(lon),
+                    externalId: cityKey
+                },
+                { upsert: true }
+            );
+            // ---------------------------------
 
             const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
             const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
