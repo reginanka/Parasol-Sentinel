@@ -7,7 +7,7 @@ let weatherChart = null;
 let currentMode = 'temp';
 let weatherData = null; // Store fetched data globally for switching
 let currentStatusKey = 'freeAccess';
-let currentUnits = { wind: 'ms', pressure: 'mmhg' }; // single source of truth (synced with bot)
+let currentUnits = { wind: 'ms', pressure: 'mmhg', temp: 'c' }; // single source of truth (synced with bot)
 let currentUserId = null;  // Telegram user ID (from URL param or WebApp)
 let currentSig = null;     // HMAC signature (only present with personal link)
 
@@ -40,7 +40,9 @@ const i18n = {
             kmh: "км/год",
             mmhg: "мм рт.ст.",
             hpa: "гПа",
-            km: "км"
+            km: "км",
+            c: "°C",
+            f: "°F"
         },
         openBot: "Відкрити Parasol Bot",
         searchCity: "Пошук міста...",
@@ -60,6 +62,11 @@ const i18n = {
         freeAccess: "Безкоштовний доступ",
         premiumStatus: "Преміум статус",
         sentinelDashboard: "Преміум статус",
+        settingsTitle: "⚙️ Налаштування",
+        settingsWind: "🌬 Вітер",
+        settingsPress: "🌡 Тиск",
+        settingsTemp: "🌡 Температура",
+        settingsNote: "Налаштування синхронізуються з ботом",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
             300: 'Мряка', 301: 'Мряка', 302: 'Сильна мряка',
@@ -98,7 +105,9 @@ const i18n = {
             kmh: "km/h",
             mmhg: "mmHg",
             hpa: "hPa",
-            km: "km"
+            km: "km",
+            c: "°C",
+            f: "°F"
         },
         openBot: "Open Parasol Bot",
         searchCity: "Search city...",
@@ -118,6 +127,11 @@ const i18n = {
         freeAccess: "Free Access",
         premiumStatus: "Premium Status",
         sentinelDashboard: "Sentinel Dashboard",
+        settingsTitle: "⚙️ Settings",
+        settingsWind: "🌬 Wind",
+        settingsPress: "🌡 Pressure",
+        settingsTemp: "🌡 Temperature",
+        settingsNote: "Settings sync with the bot",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
             300: 'Drizzle', 301: 'Drizzle', 302: 'Heavy drizzle',
@@ -298,7 +312,9 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
             const lon = data.user?.lon || data.lon || DEFAULT_LON;
             updateWindyWidget(lat, lon);
-            updateUpdateTime();
+            
+            const dbUpdateTime = (data.lastState && data.lastState.updatedAt) ? new Date(data.lastState.updatedAt) : null;
+            updateUpdateTime(dbUpdateTime);
         }
     } catch (error) {
         console.warn('Load error:', error);
@@ -328,10 +344,10 @@ async function fetchOpenMeteo(lat, lon, name) {
     }
 }
 
-function updateUpdateTime() {
-    const now = new Date();
+function updateUpdateTime(date) {
+    const timeToDisplay = date || new Date();
     const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
-    updateTime.textContent = now.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
+    updateTime.textContent = timeToDisplay.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
 }
 
 function normalizeOpenMeteo(om, name) {
@@ -396,9 +412,9 @@ function updateUI(dayIndex) {
         return i18n[currentLang].transl[code] || defaultText;
     };
 
-    currentTemp.textContent = `${Math.round(mainTemp)}°C`;
+    currentTemp.textContent = formatTemp(mainTemp);
     weatherCondition.textContent = translateWeather(day.weather?.code, day.weather?.description || day.weather?.desc || i18n[currentLang].analyzing);
-    weatherFeels.textContent = `${i18n[currentLang].feelsLike} ${Math.round(apparentTemp)}°C`;
+    weatherFeels.textContent = `${i18n[currentLang].feelsLike} ${formatTemp(apparentTemp)}`;
 
     // Premium Icon Upgrade
     weatherIcon.src = getPremiumIcon(day.weather.icon);
@@ -572,7 +588,7 @@ function renderChart(dayOffset = 0) {
                     callbacks: {
                         label: (context) => {
                             const y = context.parsed.y;
-                            if (currentMode === 'temp') return ` ${y} °C`;
+                            if (currentMode === 'temp') return ` ${formatTemp(y)}`;
                             if (currentMode === 'wind') return ` ${y} ${currentUnits.wind === 'ms' ? 'м/с' : 'км/год'}`;
                             if (currentMode === 'precip') return ` ${y} мм`;
                             if (currentMode === 'precip_prob') return ` ${y} %`;
@@ -606,9 +622,9 @@ function renderDaily(selectedIndex = 0) {
             const dayOfWeek = dateObj.toLocaleDateString(loc, { weekday: 'short' });
             const dateStr = dateObj.toLocaleDateString(loc, { day: 'numeric', month: 'short' });
 
-            let tempsStr = `<strong>${Math.round(day.temp || day.max_temp || 0)}°</strong>`;
+            let tempsStr = `<strong>${formatTemp(day.temp || day.max_temp || 0)}</strong>`;
             if (day.max_temp !== undefined && day.min_temp !== undefined) {
-                tempsStr = `<strong>${Math.round(day.max_temp)}°</strong> <span style="font-size: 0.85em; opacity: 0.6;">${Math.round(day.min_temp)}°</span>`;
+                tempsStr = `<strong>${formatTemp(day.max_temp)}</strong> <span style="font-size: 0.85em; opacity: 0.6;">${formatTemp(day.min_temp)}</span>`;
             }
 
             const pWeek = card.querySelector('.day-week');
@@ -643,9 +659,9 @@ function renderDaily(selectedIndex = 0) {
         card.className = `forecast-card ${index === selectedIndex ? 'active' : ''} fade-in-up`;
         card.style.animationDelay = `${0.3 + (index * 0.05)}s`;
 
-        let tempsStr = `<strong>${Math.round(day.temp || day.max_temp || 0)}°</strong>`;
+        let tempsStr = `<strong>${formatTemp(day.temp || day.max_temp || 0)}</strong>`;
         if (day.max_temp !== undefined && day.min_temp !== undefined) {
-            tempsStr = `<strong>${Math.round(day.max_temp)}°</strong> <span style="font-size: 0.85em; opacity: 0.6;">${Math.round(day.min_temp)}°</span>`;
+            tempsStr = `<strong>${formatTemp(day.max_temp)}</strong> <span style="font-size: 0.85em; opacity: 0.6;">${formatTemp(day.min_temp)}</span>`;
         }
 
         card.innerHTML = `
@@ -727,6 +743,15 @@ function formatPressure(hpa) {
     return `${Math.round(hpa)} ${units.hpa}`;
 }
 
+// ─── Temperature formatting (C or F based on user settings) ───────────────
+function formatTemp(c) {
+    if (currentUnits.temp === 'f') {
+        const f = (c * 9/5) + 32;
+        return `${Math.round(f)}°F`;
+    }
+    return `${Math.round(c)}°C`;
+}
+
 // ─── Open settings panel and highlight active unit buttons ──────────────────
 function openSettingsPanel() {
     const panel = document.getElementById('settings-panel');
@@ -747,10 +772,15 @@ async function saveUnitSetting(type, val) {
     openSettingsPanel(); // refresh highlights
     if (weatherData) updateUI(currentDailyIndex); // re-render with new units
 
-    // Sync to DB (only if user has a valid personal link with sig)
-    if (currentUserId && currentSig) {
+    // Sync to DB (if user has sig OR is in WebApp)
+    const tgWebApp = window.Telegram?.WebApp;
+    if (currentUserId && (currentSig || tgWebApp?.initData)) {
         try {
-            await fetch(`/api/settings?user=${currentUserId}&sig=${currentSig}`, {
+            let url = `/api/settings?user=${currentUserId}`;
+            if (currentSig) url += `&sig=${currentSig}`;
+            if (tgWebApp?.initData) url += `&initData=${encodeURIComponent(tgWebApp.initData)}`;
+
+            await fetch(url, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ [type]: val })
