@@ -76,3 +76,8 @@ Full customization of how you see the weather, with instant synchronization betw
 Designed and developed by **Gearberry** — available for custom ecosystem architecture and high-performance web development.
 
 - [Telegram](https://t.me/Gearberry) | [YouTube](https://www.youtube.com/@Gearberry) | [Instagram](https://www.instagram.com/gearberry_) | [Facebook](https://www.facebook.com/profile.php?id=61586878866628) | [Threads](https://www.threads.com/@gearberry_)
+
+
+
+[![Rehina Nanaka profile views](https://u8views.com/api/v1/github/profiles/212413806/views/day-week-month-total-count.svg)](https://u8views.com/github/reginanka)
+
