@@ -43,6 +43,7 @@ module.exports = async (req, res) => {
                 wind: "💨 **Вітер:**",
                 press: "🧭 **Тиск:**",
                 details: "🔗 Детальний прогноз",
+                gustsTo: "пориви до",
                 unitMs: "м/с",
                 unitKmh: "км/год",
                 unitMmhg: "мм рт.ст.",
@@ -56,6 +57,7 @@ module.exports = async (req, res) => {
                 wind: "💨 **Wind:**",
                 press: "🧭 **Pressure:**",
                 details: "🔗 Detailed forecast",
+                gustsTo: "gusts up to",
                 unitMs: "m/s",
                 unitKmh: "km/h",
                 unitMmhg: "mmHg",
@@ -69,9 +71,21 @@ module.exports = async (req, res) => {
             return `${Math.round(c)}°C`;
         };
 
-        const formatWind = (ms, unit, lang) => {
-            if (unit === 'kmh') return `${Math.round(ms * 3.6)} ${fDict[lang].unitKmh}`;
-            return `${Math.round(ms)} ${fDict[lang].unitMs}`;
+        const formatWind = (ms, gust_ms, unit, lang) => {
+            let spdVal = ms;
+            let gustVal = gust_ms || ms;
+            let unitStr = fDict[lang].unitMs;
+            
+            if (unit === 'kmh') {
+                spdVal = spdVal * 3.6;
+                gustVal = gustVal * 3.6;
+                unitStr = fDict[lang].unitKmh;
+            }
+            
+            if (Math.round(gustVal) > Math.round(spdVal)) {
+                return `${Math.round(spdVal)} ${unitStr} (${fDict[lang].gustsTo} ${Math.round(gustVal)})`;
+            }
+            return `${Math.round(spdVal)} ${unitStr}`;
         };
 
         const formatPress = (mb, unit, lang) => {
@@ -116,8 +130,8 @@ module.exports = async (req, res) => {
                         message += `📅 **${capDay}**\n` +
                             `☁️ ${desc}\n` +
                             `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n` +
-                            `${fDict[lang].precip} ${day.pop}% (${day.precip.toFixed(1)} мм)\n` +
-                            `${fDict[lang].wind} ${formatWind(day.wind_spd, user.units?.wind || 'ms', lang)}\n` +
+                            `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n` +
+                            `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, user.units?.wind || 'ms', lang)}\n` +
                             `${fDict[lang].press} ${formatPress(day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
                     });
 
