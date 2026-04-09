@@ -135,7 +135,7 @@ module.exports = async (req, res) => {
                             `${fDict[lang].press} ${formatPress(day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
                     });
 
-                    const sig = generateSignature(user.telegramId, process.env.CRON_SECRET);
+                    //const sig = generateSignature(user.telegramId, process.env.CRON_SECRET);
                     await bot.telegram.sendMessage(user.telegramId, message, {
                         parse_mode: 'Markdown',
                         disable_web_page_preview: true,
