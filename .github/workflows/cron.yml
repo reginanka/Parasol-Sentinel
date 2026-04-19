@@ -2,8 +2,8 @@ name: Weather Check
 
 on:
   schedule:
-    # Run at 06:02 and 11:02 UTC (09:02 and 14:02 Kyiv time)
-    - cron: '2 6,11 * * *'
+    # Run at 05:02 and 11:02 UTC (09:02 and 14:02 Kyiv time)
+    - cron: '2 5,11 * * *'
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
