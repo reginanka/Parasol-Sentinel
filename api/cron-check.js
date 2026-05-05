@@ -6,7 +6,7 @@ const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const City = require('../models/City');
 const connectDB = require('../utils/db');
-const { getWeatherDesc } = require('../utils/weather');
+const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
@@ -189,7 +189,8 @@ module.exports = async (req, res) => {
 
                 const statusStr = alertTriggered ? `🚨 ${reasons.join(', ')}` : '✅ без змін';
                 const weatherDesc = getWeatherDesc(newCode, 'uk');
-                logLines.push(`• ${cityInfo.name} | ${current.temp}°C | ${weatherDesc} | ${statusStr}`);
+                const windDir = getWindDir(current.wind_cdir, 'uk');
+                logLines.push(`• ${cityInfo.name} | ${current.temp}°C | ${weatherDesc} | ${windDir} | ${statusStr}`);
 
             } catch (err) {
                 errorsCount++;
