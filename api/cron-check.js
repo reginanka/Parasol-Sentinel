@@ -31,6 +31,7 @@ module.exports = async (req, res) => {
         }
 
         let alertsTotal = 0;
+        let errorsCount = 0;
         const logLines = [];
 
         const alertsDict = {
@@ -76,6 +77,7 @@ module.exports = async (req, res) => {
 
                 const alerts = [];
                 let alertTriggered = false;
+                let reasons = [];
 
                 if (eveningToday) {
                     const oldMin = eveningToday.min_temp;
@@ -88,6 +90,7 @@ module.exports = async (req, res) => {
                     const minShift = newMin - oldMin;
 
                     if (Math.abs(maxShift) >= 4 || Math.abs(minShift) >= 4) {
+                        reasons.push("зміна прогнозу");
                         for (const user of cityInfo.users) {
                             const lang = user.language || 'uk';
                             const msg = alertsDict[lang].forecastShift
@@ -131,6 +134,7 @@ module.exports = async (req, res) => {
                     }
 
                     if (isAnomaly) {
+                        reasons.push("аномалія темп.");
                         for (const user of cityInfo.users) {
                             const lang = user.language || 'uk';
                             const unit = user.units?.temp || 'c';
@@ -151,6 +155,7 @@ module.exports = async (req, res) => {
                 const oldCode = evening?.weatherCode ?? 800;
                 const newCode = current.weather.code;
                 if (oldCode >= 800 && newCode < 700) {
+                    reasons.push("початок опадів");
                     for (const user of cityInfo.users) {
                         const lang = user.language || 'uk';
                         const msg = alertsDict[lang].precip.replace('{desc}', getWeatherDesc(newCode, lang));
@@ -182,14 +187,24 @@ module.exports = async (req, res) => {
                     await user.save();
                 }
 
-                logLines.push(`• ${cityInfo.name} | ${current.temp}°C | ${alertTriggered ? '🚨 alert' : '✅ ok'}`);
+                const statusStr = alertTriggered ? `🚨 ${reasons.join(', ')}` : '✅ без змін';
+                const weatherDesc = getWeatherDesc(newCode, 'uk');
+                logLines.push(`• ${cityInfo.name} | ${current.temp}°C | ${weatherDesc} | ${statusStr}`);
 
             } catch (err) {
-                logLines.push(`• ${cityInfo.name} | ❌ error: ${err.message}`);
+                errorsCount++;
+                logLines.push(`• ${cityInfo.name} | ❌ помилка: ${err.message}`);
             }
         }
 
-        const summary = [`📋 <b>Weather Smart Check</b> — ${startTime}`, `🚨 Alerts sent: ${alertsTotal}`, ``, ...logLines].join('\n');
+        const summary = [
+            `📋 <b>Перевірка погоди</b> — ${startTime}`,
+            `👥 Користувачів перевірено: ${users.length}`,
+            `🚨 Сповіщень надіслано: ${alertsTotal}`,
+            `❌ Помилок: ${errorsCount}`,
+            ``,
+            ...logLines
+        ].join('\n');
         await log(summary);
         res.status(200).send('Processed');
 
