@@ -40,6 +40,7 @@ module.exports = async (req, res) => {
                 title: "🌆 **Прогноз на 3 дні для {city}**",
                 temp: "🌡 **Темп:**",
                 precip: "💧 **Вірог. опадів:**",
+                dew: "🌡 **Точка роси:**",
                 wind: "💨 **Вітер:**",
                 press: "🧭 **Тиск:**",
                 details: "🔗 Детальний прогноз",
@@ -54,6 +55,7 @@ module.exports = async (req, res) => {
                 title: "🌆 **3-day forecast for {city}**",
                 temp: "🌡 **Temp:**",
                 precip: "💧 **Precip:**",
+                dew: "🌡 **Dew Point:**",
                 wind: "💨 **Wind:**",
                 press: "🧭 **Pressure:**",
                 details: "🔗 Detailed forecast",
@@ -133,6 +135,7 @@ module.exports = async (req, res) => {
                             `${desc}\n` +
                             `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n` +
                             `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n` +
+                            `${fDict[lang].dew} ${formatTemp(day.dewpt, tempUnit)}\n` +
                             `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n` +
                             `${fDict[lang].press} ${formatPress(day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
                     });
