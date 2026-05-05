@@ -90,6 +90,15 @@ function buildSettingsKeyboard(lang, units = {}) {
 
 const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language_code === 'ru') ? 'uk' : 'en';
 
+// Global command registration (runs once on startup/import)
+if (process.env.TG_TOKEN) {
+    bot.telegram.setMyCommands([
+        { command: 'start', description: 'Запустити бота / Start' },
+        { command: 'settings', description: 'Налаштування / Settings' },
+        { command: 'dashboard', description: 'Дашборд / Dashboard' }
+    ]).catch(err => console.error('Error setting global commands:', err.message));
+}
+
 // Bot Logic (Webhook handler)
 module.exports = async (req, res) => {
     try {
@@ -124,7 +133,8 @@ bot.start(async (ctx) => {
         keyboard: [
             [{ text: dict[lang].settingsBtn }]
         ],
-        resize_keyboard: true
+        resize_keyboard: true,
+        is_persistent: true
     };
 
     if (user) {
@@ -144,15 +154,22 @@ bot.start(async (ctx) => {
         });
     }
 
-    // Set WebApp menu button
+    // Register commands for the user
     try {
+        await ctx.setMyCommands([
+            { command: 'start', description: lang === 'uk' ? 'Запустити бота' : 'Start the bot' },
+            { command: 'settings', description: lang === 'uk' ? 'Налаштування' : 'Settings' },
+            { command: 'dashboard', description: lang === 'uk' ? 'Мій Дашборд' : 'My Dashboard' }
+        ]);
+        
+        // Set WebApp menu button (this will be on the left of the input field)
         await ctx.setChatMenuButton({
             type: 'web_app',
             text: dict[lang].dashboard,
             web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
         });
     } catch (e) {
-        console.error('Error setting ChatMenuButton:', e.message);
+        console.error('Error setting commands/menu:', e.message);
     }
 });
 
@@ -170,6 +187,27 @@ bot.command('settings', async (ctx) => {
         dict[lang].settings,
         { reply_markup: buildSettingsKeyboard(lang, user.units) }
     );
+});
+
+// /dashboard command
+bot.command('dashboard', async (ctx) => {
+    const lang = getLang(ctx);
+    await connectDB();
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    if (!user) {
+        return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+    }
+    
+    const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
+    const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
+    
+    await ctx.replyWithMarkdown(dict[lang].dashboard, {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: dict[lang].dashboard, url: dashboardUrl }]
+            ]
+        }
+    });
 });
 
 // Handle text messages (City search or Menu buttons)
