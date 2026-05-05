@@ -6,7 +6,7 @@ const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const City = require('../models/City');
 const connectDB = require('../utils/db');
-const { getWeatherDesc } = require('../utils/weather');
+const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML } = require('../utils/helpers');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
@@ -71,10 +71,11 @@ module.exports = async (req, res) => {
             return `${Math.round(c)}°C`;
         };
 
-        const formatWind = (ms, gust_ms, unit, lang) => {
+        const formatWind = (ms, gust_ms, cdir, unit, lang) => {
             let spdVal = ms;
             let gustVal = gust_ms || ms;
             let unitStr = fDict[lang].unitMs;
+            let dirStr = getWindDir(cdir, lang);
 
             if (unit === 'kmh') {
                 spdVal = spdVal * 3.6;
@@ -82,10 +83,11 @@ module.exports = async (req, res) => {
                 unitStr = fDict[lang].unitKmh;
             }
 
+            const baseWind = `${dirStr}, ${Math.round(spdVal)} ${unitStr}`;
             if (Math.round(gustVal) > Math.round(spdVal)) {
-                return `${Math.round(spdVal)} ${unitStr} (${fDict[lang].gustsTo} ${Math.round(gustVal)})`;
+                return `${baseWind} (${fDict[lang].gustsTo} ${Math.round(gustVal)})`;
             }
-            return `${Math.round(spdVal)} ${unitStr}`;
+            return baseWind;
         };
 
         const formatPress = (mb, unit, lang) => {
@@ -131,7 +133,7 @@ module.exports = async (req, res) => {
                             `${desc}\n` +
                             `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n` +
                             `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n` +
-                            `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, user.units?.wind || 'ms', lang)}\n` +
+                            `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n` +
                             `${fDict[lang].press} ${formatPress(day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
                     });
 
