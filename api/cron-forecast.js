@@ -25,10 +25,10 @@ module.exports = async (req, res) => {
         // --- FETCH WEATHER ONCE PER UNIQUE CITY COORDINATES ---
         const uniqueCities = {};
         for (const user of users) {
-             if (!user.lat || !user.lon) continue;
-             const key = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
-             if (!uniqueCities[key]) uniqueCities[key] = { lat: user.lat, lon: user.lon, name: user.city, users: [] };
-             uniqueCities[key].users.push(user);
+            if (!user.lat || !user.lon) continue;
+            const key = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            if (!uniqueCities[key]) uniqueCities[key] = { lat: user.lat, lon: user.lon, name: user.city, users: [] };
+            uniqueCities[key].users.push(user);
         }
 
         let sent = 0;
@@ -67,7 +67,7 @@ module.exports = async (req, res) => {
         };
 
         const formatTemp = (c, unit) => {
-            if (unit === 'f') return `${Math.round(c * 9/5 + 32)}°F`;
+            if (unit === 'f') return `${Math.round(c * 9 / 5 + 32)}°F`;
             return `${Math.round(c)}°C`;
         };
 
@@ -75,13 +75,13 @@ module.exports = async (req, res) => {
             let spdVal = ms;
             let gustVal = gust_ms || ms;
             let unitStr = fDict[lang].unitMs;
-            
+
             if (unit === 'kmh') {
                 spdVal = spdVal * 3.6;
                 gustVal = gustVal * 3.6;
                 unitStr = fDict[lang].unitKmh;
             }
-            
+
             if (Math.round(gustVal) > Math.round(spdVal)) {
                 return `${Math.round(spdVal)} ${unitStr} (${fDict[lang].gustsTo} ${Math.round(gustVal)})`;
             }
@@ -128,7 +128,7 @@ module.exports = async (req, res) => {
                         const desc = getWeatherDesc(day.weather.code, lang);
 
                         message += `📅 **${capDay}**\n` +
-                            `☁️ ${desc}\n` +
+                            `${desc}\n` +
                             `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n` +
                             `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n` +
                             `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, user.units?.wind || 'ms', lang)}\n` +
