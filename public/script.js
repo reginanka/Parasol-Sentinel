@@ -24,6 +24,7 @@ const i18n = {
         uvIndex: "UV-індекс",
         windGusts: "Вітер",
         humidity: "Вологість",
+        dewPoint: "Точка роси",
         precipChance: "Шанс опадів",
         visibility: "Видимість",
         pressure: "Тиск",
@@ -95,6 +96,7 @@ const i18n = {
         uvIndex: "UV Index",
         windGusts: "Wind",
         humidity: "Humidity",
+        dewPoint: "Dew Point",
         precipChance: "Precip chance",
         visibility: "Visibility",
         pressure: "Pressure",
@@ -457,6 +459,7 @@ function updateUI(dayIndex) {
 
     // Humidity
     document.getElementById('humidity-icon').src = `${iconBase}humidity.svg`;
+    document.getElementById('dew-icon').src = `${iconBase}thermometer-mercury.svg`;
 
     // Precip Icon dynamic
     const precipProb = details.pop || 0;
@@ -490,6 +493,7 @@ function updateUI(dayIndex) {
     document.getElementById('wind-gust').textContent = fullWindStr;
 
     document.getElementById('humidity-val').textContent = `${day.rh}%`;
+    document.getElementById('dew-val').textContent = formatTemp(day.dewpt || (day.temp - ((100 - day.rh) / 5))); // Simple fallback if dewpt is missing
     const precipVal = details.precip !== undefined ? details.precip.toFixed(1) : 0;
     document.getElementById('precip-prob').textContent = `${details.pop}% (${precipVal} мм)`;
     document.getElementById('vis-val').textContent = `${Math.round(details.vis)} ${i18n[currentLang].units.km}`;
