@@ -96,7 +96,7 @@
         <section class="top-row">
             <div class="glass card main-weather-card fade-in-up">
                 <div class="weather-main">
-                    <img id="weather-icon" src="https://www.weatherbit.io/static/img/icons/c01d.png" alt="icon">
+                    <img id="weather-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/clear-day.svg" alt="icon">
                     <span id="current-temp" class="temp-display">--°C</span>
                 </div>
                 <div class="weather-desc">
@@ -129,42 +129,42 @@
         <!-- Expanded Compact Stats Row with Clear Labels -->
         <section class="compact-stats fade-in-up" style="animation-delay: 0.15s;">
             <div class="stats-pill fade-in-up">
-                <div class="stat-icon">🧿</div>
+                <div class="stat-icon"><img id="uv-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/uv-index.svg" alt="uv"></div>
                 <div class="stat-info">
                     <span class="stat-label" data-i18n="uvIndex">UV-Індекс</span> 
                     <span class="stat-value" id="uv-val">--</span>
                 </div>
             </div>
             <div class="stats-pill fade-in-up">
-                <div class="stat-icon">🌬️</div>
+                <div class="stat-icon"><img id="wind-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/wind.svg" alt="wind"></div>
                 <div class="stat-info">
                     <span class="stat-label" data-i18n="windGusts">Пориви вітру</span> 
                     <span class="stat-value" id="wind-gust">--</span>
                 </div>
             </div>
             <div class="stats-pill fade-in-up">
-                <div class="stat-icon">🌀</div>
+                <div class="stat-icon"><img id="humidity-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/humidity.svg" alt="humidity"></div>
                 <div class="stat-info">
                     <span class="stat-label" data-i18n="humidity">Вологість</span> 
                     <span class="stat-value" id="humidity-val">--</span>
                 </div>
             </div>
             <div class="stats-pill fade-in-up">
-                <div class="stat-icon">💧</div>
+                <div class="stat-icon"><img id="precip-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/raindrop.svg" alt="precip"></div>
                 <div class="stat-info">
                     <span class="stat-label" data-i18n="precipChance">Шанс опадів</span> 
                     <span class="stat-value" id="precip-prob">--</span>
                 </div>
             </div>
             <div class="stats-pill fade-in-up">
-                <div class="stat-icon">👁️‍🗨️</div>
+                <div class="stat-icon"><img id="vis-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/horizon.svg" alt="visibility"></div>
                 <div class="stat-info">
                     <span class="stat-label" data-i18n="visibility">Видимість</span> 
                     <span class="stat-value" id="vis-val">--</span>
                 </div>
             </div>
             <div class="stats-pill fade-in-up">
-                <div class="stat-icon">🌡️</div>
+                <div class="stat-icon"><img id="press-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/barometer.svg" alt="pressure"></div>
                 <div class="stat-info">
                     <span class="stat-label" data-i18n="pressure">Тиск</span> 
                     <span class="stat-value" id="press-val">--</span>

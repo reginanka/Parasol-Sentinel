@@ -420,12 +420,48 @@ function updateUI(dayIndex) {
     // Premium Icon Upgrade
     weatherIcon.src = getPremiumIcon(day.weather.icon);
 
-    // Compact Pills
+    // Compact Pills Icons (Dynamic)
+    const iconBase = 'https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/';
+    
+    // UV Icon dynamic
+    const uvVal = Math.round(details.uv || 0);
+    const uvIconName = uvVal > 0 ? `uv-index-${Math.min(uvVal, 11)}` : 'uv-index';
+    document.getElementById('uv-icon').src = `${iconBase}${uvIconName}.svg`;
+
+    // Wind Icon dynamic (Beaufort-ish or Alert)
+    const windMs = details.gust || day.wind_spd || 0;
+    let windIconName = 'wind';
+    if (windMs > 15) windIconName = 'wind-alert';
+    else if (windMs > 10) windIconName = 'windsock';
+    document.getElementById('wind-icon').src = `${iconBase}${windIconName}.svg`;
+
+    // Humidity
+    document.getElementById('humidity-icon').src = `${iconBase}humidity.svg`;
+
+    // Precip Icon dynamic
+    const precipProb = details.pop || 0;
+    const precipIconName = precipProb > 60 ? 'raindrops' : (precipProb > 20 ? 'raindrop' : 'raindrop');
+    document.getElementById('precip-icon').src = `${iconBase}${precipIconName}.svg`;
+
+    // Visibility dynamic
+    const visKm = details.vis || 10;
+    let visIconName = 'mist'; // Base icon (neutral lines)
+    if (visKm < 1) visIconName = 'fog';
+    else if (visKm < 4) visIconName = 'haze';
+    document.getElementById('vis-icon').src = `${iconBase}${visIconName}.svg`;
+
+    // Pressure dynamic
+    const hPress = weatherData.hourly?.surface_pressure?.[isToday ? 0 : dayIndex * 24] || 1013;
+    let pressIconName = 'barometer'; // Base instrument icon
+    if (hPress > 1022) pressIconName = 'barometer-high';
+    else if (hPress < 1005) pressIconName = 'barometer-low';
+    document.getElementById('press-icon').src = `${iconBase}${pressIconName}.svg`;
+
+    // Compact Pills Values
     document.getElementById('sunrise-val').textContent = formatFullTime(details.sunrise);
     document.getElementById('sunset-val').textContent = formatFullTime(details.sunset);
     document.getElementById('uv-val').innerHTML = formatUV(details.uv);
     
-    // Wind combined (spd + gusts)
     const spdStr = formatWind(day.wind_spd || 0);
     const gustVal = Math.round((details.gust || 0) * (currentUnits.wind === 'kmh' ? 3.6 : 1));
     const fullWindStr = `${spdStr} (${i18n[currentLang].gustsTo} ${gustVal})`;
@@ -435,9 +471,7 @@ function updateUI(dayIndex) {
     const precipVal = details.precip !== undefined ? details.precip.toFixed(1) : 0;
     document.getElementById('precip-prob').textContent = `${details.pop}% (${precipVal} мм)`;
     document.getElementById('vis-val').textContent = `${Math.round(details.vis)} ${i18n[currentLang].units.km}`;
-    // Pressure: use hourly data from OM (index 0 for now) if today, or fallback.
-    const hPress = weatherData.hourly?.surface_pressure?.[isToday ? 0 : dayIndex * 24];
-    document.getElementById('press-val').textContent = hPress ? formatPressure(hPress) : '---';
+    document.getElementById('press-val').textContent = formatPressure(hPress);
 
     // Theme
     const code = day.weather.code;
@@ -453,7 +487,7 @@ function updateUI(dayIndex) {
 
 function getPremiumIcon(code) {
     // Map Weatherbit icons [c01d, etc] to high-quality Meteocons
-    const base = 'https://basmilius.github.io/weather-icons/production/fill/all/';
+    const base = 'https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/';
 
     const mapping = {
         'c01d': 'clear-day', 'c01n': 'clear-night',
