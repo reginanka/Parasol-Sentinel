@@ -75,6 +75,12 @@ const i18n = {
             600: 'Невеликий сніг', 601: 'Сніг', 602: 'Сильний снігопад', 610: 'Сніг з дощем',
             700: 'Димка', 741: 'Туман', 751: 'Мла',
             800: 'Ясно', 801: 'Легка хмарність', 802: 'Мінлива хмарність', 803: 'Хмарно', 804: 'Похмуро'
+        },
+        windDirs: {
+            'N': 'Північний', 'S': 'Південний', 'E': 'Східний', 'W': 'Західний',
+            'NE': 'Північно-східний', 'NW': 'Північно-західний', 'SE': 'Південно-східний', 'SW': 'Південно-західний',
+            'NNE': 'Пн-Пн-Сх', 'ENE': 'Сх-Пн-Сх', 'ESE': 'Сх-Пд-Сх', 'SSE': 'Пд-Пд-Сх',
+            'SSW': 'Пд-Пд-Зх', 'WSW': 'Зх-Пд-Зх', 'WNW': 'Зх-Пн-Зх', 'NNW': 'Пн-Пн-Зх'
         }
     },
     en: {
@@ -140,6 +146,12 @@ const i18n = {
             600: 'Light snow', 601: 'Snow', 602: 'Heavy snow', 610: 'Sleet',
             700: 'Mist', 741: 'Fog', 751: 'Haze',
             800: 'Clear', 801: 'Few clouds', 802: 'Partly cloudy', 803: 'Cloudy', 804: 'Overcast'
+        },
+        windDirs: {
+            'N': 'North', 'S': 'South', 'E': 'East', 'W': 'West',
+            'NE': 'Northeast', 'NW': 'Northwest', 'SE': 'Southeast', 'SW': 'Southwest',
+            'NNE': 'NNE', 'ENE': 'ENE', 'ESE': 'ESE', 'SSE': 'SSE',
+            'SSW': 'SSW', 'WSW': 'WSW', 'WNW': 'WNW', 'NNW': 'NNW'
         }
     }
 };
@@ -328,7 +340,7 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
 
 async function fetchOpenMeteo(lat, lon, name) {
     try {
-        const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,visibility_max&timezone=auto`);
+        const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,visibility_max,wind_direction_10m_dominant&timezone=auto`);
         if (!omResponse.ok) return;
         const omData = await omResponse.json();
 
@@ -370,6 +382,7 @@ function normalizeOpenMeteo(om, name) {
             app_temp: om.current.apparent_temperature,
             rh: om.current.relative_humidity_2m,
             wind_spd: om.current.wind_speed_10m / 3.6,
+            wind_cdir: degToCard(om.current.wind_direction_10m || 0),
             uv: om.daily.uv_index_max[0],
             weather: wmoMap[om.current.weather_code] || wmoMap[0]
         },
@@ -392,10 +405,17 @@ function normalizeOpenMeteo(om, name) {
                 app_temp: om.daily.temperature_2m_max[i] - 2,
                 rh: 60, // Placeholder
                 wind_spd: (om.daily.wind_speed_10m_max[i] || om.daily.wind_gusts_10m_max[i] / 1.5) / 3.6,
+                wind_cdir: degToCard(om.daily.wind_direction_10m_dominant?.[i] || 0),
                 weather: wmo
             };
         })
     };
+}
+
+function degToCard(deg) {
+    const cardinal = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+    const index = Math.round(deg / 22.5) % 16;
+    return cardinal[index];
 }
 
 function updateUI(dayIndex) {
@@ -464,7 +484,9 @@ function updateUI(dayIndex) {
     
     const spdStr = formatWind(day.wind_spd || 0);
     const gustVal = Math.round((details.gust || 0) * (currentUnits.wind === 'kmh' ? 3.6 : 1));
-    const fullWindStr = `${spdStr} (${i18n[currentLang].gustsTo} ${gustVal})`;
+    const windDirKey = day.wind_cdir || 'N';
+    const windDirStr = (i18n[currentLang].windDirs && i18n[currentLang].windDirs[windDirKey]) ? i18n[currentLang].windDirs[windDirKey] : windDirKey;
+    const fullWindStr = `${windDirStr}, ${spdStr} (${i18n[currentLang].gustsTo} ${gustVal})`;
     document.getElementById('wind-gust').textContent = fullWindStr;
 
     document.getElementById('humidity-val').textContent = `${day.rh}%`;
