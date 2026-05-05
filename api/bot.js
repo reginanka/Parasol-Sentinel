@@ -23,6 +23,12 @@ const dict = {
         citySetFull: "✅ **Місто встановлено:** {city}\n🌐 Координати: {lat}, {lon}\n🌡️ Поточна температура: {temp}°C",
         dashboard: "📊 Мій Дашборд",
         settingsBtn: "⚙️ Налаштування",
+        helpBtn: "❓ Допомога",
+        helpSelect: "🔍 Оберіть тему, яка вас цікавить:",
+        help_uv: "☀️ Що таке УФ-індекс?",
+        help_wind: "🌬 Як вітер впливає на погоду?",
+        help_uv_desc: "☀️ **УФ-індекс** показує рівень сонячного випромінювання:\n\n• 0-2: Низький (безпечно)\n• 3-5: Середній (потрібен захист, крем SPF)\n• 6-7: Високий (небезпечно, будьте в тіні)\n• 8+: Дуже високий (краще не виходити на сонце)",
+        help_wind_desc: "🌬 **Напрямок вітру** вказує, звідки він дме.\n\nПівнічний вітер зазвичай приносить похолодання, а південний — тепло. Різка зміна напрямку вітру часто означає наближення шторму або зміну погоди.",
         saveError: "❌ Не вдалося зберегти вибір. Перевірте конфігурацію сервера.",
         settings: "⚙️ *Налаштування*",
         settingsWind: "🌬 Вітер:",
@@ -46,6 +52,12 @@ const dict = {
         citySetFull: "✅ **City set:** {city}\n🌐 Coordinates: {lat}, {lon}\n🌡️ Current temperature: {temp}°C",
         dashboard: "📊 My Dashboard",
         settingsBtn: "⚙️ Settings",
+        helpBtn: "❓ Help",
+        helpSelect: "🔍 Choose a topic you are interested in:",
+        help_uv: "☀️ What is UV index?",
+        help_wind: "🌬 How wind affects weather?",
+        help_uv_desc: "☀️ **UV index** shows the level of solar radiation:\n\n• 0-2: Low (safe)\n• 3-5: Moderate (protection needed, SPF cream)\n• 6-7: High (dangerous, stay in shade)\n• 8+: Very high (avoid going outside)",
+        help_wind_desc: "🌬 **Wind direction** indicates where the wind is coming from.\n\nNorth wind usually brings cold, while south wind brings warmth. A sudden change in wind direction often means an approaching storm or weather change.",
         saveError: "❌ Failed to save. Please check server configuration.",
         settings: "⚙️ *Settings*",
         settingsWind: "🌬 Wind:",
@@ -95,7 +107,7 @@ if (process.env.TG_TOKEN) {
     bot.telegram.setMyCommands([
         { command: 'start', description: 'Запустити бота / Start' },
         { command: 'settings', description: 'Налаштування / Settings' },
-        { command: 'dashboard', description: 'Дашборд / Dashboard' }
+        { command: 'help', description: 'Допомога / Help' }
     ]).catch(err => console.error('Error setting global commands:', err.message));
 }
 
@@ -128,10 +140,10 @@ bot.start(async (ctx) => {
     const lang = getLang(ctx);
     await connectDB();
     const user = await User.findOne({ telegramId: ctx.from.id });
-    
+
     const keyboard = {
         keyboard: [
-            [{ text: dict[lang].settingsBtn }]
+            [{ text: dict[lang].settingsBtn }, { text: dict[lang].helpBtn }]
         ],
         resize_keyboard: true,
         is_persistent: true
@@ -144,7 +156,7 @@ bot.start(async (ctx) => {
             reply_markup: {
                 ...keyboard,
                 //inline_keyboard: [
-                    //[{ text: dict[lang].dashboard, url: dashboardUrl }]
+                //[{ text: dict[lang].dashboard, url: dashboardUrl }]
                 //]
             }
         });
@@ -159,9 +171,9 @@ bot.start(async (ctx) => {
         await ctx.setMyCommands([
             { command: 'start', description: lang === 'uk' ? 'Запустити бота' : 'Start the bot' },
             { command: 'settings', description: lang === 'uk' ? 'Налаштування' : 'Settings' },
-            { command: 'dashboard', description: lang === 'uk' ? 'Мій Дашборд' : 'My Dashboard' }
+            { command: 'help', description: lang === 'uk' ? 'Допомога' : 'Help' }
         ]);
-        
+
         // Set WebApp menu button (this will be on the left of the input field)
         await ctx.setChatMenuButton({
             type: 'web_app',
@@ -189,26 +201,22 @@ bot.command('settings', async (ctx) => {
     );
 });
 
-// /dashboard command
-bot.command('dashboard', async (ctx) => {
+// Help menu logic
+const sendHelpMenu = async (ctx) => {
     const lang = getLang(ctx);
-    await connectDB();
-    const user = await User.findOne({ telegramId: ctx.from.id });
-    if (!user) {
-        return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
-    }
-    
-    const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
-    const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
-    
-    await ctx.replyWithMarkdown(dict[lang].dashboard, {
-       // reply_markup: {
-            //inline_keyboard: [
-               // [{ text: dict[lang].dashboard, url: dashboardUrl }]
-            //]
-        //}
+    const d = dict[lang];
+    await ctx.reply(d.helpSelect, {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: d.help_uv, callback_data: 'help|uv' }],
+                [{ text: d.help_wind, callback_data: 'help|wind' }]
+            ]
+        }
     });
-});
+};
+
+// /help command
+bot.command('help', sendHelpMenu);
 
 // Handle text messages (City search or Menu buttons)
 bot.on('text', async (ctx) => {
@@ -226,6 +234,10 @@ bot.on('text', async (ctx) => {
         });
     }
 
+    if (query === dict.uk.helpBtn || query === dict.en.helpBtn) {
+        return sendHelpMenu(ctx);
+    }
+
     if (query.startsWith('/')) return;
 
     try {
@@ -241,12 +253,12 @@ bot.on('text', async (ctx) => {
             const buttons = response.data.map(item => {
                 // Shorten name for the button text
                 const name = item.display_name.split(',').slice(0, 3).join(',').trim();
-                
+
                 // Telegram callback_data limit is 64 bytes.
                 // Format: set|lat|lon|city_name
                 const lat = parseFloat(item.lat).toFixed(3);
                 const lon = parseFloat(item.lon).toFixed(3);
-                
+
                 // Prioritize city name from address object
                 const cityNameRaw = item.address?.city || item.address?.town || item.address?.village || query;
                 const cityName = cityNameRaw.slice(0, 30);
@@ -281,7 +293,7 @@ bot.on('callback_query', async (ctx) => {
 
             const weatherbitUrl = `https://api.weatherbit.io/v2.0/current?lat=${lat}&lon=${lon}&key=${process.env.WEATHERBIT_KEY}`;
             const weatherRes = await axios.get(weatherbitUrl);
-            
+
             if (!weatherRes.data?.data?.[0]) throw new Error('No weather data received');
             const weather = weatherRes.data.data[0];
 
@@ -321,7 +333,7 @@ bot.on('callback_query', async (ctx) => {
             const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
 
             await ctx.answerCbQuery(dict[lang].citySet.replace('{city}', weather.city_name));
-            
+
             const messageText = dict[lang].citySetFull
                 .replace('{city}', weather.city_name)
                 .replace('{lat}', lat)
@@ -331,9 +343,9 @@ bot.on('callback_query', async (ctx) => {
             await ctx.editMessageText(messageText, {
                 parse_mode: 'Markdown',
                 //reply_markup: {
-                    //inline_keyboard: [
-                      //  [{ text: dict[lang].dashboard, url: dashboardUrl }]
-                   // ]
+                //inline_keyboard: [
+                //  [{ text: dict[lang].dashboard, url: dashboardUrl }]
+                // ]
                 //}
             });
 
@@ -347,6 +359,13 @@ bot.on('callback_query', async (ctx) => {
         } catch (error) {
             await ctx.replyWithMarkdown(dict[lang].saveError);
         }
+    }
+
+    // --- Help topic callback ---
+    else if (data[0] === 'help') {
+        const topic = data[1];
+        await ctx.answerCbQuery();
+        await ctx.replyWithMarkdown(dict[lang][`help_${topic}_desc`]);
     }
 
     // --- Open Settings manual callback ---
