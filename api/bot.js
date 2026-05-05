@@ -1,4 +1,4 @@
-﻿const getBot = require('../utils/bot');
+const getBot = require('../utils/bot');
 const bot = getBot();
 const axios = require('axios');
 require('dotenv').config();
@@ -139,10 +139,24 @@ const sendHelpMenu = async (ctx) => {
 
 bot.command('start', async (ctx) => {
     const lang = getLang(ctx);
+    const d = dict[lang];
+    
     await connectDB();
     const user = await User.findOne({ telegramId: ctx.from.id });
-    if (user) return sendHelpMenu(ctx);
-    await ctx.replyWithMarkdown(dict[lang].welcome);
+    
+    const keyboard = {
+        keyboard: [
+            [{ text: d.settingsBtn }, { text: d.helpBtn }]
+        ],
+        resize_keyboard: true
+    };
+
+    if (user) {
+        await ctx.reply(d.helpSelect, { reply_markup: keyboard });
+        return sendHelpMenu(ctx);
+    } else {
+        await ctx.replyWithMarkdown(d.welcome, { reply_markup: keyboard });
+    }
     try {
         await ctx.setMyCommands([
             { command: 'start', description: lang === 'uk' ? 'Запустити бота' : 'Start the bot' },
@@ -210,7 +224,16 @@ bot.on('callback_query', async (ctx) => {
             }, { upsert: true });
             const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
             await ctx.answerCbQuery(dict[lang].citySet.replace('{city}', weather.city_name));
-            await ctx.editMessageText(dict[lang].citySetFull.replace('{city}', weather.city_name).replace('{lat}', lat).replace('{lon}', lon).replace('{temp}', Math.round(weather.temp)).replace('{dewpt}', Math.round(weather.dewpt)), { parse_mode: 'Markdown' });
+            await ctx.editMessageText(dict[lang].citySetFull.replace('{city}', weather.city_name).replace('{lat}', lat).replace('{lon}', lon).replace('{temp}', Math.round(weather.temp)), { parse_mode: 'Markdown' });
+
+            // Send main keyboard
+            await ctx.reply(dict[lang].helpSelect, {
+                reply_markup: {
+                    keyboard: [[{ text: dict[lang].settingsBtn }, { text: dict[lang].helpBtn }]],
+                    resize_keyboard: true
+                }
+            });
+
             await ctx.setChatMenuButton({ type: 'web_app', text: dict[lang].dashboard, web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') } });
         } catch (e) { await ctx.replyWithMarkdown(dict[lang].saveError); }
     } else if (data[0] === 'help') {
@@ -234,12 +257,41 @@ bot.on('callback_query', async (ctx) => {
     }
 });
 
+// --- Webhook Handler (for Vercel) ---
+// Using Telegraf's built-in webhookCallback for better compatibility
+const webhookHandler = bot.webhookCallback('/');
+
+module.exports = async (req, res) => {
+    try {
+        console.log(`Incoming request: ${req.method} ${req.url}`);
+        
+        // Ensure DB connection for every request
+        await connectDB();
+        
+        if (req.method === 'POST') {
+            return await webhookHandler(req, res);
+        } else {
+            res.status(200).send('Parasol Sentinel Bot is alive and waiting for webhooks! 🤖');
+        }
+    } catch (err) {
+        console.error('Bot Error:', err.message);
+        // Don't leak errors to the response in production
+        if (!res.headersSent) {
+            res.status(500).send('Internal Server Error');
+        }
+    }
+};
+
+// --- Local Development Support (Polling Mode) ---
 if (require.main === module) {
     (async () => {
         try {
+            console.log('🚀 Launching Parasol Sentinel in POLLING mode (Local Dev)...');
             await connectDB();
             await bot.launch();
-            console.log('✅ Bot active.');
-        } catch (e) { console.error(e); }
+            console.log('✅ Bot is active and polling.');
+        } catch (e) {
+            console.error('❌ Failed to launch bot locally:', e.message);
+        }
     })();
 }
