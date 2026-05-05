@@ -143,9 +143,9 @@ bot.start(async (ctx) => {
         await ctx.replyWithMarkdown(dict[lang].welcome, {
             reply_markup: {
                 ...keyboard,
-                inline_keyboard: [
-                    [{ text: dict[lang].dashboard, url: dashboardUrl }]
-                ]
+                //inline_keyboard: [
+                    //[{ text: dict[lang].dashboard, url: dashboardUrl }]
+                //]
             }
         });
     } else {
@@ -202,11 +202,11 @@ bot.command('dashboard', async (ctx) => {
     const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
     
     await ctx.replyWithMarkdown(dict[lang].dashboard, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: dict[lang].dashboard, url: dashboardUrl }]
-            ]
-        }
+       // reply_markup: {
+            //inline_keyboard: [
+               // [{ text: dict[lang].dashboard, url: dashboardUrl }]
+            //]
+        //}
     });
 });
 
@@ -330,11 +330,11 @@ bot.on('callback_query', async (ctx) => {
 
             await ctx.editMessageText(messageText, {
                 parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: dict[lang].dashboard, url: dashboardUrl }]
-                    ]
-                }
+                //reply_markup: {
+                    //inline_keyboard: [
+                      //  [{ text: dict[lang].dashboard, url: dashboardUrl }]
+                   // ]
+                //}
             });
 
             // Set WebApp menu button after successful city selection
