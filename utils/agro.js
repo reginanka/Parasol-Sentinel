@@ -227,8 +227,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         relatedCrops: ['strawberry', 'grape', 'raspberry', 'peony', 'hydrangea']
     });
 
-    // --- 13. МОНІЛІОЗ (Плодова гниль) ---
-    const monilia =
+    // --- 13. МОНІЛІОЗ (Monilinia) ---
+    let moniliaScore =
         score(d.temp >= 15 && d.temp <= 25, 30) +
         score(d.rh > 75, 30) +
         score(d.precip > 0.2, 30) +
@@ -236,7 +236,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     risks.push({
         id: 'monilia',
         name: '🍑 Моніліоз / Плодова гниль',
-        score: Math.min(monilia, 100),
+        score: Math.min(moniliaScore, 100),
         advice: 'Ризик гниття плодів та опіку пагонів. Обробіть дерева препаратами проти гнилі, зберіть гнилі плоди.',
         details: `Сприятлива t: ${d.temp}°C та вологість для спороношення.`,
         relatedCrops: ['apple', 'pear', 'peach', 'cherry']
@@ -258,28 +258,28 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 15. ПАВУТИННИЙ КЛІЩ (Spider Mite) ---
-    const spiderMite =
+    let spiderMiteScore =
         score(d.temp > 28, 40) +
         score(d.rh < 45, 40) +
         score(d.precip === 0, 20);
     risks.push({
         id: 'spider_mite',
         name: '🕷 Павутинний кліщ',
-        score: Math.min(spiderMite, 100),
+        score: Math.min(spiderMiteScore, 100),
         advice: 'Суха спека — рай для кліща. Він висмоктує соки, листя жовтіє. Збільште вологість (обприскування водою вечорами) або застосуйте акарициди.',
         details: `Спека: ${d.temp}°C, низька вологість: ${d.rh}%.`,
         relatedCrops: ['cucumber', 'rose', 'grape', 'strawberry', 'apple']
     });
 
     // --- 16. ПОПЕЛИЦЯ (Aphids) ---
-    const aphids =
+    let aphidScore =
         score(d.temp >= 20 && d.temp <= 26, 40) +
         score(d.wind_spd < 3, 30) +
         score(d.precip === 0, 30);
     risks.push({
         id: 'aphids',
         name: '🐜 Попелиця (Тля)',
-        score: Math.min(aphids, 100),
+        score: Math.min(aphidScore, 100),
         advice: 'Комфортна температура та відсутність дощу сприяють розмноженню попелиці. Перевірте молоді пагони та наявність мурах.',
         details: `t: ${d.temp}°C, штиль, без опадів.`,
         relatedCrops: ['rose', 'apple', 'pepper', 'currant', 'cherry']
