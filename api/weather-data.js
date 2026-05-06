@@ -3,6 +3,7 @@ const axios = require('axios');
 const connectDB = require('../utils/db');
 const User = require('../models/User');
 const { generateSignature, validateTelegramInitData } = require('../utils/helpers');
+const { degToCard } = require('../utils/weather');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 const DEFAULT_CITY = 'Kyiv';
@@ -71,8 +72,8 @@ module.exports = async (req, res) => {
 
         // Fetch FRESH data - HYBRID ENGINE
         // 1. Weatherbit (Accuracy) - Current & Daily
-        const currentRes = await axios.get(`https://api.weatherbit.io/v2.0/current?lat=${lat}&lon=${lon}&key=${API_KEY}&lang=${lang}`).catch(e => { console.error('Weatherbit Current Error:', e.message); return null; });
-        const dailyRes = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${lat}&lon=${lon}&key=${API_KEY}&days=7&lang=${lang}`).catch(e => { console.error('Weatherbit Daily Error:', e.message); return null; });
+        const currentRes = await axios.get(`https://api.weatherbit.io/v2.0/current?lat=${lat}&lon=${lon}&key=${API_KEY}`).catch(e => { console.error('Weatherbit Current Error:', e.message); return null; });
+        const dailyRes = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${lat}&lon=${lon}&key=${API_KEY}&days=7`).catch(e => { console.error('Weatherbit Daily Error:', e.message); return null; });
 
         if (!currentRes || !dailyRes) {
             throw new Error('Could not fetch core data from Weatherbit. Check API Key.');
@@ -84,8 +85,16 @@ module.exports = async (req, res) => {
         const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&timezone=auto`;
         const openMeteoRes = await axios.get(omUrl).catch(e => { console.error('Open-Meteo Hourly Error:', e.message); return null; });
 
+        const currentRaw = currentRes.data.data[0];
+        // Normalize wind_cdir: Weatherbit may return localized abbreviations (e.g. "ЮЗ").
+        // Always derive it from wind_dir (degrees) for a reliable English cardinal key ("SW").
+        const normalizedCurrent = {
+            ...currentRaw,
+            wind_cdir: currentRaw.wind_dir != null ? degToCard(currentRaw.wind_dir) : 'N'
+        };
+
         const responseData = {
-            current: currentRes.data.data[0],
+            current: normalizedCurrent,
             hourly: openMeteoRes ? {
                 time: openMeteoRes.data.hourly.time,
                 temperature_2m: openMeteoRes.data.hourly.temperature_2m,
@@ -103,7 +112,9 @@ module.exports = async (req, res) => {
                 vis: d.vis,
                 uv: d.uv,
                 sunrise: d.sunrise_ts * 1000,
-                sunset: d.sunset_ts * 1000
+                sunset: d.sunset_ts * 1000,
+                // Also normalize daily wind direction
+                wind_cdir: d.wind_dir != null ? degToCard(d.wind_dir) : (d.wind_cdir || 'N')
             })),
             lat: cityLat,
             lon: cityLon
