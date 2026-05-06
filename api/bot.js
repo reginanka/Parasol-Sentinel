@@ -5,9 +5,11 @@ require('dotenv').config();
 
 const User = require('../models/User');
 const City = require('../models/City');
+const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { formatUrl, generateSignature } = require('../utils/helpers');
 const { analyzeAgroRisks, formatAgroReport } = require('../utils/agro');
+const { CROPS_DATA } = require('../utils/crops');
 
 /**
  * Parasol Sentinel Bot - Core logic handler.
@@ -56,9 +58,16 @@ const dict = {
         unitHpa: "гПа",
         unitC: "°C",
         unitF: "°F",
-        settingsTemp: "🌡️ Темп:"
+        settingsTemp: "🌡️ Темп:",
+        cropsBtn: "🌱 Мої культури",
+        cropsSelectCat: "📂 Оберіть категорію рослин:",
+        cropsSelectItem: "✅ Відмітьте, що ви вирощуєте у категорії {cat}:",
+        backBtn: "⬅️ Назад",
+        agroScheduleBtn: "🚜 Графік обробок",
+        agroArchiveBtn: "📈 Архів"
     },
     en: {
+
         welcome: "👋 Hello! My name is **Parasol**.\n\nI will monitor the weather in your city and send alerts about sudden changes.\n\nPlease type the name of your city:",
         select: "🔍 Choose the correct option from the list:",
         notFound: "❌ Cannot find this city. Please try to be more specific (e.g. add region/state).",
@@ -99,9 +108,16 @@ const dict = {
         unitHpa: "hPa",
         unitC: "°C",
         unitF: "°F",
-        settingsTemp: "🌡️ Temp:"
+        settingsTemp: "🌡️ Temp:",
+        cropsBtn: "🌱 My Crops",
+        cropsSelectCat: "📂 Choose a plant category:",
+        cropsSelectItem: "✅ Mark what you grow in the {cat} category:",
+        backBtn: "⬅️ Back",
+        agroScheduleBtn: "🚜 Schedule",
+        agroArchiveBtn: "📈 Archive"
     }
 };
+
 
 // Build settings keyboard based on current user preferences
 function buildSettingsKeyboard(lang, units = {}) {
@@ -141,7 +157,7 @@ function buildHelpKeyboard(lang, activeTopic = null) {
     ];
 
     return {
-        inline_keyboard: layout.map(row => 
+        inline_keyboard: layout.map(row =>
             row.map(topic => ({
                 text: `${activeTopic === topic ? '✅ ' : ''}${d['help_' + topic]}`,
                 callback_data: `help|${topic}`
@@ -150,7 +166,38 @@ function buildHelpKeyboard(lang, activeTopic = null) {
     };
 }
 
+    };
+}
+
+// Build crops main categories keyboard
+function buildCropsCategoriesKeyboard(lang) {
+    const d = dict[lang];
+    const buttons = Object.keys(CROPS_DATA).map(key => ([{
+        text: CROPS_DATA[key].label[lang],
+        callback_data: `crops_cat|${key}`
+    }]));
+    return { inline_keyboard: buttons };
+}
+
+// Build crops sub-items keyboard with checkboxes
+function buildCropsItemsKeyboard(lang, categoryKey, userCrops = []) {
+    const d = dict[lang];
+    const category = CROPS_DATA[categoryKey];
+    const items = category.items;
+
+    const buttons = Object.keys(items).map(id => ([{
+        text: `${userCrops.includes(id) ? '✅ ' : ''}${items[id][lang]}`,
+        callback_data: `crops_toggle|${categoryKey}|${id}`
+    }]));
+
+    // Add Back button
+    buttons.push([{ text: d.backBtn, callback_data: 'crops_main' }]);
+
+    return { inline_keyboard: buttons };
+}
+
 const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language_code === 'ru') ? 'uk' : 'en';
+
 
 // Global command registration (runs once on startup/import)
 if (process.env.TG_TOKEN) {
@@ -193,9 +240,12 @@ bot.start(async (ctx) => {
 
     const keyboard = {
         keyboard: [
-            [{ text: dict[lang].settingsBtn }, { text: dict[lang].helpBtn }]
+            [{ text: dict[lang].settingsBtn }, { text: dict[lang].helpBtn }],
+            [{ text: dict[lang].cropsBtn }],
+            [{ text: dict[lang].agroScheduleBtn }, { text: dict[lang].agroArchiveBtn }]
         ],
         resize_keyboard: true,
+
         is_persistent: true
     };
 
@@ -282,6 +332,47 @@ bot.on('text', async (ctx) => {
     if (query === dict.uk.helpBtn || query === dict.en.helpBtn) {
         return sendHelpMenu(ctx);
     }
+
+    if (query === dict.uk.cropsBtn || query === dict.en.cropsBtn) {
+        return ctx.reply(dict[lang].cropsSelectCat, {
+            reply_markup: buildCropsCategoriesKeyboard(lang)
+        });
+    }
+
+    if (query === dict.uk.agroScheduleBtn || query === dict.en.agroScheduleBtn) {
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+        
+        const { analyzeSprayingWindow } = require('../utils/agro');
+        const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+        const cityData = await City.findOne({ externalId: cityKey });
+        
+        if (!cityData || !cityData.eveningState?.forecast) {
+            return ctx.reply(lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.');
+        }
+        
+        const report = analyzeSprayingWindow(cityData.eveningState.forecast, lang);
+        return ctx.replyWithMarkdown(report);
+    }
+
+    if (query === dict.uk.agroArchiveBtn || query === dict.en.agroArchiveBtn) {
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+        
+        // Show inline keyboard to select period
+        const archiveKeyboard = {
+            inline_keyboard: [
+                [{ text: lang === 'uk' ? 'Тиждень' : 'Week', callback_data: 'archive|7' }],
+                [{ text: lang === 'uk' ? 'Місяць' : 'Month', callback_data: 'archive|30' }],
+                [{ text: lang === 'uk' ? 'Пів року' : '6 Months', callback_data: 'archive|180' }]
+            ]
+        };
+        
+        return ctx.reply(lang === 'uk' ? '📊 Оберіть період для аналізу:' : '📊 Select period for analysis:', {
+            reply_markup: archiveKeyboard
+        });
+    }
+
 
     if (query.startsWith('/')) return;
 
@@ -417,14 +508,22 @@ bot.on('callback_query', async (ctx) => {
             const cityData = await City.findOne({ externalId: cityKey });
 
             if (!cityData || !cityData.eveningState?.forecast?.[1]) {
-                return ctx.answerCbQuery(lang === 'uk' 
-                    ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу.' 
+                return ctx.answerCbQuery(lang === 'uk'
+                    ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу.'
                     : '⚠️ Data not yet updated. Wait for the evening forecast.');
             }
 
             const tomorrowForecast = cityData.eveningState.forecast[1];
-            const risks = analyzeAgroRisks(tomorrowForecast);
+
+            // Fetch last 7 days of history for this city
+            const history = await History.find({
+                externalId: cityKey
+            }).sort({ date: -1 }).limit(7);
+
+            const risks = analyzeAgroRisks(tomorrowForecast, history, user.crops || []);
+
             const report = formatAgroReport(user.city, risks, lang);
+
 
             await ctx.answerCbQuery();
             await ctx.replyWithMarkdown(report);
@@ -434,11 +533,62 @@ bot.on('callback_query', async (ctx) => {
         }
     }
 
+    // --- Crops main categories callback ---
+    else if (data[0] === 'crops_main') {
+        await ctx.answerCbQuery();
+        await ctx.editMessageText(dict[lang].cropsSelectCat, {
+            reply_markup: buildCropsCategoriesKeyboard(lang)
+        });
+    }
+
+    // --- Crops category selection callback ---
+    else if (data[0] === 'crops_cat') {
+        const categoryKey = data[1];
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        const label = CROPS_DATA[categoryKey].label[lang];
+
+        await ctx.answerCbQuery();
+        await ctx.editMessageText(dict[lang].cropsSelectItem.replace('{cat}', label), {
+            reply_markup: buildCropsItemsKeyboard(lang, categoryKey, user?.crops || [])
+        });
+    }
+
+    // --- Crops toggle callback ---
+    else if (data[0] === 'crops_toggle') {
+        const [_, categoryKey, plantId] = data;
+        try {
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user) return ctx.answerCbQuery('❌ Error');
+
+            const hasCrop = user.crops.includes(plantId);
+            const update = hasCrop
+                ? { $pull: { crops: plantId } }
+                : { $addToSet: { crops: plantId } };
+
+            const updatedUser = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                update,
+                { new: true }
+            );
+
+            await ctx.answerCbQuery(hasCrop ? '❌ Видалено' : '✅ Додано');
+
+            // Update the sub-items keyboard to reflect the change
+            const label = CROPS_DATA[categoryKey].label[lang];
+            await ctx.editMessageReplyMarkup(
+                buildCropsItemsKeyboard(lang, categoryKey, updatedUser.crops)
+            );
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
     // --- Help topic callback ---
     else if (data[0] === 'help') {
         const topic = data[1];
         let text = dict[lang][`help_${topic}_desc`];
-        
+
         // Escape HTML special characters to prevent parsing errors (e.g. from '<' or '>')
         text = text
             .replace(/&/g, '&amp;')
@@ -503,9 +653,45 @@ bot.on('callback_query', async (ctx) => {
             ? '📍 Надішліть назву нового міста:'
             : '📍 Send the name of the new city:');
     }
+
+    // --- Archive selection callback ---
+    else if (data[0] === 'archive') {
+        const days = parseInt(data[1]);
+        try {
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            
+            const history = await History.find({ externalId: cityKey })
+                .sort({ date: -1 })
+                .limit(days);
+            
+            const { generateHistoricalReport } = require('../utils/agro');
+            const report = await generateHistoricalReport(history, lang);
+            
+            await ctx.answerCbQuery();
+            await ctx.editMessageText(report, { parse_mode: 'Markdown' });
+        } catch (error) {
+            console.error('Archive error:', error.message);
+            await ctx.answerCbQuery('❌ Помилка');
+        }
+    }
 });
 
 // --- Local Development Support (Polling Mode) ---
+// If the script is run directly (not via a serverless require), launch in polling mode.
+if (require.main === module) {
+    (async () => {
+        try {
+            console.log('🚀 Launching Parasol Sentinel in POLLING mode (Local Dev)...');
+            await connectDB();
+            await bot.launch();
+            console.log('✅ Bot is active and polling.');
+        } catch (e) {
+            console.error('❌ Failed to launch bot locally:', e.message);
+        }
+    })();
+}
 // If the script is run directly (not via a serverless require), launch in polling mode.
 if (require.main === module) {
     (async () => {

@@ -5,6 +5,7 @@ const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const City = require('../models/City');
+const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML } = require('../utils/helpers');
@@ -121,23 +122,41 @@ module.exports = async (req, res) => {
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
                 // Fetch forecast data once for this unique location
-                const response = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=4`);
+                const response = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=6`);
                 const fullResponse = response.data.data;
                 const forecastData = fullResponse.slice(1, 4); // tom, day after tom, +1
+
+                const todayData = fullResponse[0];
+
+                // --- SAVE HISTORY (Today's snapshot) ---
+                await History.findOneAndUpdate(
+                    { externalId: key, date: todayData.valid_date },
+                    {
+                        temp_max: todayData.max_temp,
+                        temp_min: todayData.min_temp,
+                        temp_avg: todayData.temp,
+                        precip: todayData.precip,
+                        uv_max: todayData.uv,
+                        rh_avg: todayData.rh,
+                        wind_spd_max: todayData.wind_gust_spd || todayData.wind_spd
+                    },
+                    { upsert: true }
+                ).catch(e => console.error('History save error:', e.message));
 
                 // --- SAVE EVENING SNAPSHOT to City collection for the morning check ---
                 await City.findOneAndUpdate(
                     { externalId: key },
                     {
                         eveningState: {
-                            temp: fullResponse[0].temp,
-                            weatherCode: fullResponse[0].weather.code,
+                            temp: todayData.temp,
+                            weatherCode: todayData.weather.code,
                             updatedAt: new Date(),
                             forecast: fullResponse // full 4 days for reference
                         }
                     },
                     { upsert: true }
                 );
+
 
                 for (const user of cityInfo.users) {
                     await sleep(40);
