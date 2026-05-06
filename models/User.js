@@ -20,7 +20,9 @@ const UserSchema = new mongoose.Schema({
         pressure: { type: String, default: 'mmhg' }, // 'mmhg' = мм рт.ст., 'hpa' = гПа
         temp: { type: String, default: 'c' }         // 'c' = Цельсій, 'f' = Фаренгейт
     },
+    crops: [String], // IDs of selected plants (e.g., 'tomato', 'cucumber')
     createdAt: { type: Date, default: Date.now }
+
 });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);
