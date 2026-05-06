@@ -128,6 +128,27 @@ function buildSettingsKeyboard(lang, units = {}) {
     };
 }
 
+// Build help keyboard with optional checkmark for the active topic
+function buildHelpKeyboard(lang, activeTopic = null) {
+    const d = dict[lang];
+    const layout = [
+        ['uv', 'wind'],
+        ['press', 'hum'],
+        ['precip', 'dew'],
+        ['feels', 'cloud'],
+        ['how']
+    ];
+
+    return {
+        inline_keyboard: layout.map(row => 
+            row.map(topic => ({
+                text: `${activeTopic === topic ? '✅ ' : ''}${d['help_' + topic]}`,
+                callback_data: `help|${topic}`
+            }))
+        )
+    };
+}
+
 const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language_code === 'ru') ? 'uk' : 'en';
 
 // Global command registration (runs once on startup/import)
@@ -234,29 +255,7 @@ const sendHelpMenu = async (ctx) => {
     const lang = getLang(ctx);
     const d = dict[lang];
     await ctx.reply(d.helpSelect, {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: d.help_uv, callback_data: 'help|uv' },
-                    { text: d.help_wind, callback_data: 'help|wind' }
-                ],
-                [
-                    { text: d.help_press, callback_data: 'help|press' },
-                    { text: d.help_hum, callback_data: 'help|hum' }
-                ],
-                [
-                    { text: d.help_precip, callback_data: 'help|precip' },
-                    { text: d.help_dew, callback_data: 'help|dew' }
-                ],
-                [
-                    { text: d.help_feels, callback_data: 'help|feels' },
-                    { text: d.help_cloud, callback_data: 'help|cloud' }
-                ],
-                [
-                    { text: d.help_how, callback_data: 'help|how' }
-                ]
-            ]
-        }
+        reply_markup: buildHelpKeyboard(lang)
     });
 };
 
@@ -407,8 +406,21 @@ bot.on('callback_query', async (ctx) => {
     // --- Help topic callback ---
     else if (data[0] === 'help') {
         const topic = data[1];
-        await ctx.answerCbQuery();
-        await ctx.replyWithMarkdown(dict[lang][`help_${topic}_desc`]);
+        const text = dict[lang][`help_${topic}_desc`];
+        
+        try {
+            await ctx.answerCbQuery();
+            await ctx.editMessageText(text, {
+                parse_mode: 'Markdown',
+                reply_markup: buildHelpKeyboard(lang, topic)
+            });
+        } catch (e) {
+            // If the user clicks the same button twice, Telegram returns an error 
+            // "message is not modified". We ignore it.
+            if (!e.message.includes('message is not modified')) {
+                console.error('Help Update Error:', e.message);
+            }
+        }
     }
 
     // --- Open Settings manual callback ---
