@@ -9,6 +9,7 @@ let score = (condition, points) => (condition ? points : 0);
  * Основна функція аналізу
  * @param {Object} d - Дані прогнозу (один об'єкт з масиву data від Weatherbit)
  * @param {Array} history - Масив історичних даних (останні 7-10 днів)
+ * @param {Array} userCrops - Масив ID культур користувача
  * @returns {Array} - Відсортований список ризиків
  */
 function analyzeAgroRisks(rawD, history = [], userCrops = []) {
@@ -459,7 +460,14 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             return r.relatedCrops.some(cropId => userCrops.includes(cropId));
         })
         .sort((a, b) => (b.score || 0) - (a.score || 0))
-        .slice(0, 5);
+        .slice(0, 5)
+        .map(r => {
+            // Add user-specific crops to the risk object for formatting
+            if (userCrops.length > 0 && r.relatedCrops) {
+                r.userMatchedCrops = r.relatedCrops.filter(c => userCrops.includes(c));
+            }
+            return r;
+        });
 }
 
 function getGrowthStage() {
@@ -487,19 +495,26 @@ function getGrowthStage() {
     return { id: 'winter', name: 'Зима (спокій)', fertilizer: 'Підживлення не потрібне.' };
 }
 
-function formatAgroReport(city, risks, lang = 'uk') {
+function formatAgroReport(city, risks, lang = 'uk', date = null) {
+    const { CROPS_DATA } = require('./crops');
     let esc = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let cityEsc = esc(city);
 
+    let dateStr = '';
+    if (date) {
+        const dObj = new Date(date);
+        dateStr = dObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { day: 'numeric', month: 'long' });
+    }
+
     if (risks.length === 0) {
         return lang === 'uk'
-            ? `🌿 <b>Аналіз для м. ${cityEsc}</b>\n\n✅ Критичних агро-ризиків на завтра не виявлено. Погода сприятлива!`
-            : `🌿 <b>Analysis for ${cityEsc}</b>\n\n✅ No critical agro-risks detected for tomorrow. Weather is favorable!`;
+            ? `🌿 <b>Аналіз на ${dateStr}: м. ${cityEsc}</b>\n\n✅ Критичних агро-ризиків не виявлено. Погода сприятлива!`
+            : `🌿 <b>Analysis for ${dateStr}: ${cityEsc}</b>\n\n✅ No critical agro-risks detected. Weather is favorable!`;
     }
 
     let message = lang === 'uk'
-        ? `🧠 <b>Аналітика: ${cityEsc}</b>\n━━━━━━━━━━━━━━━━━━━━\n`
-        : `🧠 <b>Analytics: ${cityEsc}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+        ? `🧠 <b>Аналітика на ${dateStr}: ${cityEsc}</b>\n━━━━━━━━━━━━━━━━━━━━\n`
+        : `🧠 <b>Analytics for ${dateStr}: ${cityEsc}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
 
     risks.forEach(r => {
         let level = lang === 'uk' ? '🟡 СЕРЕДНІЙ' : '🟡 MEDIUM';
@@ -508,7 +523,23 @@ function formatAgroReport(city, risks, lang = 'uk') {
 
         message += `${esc(r.name)}: ${level} (${Math.round(r.score)}/100)\n`;
         message += `  ↳ <i>${esc(r.details || '')}</i>\n`;
-        message += lang === 'uk' ? `  👉 <b>Порада:</b> ${esc(r.advice || '')}\n\n` : `  👉 <b>Advice:</b> ${esc(r.advice || '')}\n\n`;
+        
+        let cropMention = '';
+        if (r.userMatchedCrops && r.userMatchedCrops.length > 0) {
+            const cropNames = r.userMatchedCrops.map(id => {
+                for (let cat in CROPS_DATA) {
+                    if (CROPS_DATA[cat].items[id]) return CROPS_DATA[cat].items[id][lang];
+                }
+                return id;
+            });
+            cropMention = lang === 'uk' 
+                ? `\n  📍 <b>Ваші культури під загрозою:</b> ${cropNames.join(', ')}.`
+                : `\n  📍 <b>Your crops at risk:</b> ${cropNames.join(', ')}.`;
+        }
+
+        message += lang === 'uk' 
+            ? `  👉 <b>Порада:</b> ${esc(r.advice || '')}${cropMention}\n\n` 
+            : `  👉 <b>Advice:</b> ${esc(r.advice || '')}${cropMention}\n\n`;
     });
 
     let stage = getGrowthStage();
@@ -543,9 +574,10 @@ function analyzeSprayingWindow(forecastData, lang = 'uk', userCrops = []) {
 
         let icon = sprayScore >= 70 ? '🔴' : (sprayScore >= 40 ? '🟡' : '🟢');
         
-        // Find top risk for this day
+        // Find top 3 risks for this day
         let dailyRisks = analyzeAgroRisks(day, [], userCrops);
-        let topRiskStr = dailyRisks.length > 0 ? ` [${dailyRisks[0].name} ${Math.round(dailyRisks[0].score)}/100]` : '';
+        let topRisks = dailyRisks.slice(0, 3).map(r => `${r.name} ${Math.round(r.score)}/100`);
+        let topRiskStr = topRisks.length > 0 ? `\n   ↳ ${topRisks.join(', ')}` : '';
 
         let reasonStr = weatherReasons.length > 0 ? ` (${weatherReasons.join(', ')})` : '';
         let status = icon === '🟢' ? (lang === 'uk' ? 'Сприятливо' : 'Favorable') : (lang === 'uk' ? 'Ризик' : 'Risk');
