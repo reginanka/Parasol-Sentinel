@@ -165,11 +165,11 @@ module.exports = async (req, res) => {
                     await bot.telegram.sendMessage(user.telegramId, message, {
                         parse_mode: 'Markdown',
                         disable_web_page_preview: true,
-                        /*reply_markup: {
+                        reply_markup: {
                             inline_keyboard: [[
-                                { text: fDict[lang].details, url: formatUrl(process.env.DOMAIN, `/?user=${user.telegramId}&sig=${sig}`) }
+                                { text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }
                             ]]
-                        }*/
+                        }
                     });
                     sent++;
                 }

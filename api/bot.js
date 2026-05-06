@@ -7,6 +7,7 @@ const User = require('../models/User');
 const City = require('../models/City');
 const connectDB = require('../utils/db');
 const { formatUrl, generateSignature } = require('../utils/helpers');
+const { analyzeAgroRisks, formatAgroReport } = require('../utils/agro');
 
 /**
  * Parasol Sentinel Bot - Core logic handler.
@@ -400,6 +401,36 @@ bot.on('callback_query', async (ctx) => {
 
         } catch (error) {
             await ctx.replyWithMarkdown(dict[lang].saveError);
+        }
+    }
+
+    // --- Agro recommendations callback ---
+    else if (data[0] === 'agro_tomorrow') {
+        try {
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user || !user.lat || !user.lon) {
+                return ctx.answerCbQuery('❌ Помилка: дані користувача не знайдені');
+            }
+
+            const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            const cityData = await City.findOne({ externalId: cityKey });
+
+            if (!cityData || !cityData.eveningState?.forecast?.[1]) {
+                return ctx.answerCbQuery(lang === 'uk' 
+                    ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу.' 
+                    : '⚠️ Data not yet updated. Wait for the evening forecast.');
+            }
+
+            const tomorrowForecast = cityData.eveningState.forecast[1];
+            const risks = analyzeAgroRisks(tomorrowForecast);
+            const report = formatAgroReport(user.city, risks, lang);
+
+            await ctx.answerCbQuery();
+            await ctx.replyWithMarkdown(report);
+        } catch (error) {
+            console.error('Agro report error:', error.message);
+            await ctx.answerCbQuery('❌ Помилка при формуванні звіту');
         }
     }
 
