@@ -406,12 +406,15 @@ bot.on('callback_query', async (ctx) => {
     // --- Help topic callback ---
     else if (data[0] === 'help') {
         const topic = data[1];
-        const text = dict[lang][`help_${topic}_desc`];
+        let text = dict[lang][`help_${topic}_desc`];
         
+        // Convert Markdown bold (**) to HTML bold (<b>) for more reliable rendering in edited messages
+        text = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+
         try {
             await ctx.answerCbQuery();
             await ctx.editMessageText(text, {
-                parse_mode: 'Markdown',
+                parse_mode: 'HTML',
                 reply_markup: buildHelpKeyboard(lang, topic)
             });
         } catch (e) {
