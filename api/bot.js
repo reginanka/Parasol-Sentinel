@@ -408,7 +408,14 @@ bot.on('callback_query', async (ctx) => {
         const topic = data[1];
         let text = dict[lang][`help_${topic}_desc`];
         
-        // Convert Markdown bold (**) to HTML bold (<b>) for more reliable rendering in edited messages
+        // Escape HTML special characters to prevent parsing errors (e.g. from '<' or '>')
+        text = text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        // Convert Markdown bold (**) to HTML bold (<b>)
+        // We do this AFTER escaping so our <b> tags remain valid
         text = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
 
         try {
