@@ -348,7 +348,7 @@ bot.on('text', async (ctx) => {
         }
         
         const report = analyzeSprayingWindow(cityData.eveningState.forecast, lang);
-        return ctx.replyWithMarkdown(report);
+        return ctx.reply(report, { parse_mode: 'HTML' });
     }
 
     if (query === dict.uk.agroArchiveBtn || query === dict.en.agroArchiveBtn) {
@@ -497,7 +497,7 @@ bot.on('callback_query', async (ctx) => {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
             if (!user || !user.lat || !user.lon) {
-                return ctx.answerCbQuery('❌ Помилка: дані користувача не знайдені');
+                return ctx.answerCbQuery(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
 
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
@@ -517,15 +517,13 @@ bot.on('callback_query', async (ctx) => {
             }).sort({ date: -1 }).limit(7);
 
             const risks = analyzeAgroRisks(tomorrowForecast, history, user.crops || []);
-
             const report = formatAgroReport(user.city, risks, lang);
 
-
             await ctx.answerCbQuery();
-            await ctx.replyWithMarkdown(report);
+            await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (error) {
-            console.error('Agro report error:', error.message);
-            await ctx.answerCbQuery('❌ Помилка при формуванні звіту');
+            console.error('Agro report error:', error);
+            await ctx.answerCbQuery(lang === 'uk' ? '❌ Помилка при формуванні звіту' : '❌ Error generating report');
         }
     }
 
@@ -666,7 +664,7 @@ bot.on('callback_query', async (ctx) => {
             const report = await generateHistoricalReport(history, lang);
             
             await ctx.answerCbQuery();
-            await ctx.editMessageText(report, { parse_mode: 'Markdown' });
+            await ctx.editMessageText(report, { parse_mode: 'HTML' });
         } catch (error) {
             console.error('Archive error:', error.message);
             await ctx.answerCbQuery('❌ Помилка');

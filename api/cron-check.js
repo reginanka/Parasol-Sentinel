@@ -37,14 +37,14 @@ module.exports = async (req, res) => {
         const alertsDict = {
             uk: {
                 tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час ({expected}°C).",
-                forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували: {oldMin}..{oldMax}°C\nЗараз прогнозують: {newMin}..{newMax}°C\nРізниця піку: {delta}°C.",
+                forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували: {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
                 precip: "⛈️ **Попередження про опади!**\nЗараз: {desc}.",
                 warmer: "вище",
                 cooler: "нижче"
             },
             en: {
                 tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time ({expected}°C).",
-                forecastShift: "📊 **Today's forecast has changed!**\nExpected: {oldMin}..{oldMax}°C\nNow predicting: {newMin}..{newMax}°C\nPeak difference: {delta}°C.",
+                forecastShift: "📊 **Today's forecast has changed!**\nExpected: {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
                 precip: "⛈️ **Precipitation alert!**\nNow: {desc}.",
                 warmer: "warmer",
                 cooler: "cooler"
@@ -91,12 +91,14 @@ module.exports = async (req, res) => {
 
                     if (Math.abs(maxShift) >= 4 || Math.abs(minShift) >= 4) {
                         reasons.push("зміна прогнозу");
+                        const fmtDelta = (d) => d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
                         for (const user of cityInfo.users) {
                             const lang = user.language || 'uk';
                             const msg = alertsDict[lang].forecastShift
                                 .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
                                 .replace('{newMin}', newMin).replace('{newMax}', newMax)
-                                .replace('{delta}', maxShift > 0 ? `+${maxShift.toFixed(1)}` : maxShift.toFixed(1));
+                                .replace('{minDelta}', fmtDelta(minShift))
+                                .replace('{maxDelta}', fmtDelta(maxShift));
                             alerts.push({ userId: user.telegramId, text: msg });
                         }
                         alertTriggered = true;
