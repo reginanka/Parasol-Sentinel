@@ -11,12 +11,36 @@ const score = (condition, points) => (condition ? points : 0);
  * @param {Array} history - Масив історичних даних (останні 7-10 днів)
  * @returns {Array} - Відсортований список ризиків
  */
-function analyzeAgroRisks(d, history = [], userCrops = []) {
+function analyzeAgroRisks(rawD, history = [], userCrops = []) {
+    // If we don't have a valid object, we can't analyze.
+    if (!rawD || typeof rawD !== 'object') return [];
+
+    // Neutral defaults to prevent crashes while maintaining some logic sanity
+    const d = {
+        rh: typeof rawD.rh === 'number' ? rawD.rh : 50,
+        temp: typeof rawD.temp === 'number' ? rawD.temp : 20,
+        max_temp: typeof rawD.max_temp === 'number' ? rawD.max_temp : (rawD.temp || 20),
+        min_temp: typeof rawD.min_temp === 'number' ? rawD.min_temp : (rawD.temp || 15),
+        precip: typeof rawD.precip === 'number' ? rawD.precip : 0,
+        wind_spd: typeof rawD.wind_spd === 'number' ? rawD.wind_spd : 2,
+        wind_cdir: rawD.wind_cdir || 'N',
+        clouds: typeof rawD.clouds === 'number' ? rawD.clouds : 50,
+        dewpt: typeof rawD.dewpt === 'number' ? rawD.dewpt : 10,
+        uv: typeof rawD.uv === 'number' ? rawD.uv : 0,
+        pop: typeof rawD.pop === 'number' ? rawD.pop : 0,
+        slp: typeof rawD.slp === 'number' ? rawD.slp : (rawD.pres || 1013),
+        valid_date: rawD.valid_date || rawD.datetime || new Date().toISOString()
+    };
+
     const risks = [];
 
     // --- 0. НАУКОВИЙ МІСЯЦЬ (Lunar Impact) ---
-    const lunarRisks = analyzeLunarImpact(d);
-    risks.push(...lunarRisks);
+    try {
+        const lunarRisks = analyzeLunarImpact(d);
+        risks.push(...lunarRisks);
+    } catch (e) {
+        console.error('Lunar analysis failed:', e);
+    }
 
 
     const stage = getGrowthStage();
@@ -274,15 +298,18 @@ function analyzeAgroRisks(d, history = [], userCrops = []) {
     }
 
     // Аналіз активності личинок (через історію прогріву ґрунту)
-    if (history && history.length >= 3) {
-        const avgTemp = history.reduce((sum, h) => sum + h.temp_avg, 0) / history.length;
-        if (avgTemp > 10) {
-            cockchaferScore += 30;
-            if (cockchaferScore >= 80) {
-                cockchaferAdvice += ' Ґрунт прогрівся, личинки піднялися до коріння. Час для грунтових інсектицидів.';
-            } else {
-                cockchaferAdvice = 'Ґрунт прогрівся, личинки активізувалися. Особливо вразливі полуниця та газон.';
-                cockchaferDetails = `Середня t за тиждень: ${avgTemp.toFixed(1)}°C.`;
+    if (history && Array.isArray(history) && history.length >= 3) {
+        const validHistory = history.filter(h => typeof h.temp_avg === 'number');
+        if (validHistory.length >= 3) {
+            const avgTemp = validHistory.reduce((sum, h) => sum + h.temp_avg, 0) / validHistory.length;
+            if (avgTemp > 10) {
+                cockchaferScore += 30;
+                if (cockchaferScore >= 80) {
+                    cockchaferAdvice += ' Ґрунт прогрівся, личинки піднялися до коріння. Час для грунтових інсектицидів.';
+                } else {
+                    cockchaferAdvice = 'Ґрунт прогрівся, личинки активізувалися. Особливо вразливі полуниця та газон.';
+                    cockchaferDetails = `Середня t за тиждень: ${avgTemp.toFixed(1)}°C.`;
+                }
             }
         }
     }
@@ -423,18 +450,18 @@ function analyzeAgroRisks(d, history = [], userCrops = []) {
     return risks
         .filter(r => {
             // Safe score check
-            if (!r || typeof r.score !== 'number' || r.score < 40) return false;
+            if (!r || typeof r.score !== 'number' || isNaN(r.score) || r.score < 40) return false;
 
             // Якщо у користувача порожній список — показуємо все
             if (!userCrops || userCrops.length === 0) return true;
 
             // Якщо у ризику немає прив'язки до культур — він універсальний
-            if (!r.relatedCrops || r.relatedCrops.length === 0) return true;
+            if (!r.relatedCrops || !Array.isArray(r.relatedCrops) || r.relatedCrops.length === 0) return true;
 
             // Інакше показуємо тільки якщо культура збігається
             return r.relatedCrops.some(cropId => userCrops.includes(cropId));
         })
-        .sort((a, b) => b.score - a.score)
+        .sort((a, b) => (b.score || 0) - (a.score || 0))
         .slice(0, 5);
 }
 
@@ -572,12 +599,15 @@ function analyzeLunarImpact(d, lang = 'uk') {
  * Агрегація історії (Архів)
  */
 async function generateHistoricalReport(history, lang = 'uk') {
-    if (!history || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
+    if (!history || !Array.isArray(history) || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
 
-    const count = history.length;
-    const avgTemp = history.reduce((s, h) => s + (h.temp_avg || 0), 0) / count;
-    const totalRain = history.reduce((s, h) => s + (h.precip || 0), 0);
-    const heatDays = history.filter(h => h.temp_max > 30).length;
+    const validHistory = history.filter(h => typeof h.temp_avg === 'number');
+    if (validHistory.length === 0) return lang === 'uk' ? '❌ Недостатньо даних для аналізу.' : '❌ Not enough data for analysis.';
+
+    const count = validHistory.length;
+    const avgTemp = validHistory.reduce((s, h) => s + h.temp_avg, 0) / count;
+    const totalRain = validHistory.reduce((s, h) => s + (h.precip || 0), 0);
+    const heatDays = validHistory.filter(h => (h.temp_max || 0) > 30).length;
 
     let report = lang === 'uk'
         ? `📈 <b>Агро-Архів за останні ${count} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n`
