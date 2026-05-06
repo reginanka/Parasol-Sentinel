@@ -422,8 +422,8 @@ function analyzeAgroRisks(d, history = [], userCrops = []) {
 
     return risks
         .filter(r => {
-            // Якщо ризик критичний (score >= 40)
-            if (r.score < 40) return false;
+            // Safe score check
+            if (!r || typeof r.score !== 'number' || r.score < 40) return false;
 
             // Якщо у користувача порожній список — показуємо все
             if (!userCrops || userCrops.length === 0) return true;
@@ -454,33 +454,36 @@ function getGrowthStage() {
  * Форматування звіту для Telegram
  */
 function formatAgroReport(city, risks, lang = 'uk') {
+    const esc = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const cityEsc = esc(city || '');
+
     if (risks.length === 0) {
         return lang === 'uk'
-            ? `🌿 **Аналіз для м. ${city}**\n\n✅ Критичних агро-ризиків на завтра не виявлено. Погода сприятлива!`
-            : `🌿 **Analysis for ${city}**\n\n✅ No critical agro-risks detected for tomorrow. Weather is favorable!`;
+            ? `🌿 <b>Аналіз для м. ${cityEsc}</b>\n\n✅ Критичних агро-ризиків на завтра не виявлено. Погода сприятлива!`
+            : `🌿 <b>Analysis for ${cityEsc}</b>\n\n✅ No critical agro-risks detected for tomorrow. Weather is favorable!`;
     }
 
     let message = lang === 'uk'
-        ? `🧠 **Аналітика: ${city}**\n━━━━━━━━━━━━━━━━━━━━\n`
-        : `🧠 **Аналітика: ${city}**\n━━━━━━━━━━━━━━━━━━━━\n`;
+        ? `🧠 <b>Аналітика: ${cityEsc}</b>\n━━━━━━━━━━━━━━━━━━━━\n`
+        : `🧠 <b>Analytics: ${cityEsc}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
 
     risks.forEach(r => {
         let level = lang === 'uk' ? '🟡 СЕРЕДНІЙ' : '🟡 MEDIUM';
         if (r.score >= 80) level = lang === 'uk' ? '🔴 КРИТИЧНИЙ' : '🔴 CRITICAL';
         if (r.id === 'spray_check' && r.score < 50) level = lang === 'uk' ? '🟢 СПРИЯТЛИВО' : '🟢 FAVORABLE';
 
-        message += `${r.name}: ${level} (${r.score}/100)\n`;
-        message += `  ↳ _${r.details}_\n`;
-        message += lang === 'uk' ? `  👉 **Порада:** ${r.advice}\n\n` : `  👉 **Advice:** ${r.advice}\n\n`;
+        message += `${esc(r.name)}: ${level} (${Math.round(r.score)}/100)\n`;
+        message += `  ↳ <i>${esc(r.details || '')}</i>\n`;
+        message += lang === 'uk' ? `  👉 <b>Порада:</b> ${esc(r.advice || '')}\n\n` : `  👉 <b>Advice:</b> ${esc(r.advice || '')}\n\n`;
     });
 
     const moon = getLunarPhase(new Date());
     message += `━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `🌙 ${moon.name}\n`;
-    message += `_`;
+    message += `🌙 ${esc(moon.name)}\n`;
+    message += `<i>`;
     message += lang === 'uk'
-        ? `Прогноз побудовано на біологічних циклах патогенів_`
-        : `Forecast based on biological cycles of pathogens_`;
+        ? `Прогноз побудовано на біологічних циклах патогенів</i>`
+        : `Forecast based on biological cycles of pathogens</i>`;
     return message;
 }
 
@@ -489,11 +492,11 @@ function formatAgroReport(city, risks, lang = 'uk') {
  * Аналіз вікна для обприскування на 5 днів
  */
 function analyzeSprayingWindow(forecastData, lang = 'uk') {
-    if (!forecastData || forecastData.length === 0) return '';
+    if (!forecastData || !Array.isArray(forecastData)) return '';
 
     let report = lang === 'uk'
-        ? '🚜 **Графік обробок (5 днів):**\n'
-        : '🚜 **Spraying Schedule (5 days):**\n';
+        ? '🚜 <b>Графік обробок (5 днів):</b>\n'
+        : '🚜 <b>Spraying Schedule (5 days):</b>\n';
 
     forecastData.slice(0, 5).forEach(day => {
         const dateObj = new Date(day.valid_date || day.datetime);
@@ -511,7 +514,7 @@ function analyzeSprayingWindow(forecastData, lang = 'uk') {
         if (score >= 70) icon = '🔴';
 
         const reasonStr = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
-        report += `${icon} **${dayStr}**: ${icon === '🟢' ? (lang === 'uk' ? 'Ідеально' : 'Perfect') : (lang === 'uk' ? 'Ризик' : 'Risk')}${reasonStr}\n`;
+        report += `${icon} <b>${dayStr}</b>: ${icon === '🟢' ? (lang === 'uk' ? 'Ідеально' : 'Perfect') : (lang === 'uk' ? 'Ризик' : 'Risk')}${reasonStr}\n`;
     });
 
     return report;
@@ -572,13 +575,13 @@ async function generateHistoricalReport(history, lang = 'uk') {
     if (!history || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
 
     const count = history.length;
-    const avgTemp = history.reduce((s, h) => s + h.temp_avg, 0) / count;
+    const avgTemp = history.reduce((s, h) => s + (h.temp_avg || 0), 0) / count;
     const totalRain = history.reduce((s, h) => s + (h.precip || 0), 0);
     const heatDays = history.filter(h => h.temp_max > 30).length;
 
     let report = lang === 'uk'
-        ? `📈 **Агро-Архів за останні ${count} днів:**\n━━━━━━━━━━━━━━━━━━━━\n`
-        : `📈 **Agro-Archive for last ${count} days:**\n━━━━━━━━━━━━━━━━━━━━\n`;
+        ? `📈 <b>Агро-Архів за останні ${count} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n`
+        : `📈 <b>Agro-Archive for last ${count} days:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
 
     report += lang === 'uk'
         ? `🌡 Сер. температура: ${avgTemp.toFixed(1)}°C\n`
