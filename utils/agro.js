@@ -45,15 +45,24 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     let stage = getGrowthStage();
-    let isEarly = stage === 'early_spring';
+    let isEarly = stage.id === 'early_spring';
 
     // --- 1. ФІТОФТОРОЗ (Phytophthora infestans) ---
+    let historyPoints = 0;
+    if (history && history.length > 0) {
+        // Накопичений ризик: якщо останні 3 дні було волого
+        let wetDays = history.slice(0, 3).filter(h => (h.rh_avg > 80) || (h.precip > 1)).length;
+        historyPoints = wetDays * 15;
+    }
+
     let phytophthora =
         score(d.rh > 85, 30) +
         score(d.temp >= 16 && d.temp <= 22, 25) +
         score(d.precip > 0.8, 25) +
         score(['W', 'NW', 'SW'].includes(d.wind_cdir), 10) +
-        score(d.clouds > 80, 10);
+        score(d.clouds > 80, 10) +
+        historyPoints;
+
     risks.push({
         id: 'phytophthora',
         name: '🍄 Фітофтороз',
@@ -61,24 +70,32 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: isEarly
             ? 'Профілактика: препарати міді (Медян Екстра, Бордоська суміш). Уникайте вологи на листі.'
             : (phytophthora >= 80 
-                ? 'Критична фаза! Обробіть системно: Рідоміл Голд (25г/10л, манкоцеб+металаксил-М) або Квадріс (6мл/10л, азоксистробін).' 
-                : 'Ризик зростає. Використовуйте Фітоспорин (10г/10л) або мідь: Медян Екстра (20мл/10л, хлорокис міді).'),
-        details: `Вологість ${d.rh}%, t: ${d.temp}°C, очікується дощ.`,
+                ? 'Критична фаза! Терміново: Рідоміл Голд (25г/10л) або Магнікур Фіно (15мл/10л). Припиніть азотні добрива — вони "розм’якшують" лист!' 
+                : 'Ризик зростає. Обробіть: Квадріс (6мл/10л) чи Фітоспорин. Підсильте імунітет калієм (Монофосфат калію 10-15г/10л).'),
+        details: `Вологість ${d.rh}%, t: ${d.temp}°C${d.precip > 0.8 ? ', очікується дощ' : ''}. Ризик +${historyPoints}% від минулих днів.`,
         relatedCrops: ['tomato', 'potato', 'eggplant']
     });
 
     // --- 2. ПЕРОНОСПОРOZ / НЕСПРАВЖНЯ БОРОШНИСТА РОСА ---
+    let downyHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.rh_avg > 85).length * 10 
+        : 0;
+
     let downyMildew =
         score(d.temp - d.dewpt < 2, 40) + // повітря насичене, буде роса
         score(d.temp >= 10 && d.temp <= 18, 30) +
         score(d.rh > 90, 20) +
-        score(d.precip > 0, 10);
+        score(d.precip > 0, 10) +
+        downyHistory;
+
     risks.push({
         id: 'downy_mildew',
         name: '🥒 Пероноспороз (огірки/цибуля)',
         score: Math.min(downyMildew, 100),
-        advice: 'Ризик рясної роси та туману. Забезпечте провітрювання в теплицях, не поливайте ввечері.',
-        details: `Точка роси: ${d.dewpt}°C (дуже близько до t), ризик конденсату.`,
+        advice: downyMildew >= 80 
+            ? 'Критичний ризик! Терміново: Магнікур Енерджі (25мл/10л, пропамокарб+фосетил) або Ревус (6мл/10л). Забезпечте максимальне провітрювання теплиць!' 
+            : 'Ризик конденсату та туману. Профілактика: Квадріс (6мл/10л, азоксистробін) або Курзат (25г/10л). Провітрюйте теплиці та не поливайте ввечері.',
+        details: `Точка роси: ${d.dewpt}°C, ризик рясної роси. +${downyHistory}% за вологість минулих днів.`,
         relatedCrops: ['cucumber', 'zucchini', 'grape']
     });
 
@@ -92,23 +109,28 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'powdery_mildew',
         name: '🍄 Борошниста роса',
         score: Math.min(powderyMildew, 100),
-        advice: 'Суха спека + нічний конденсат. Обробіть сіркою. Особливо вразливі кабачки, троянди, виноград.',
-        details: `Сухо: ${d.rh}%, t: ${d.temp}°C, дощу не буде.`,
-        relatedCrops: ['zucchini', 'rose', 'grape', 'apple']
+        advice: powderyMildew >= 80
+            ? 'Масове поширення! Обробіть системно: Топаз (4мл/10л, пенконазол) або Магнікур Сенсейшн (3.5мл/10л). Дайте калій по листу.'
+            : 'Умови сухої спеки. Профілактика: Тіовіт Джет (40-80г/10л, колоїдна сірка). Слідкуйте за вологістю ґрунту — посуха провокує хворобу!',
+        details: `Сухо: ${d.rh}%, t: ${d.temp}°C. Ідеально для борошнистої роси.`,
+        relatedCrops: ['zucchini', 'rose', 'grape', 'apple', 'cucumber']
     });
 
     // --- 4. ТЕРМІЧНИЙ СТРЕС (Heat Stress) ---
     let heatStress =
-        score(d.temp > 32, 40) +
-        score(d.temp > 35, 30) +
+        score(d.temp > 30, 30) +
+        score(d.temp > 34, 40) +
         score(d.uv > 8, 20) +
-        score(d.rh < 30, 10);
+        score(d.rh < 35, 10);
     risks.push({
         id: 'heat_stress',
         name: '🔥 Термічний стрес',
         score: Math.min(heatStress, 100),
-        advice: 'Рослини "завмирають", фотосинтез зупиняється. Рясний полив вечорами. Дайте антистресанти (амінокислоти, епін) та калійні добрива для підтримки водного балансу.',
-        details: `Екстремальна t: ${d.temp}°C, UV: ${d.uv}.`
+        advice: heatStress >= 70
+            ? 'Екстремальна спека! Рослини в стагнації. Терміново: антистресанти з амінокислотами (Мегафол 25мл/10л або Амінокат). Рясний полив ТІЛЬКИ ввечері.'
+            : 'Температурний стрес. Використовуйте Епін-Екстра або Циркон. Обов’язково замульчуйте ґрунт, щоб врятувати коріння від перегріву.',
+        details: `Температура ${d.temp}°C, вологість ${d.rh}%. Рослина закриває продихи.`,
+        relatedCrops: ['tomato', 'pepper', 'cucumber', 'strawberry', 'raspberry']
     });
 
     // --- СОНЯЧНИЙ ОПІК ТА УФ-РИЗИК ---
@@ -118,56 +140,99 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         score(d.uv >= 9, 30) +
         score(d.temp > 30, 20) +
         score(d.clouds < 15, 10);
+    let uvAdvice = '';
+    if (d.uv >= 10) {
+        uvAdvice = 'Екстремальний УФ! Потрібна щільна сітка 70-85% або подвійне укриття. Ризик стерильності пилку.';
+    } else if (d.uv >= 8) {
+        uvAdvice = 'Дуже високий УФ! Необхідна затіняюча сітка 45-60%. Обприскування тільки в глибоких сутінках.';
+    } else if (d.uv >= 6) {
+        uvAdvice = 'Висока інтенсивність УФ! Рекомендовано сітку 35-45% або щільне біле агроволокно (30-50 г/м²).';
+    } else if (d.uv >= 4) {
+        uvAdvice = 'Помірний УФ. Для чутливих рослин та молодої розсади використайте легке агроволокно (17-23 г/м²).';
+    } else {
+        uvAdvice = 'Низький рівень УФ. Спеціальне затінення не потрібне.';
+    }
+
+    if (d.temp > 32) {
+        uvAdvice += ` Увага: аномальна спека (${d.temp}°C) критично підсилює дію сонця! Обов’язково дайте антистресанти (Мегафол, Амінокат) та рясно полийте ввечері.`;
+    } else if (d.temp > 28) {
+        uvAdvice += ` Температура ${d.temp}°C підвищує ризик опіків: уникайте поливу по листу вдень, щоб краплі не спрацювали як лінзи.`;
+    }
+
     risks.push({
         id: 'sunburn',
         name: '☀️ Сонячний опік / УФ-шок',
         score: Math.min(sunburn, 100),
-        advice: d.uv >= 7
-            ? 'Висока інтенсивність УФ! Обов’язкове притінення (затіняюча сітка 45-60% або біле агроволокно) та вечірній полив. Уникайте обприскування вдень.'
-            : 'Помірний рівень УФ. Чутливі рослини можуть потребувати легкого захисту при t > 30°C.',
+        advice: uvAdvice,
         details: `УФ-індекс: ${d.uv}, хмарність: ${d.clouds}%, t: ${d.temp}°C.`,
         relatedCrops: ['tomato', 'pepper', 'cucumber', 'strawberry', 'hydrangea']
     });
 
     // --- 5. ВІКНО ДЛЯ ОБПРИСКУВАННЯ (Spraying Window) ---
-    let sprayRisk =
-        score(d.wind_spd > 5, 50) +
-        score(d.precip > 0.2, 40) +
-        score(d.temp > 25, 10);
+    let sprayScore = 0;
+    let sprayReasons = [];
+    if (d.wind_spd > 5) { sprayScore += 60; sprayReasons.push('сильний вітер'); }
+    else if (d.wind_spd > 3) { sprayScore += 25; sprayReasons.push('помірний вітер'); }
+    
+    if (d.precip > 0.1) { sprayScore += 70; sprayReasons.push('опади'); }
+    
+    if (d.temp > 30) { sprayScore += 50; sprayReasons.push('екстремальна спека'); }
+    else if (d.temp > 25) { sprayScore += 20; sprayReasons.push('висока t°'); }
+    
+    if (d.rh < 40) { sprayScore += 15; sprayReasons.push('низька вологість'); }
+
     risks.push({
         id: 'spray_check',
-        name: '🚫 Ризик оприскування',
-        score: Math.min(sprayRisk, 100),
-        advice: sprayRisk > 50 ? 'Скасуйте обробку: вітер або дощ нівелюють дію препарату.' : 'Умови для обробки задовільні.',
-        details: `Вітер: ${d.wind_spd}м/с, ймовірність опадів: ${d.pop}%`
+        name: '🚜 Вікно для обробки',
+        score: Math.min(sprayScore, 100),
+        advice: sprayScore >= 70 
+            ? `Скасуйте обробку: ${sprayReasons.join(', ')}. Ефективність буде нульовою.` 
+            : (sprayScore >= 40 
+                ? `Умови ризиковані через ${sprayReasons.join(', ')}. Якщо можливо, перенесіть.` 
+                : 'Ідеальні умови для обприскування! Рекомендовано проводити рано вранці або ввечері.'),
+        details: `Вітер: ${d.wind_spd}м/с, опади: ${d.precip}мм, t: ${d.temp}°C, вологість: ${d.rh}%.`
     });
 
     // --- 6. ГІПОКСІЯ / ПЕРЕЗВОЛОЖЕННЯ ---
+    let rainHistory = (history && history.length > 0) 
+        ? history.slice(0, 5).reduce((sum, h) => sum + (h.precip || 0), 0) 
+        : 0;
+
     let hypoxia =
-        score(d.precip > 20, 50) +
-        score(d.clouds > 90 && d.rh > 90, 30) +
-        score(d.temp < 15, 20);
+        score(d.precip > 20, 40) +
+        score(rainHistory > 40, 40) + 
+        score(d.clouds > 80 && d.rh > 80, 20) +
+        score(d.temp < 15, 10);
+
     risks.push({
         id: 'hypoxia',
         name: '🌊 Задихання коренів',
         score: Math.min(hypoxia, 100),
-        advice: 'Ризик застою води. Після підсихання обов’язково розпушіть ґрунт (сухий полив). Небезпечно для цибулі та полуниці.',
-        details: `Злива: ${d.precip}мм за добу.`,
-        relatedCrops: ['cucumber', 'zucchini', 'strawberry', 'potato', 'cabbage']
+        advice: hypoxia >= 70 
+            ? 'Критичне перезволоження! Прокопайте водовідвідні канавки. Після підсихання — обов’язкове розпушування. Для захисту від гнилей: Магнікур Енерджі (пролив під корінь, пропамокарб+фосетил).' 
+            : 'Ґрунт перезволожений. Утримайтеся від поливу. Розпушіть землю ("сухий полив") для доступу кисню до коренів. Небезпечно для цибулі та полуниці.',
+        details: `Випало ${d.precip}мм (всього за 5 днів: ${rainHistory.toFixed(1)}мм). Ґрунт перенасичений вологою.`,
+        relatedCrops: ['cucumber', 'zucchini', 'strawberry', 'potato', 'cabbage', 'onion']
     });
 
     // --- 7. ПАРША (Venturia) ---
+    let scabHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.precip > 0.5).length * 15 
+        : 0;
+
     let scab =
-        score(d.precip > 0.5 && d.temp >= 14 && d.temp <= 22, 60) +
-        score(d.rh > 85, 40);
+        score(d.precip > 0.5 && d.temp >= 12 && d.temp <= 24, 50) +
+        score(d.rh > 80, 30) +
+        scabHistory;
+
     risks.push({
         id: 'scab',
         name: '🍎 Парша плодових',
         score: Math.min(scab, 100),
         advice: scab >= 80 
-            ? 'Критичний ризик парші! Скор (2мл/10л, дифеноконазол) або Магнікур Сенсейшн (3.5мл/10л, флуопірам+трифлоксістробін).' 
-            : 'Ризик зараження. Хорус (3г/10л, ципродиніл — при t < 15°C) або мідь (Бордоська суміш 1%).',
-        details: `Вологий лист при t: ${d.temp}°C.`,
+            ? 'Критичний ризик! Терміново: Скор (2мл/10л, дифеноконазол) або Магнікур Сенсейшн (3.5мл/10л, флуопірам+трифлоксістробін). Уникайте надлишку азоту, він провокує хворобу!' 
+            : 'Сприятливі умови для парші. Використовуйте Хорус (3г/10л, ципродиніл). Восени обов’язково обробіть опале листя Карбамідом (5-7%) для знищення інфекції.',
+        details: `Вологий лист. Ризик +${scabHistory}% через опади в минулі дні.`,
         relatedCrops: ['apple', 'pear']
     });
 
@@ -181,163 +246,188 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         name: '❄️ Приморозок',
         score: Math.min(frost, 100),
         advice: frost >= 80
-            ? 'ВИСОКИЙ РИЗИК ЗАМОРОЗКУ! Вкрийте розсаду, виноград та квіти агроволокном. Проведіть вечірній полив та задимлення.'
-            : `Ймовірний приморозок на ґрунті. ${stage === 'late_spring' ? 'Критично для цвіту дерев та молодої зав’язі!' : 'Особливо небезпечно для розсади.'}`,
-        details: `Мін t: ${d.min_temp}°C, небо ясне.`,
+            ? 'КРИТИЧНО! Вкрийте все агроволокном. Обробіть антистресантом (Мегафол, Епін-Екстра — вони діють як антифриз). Вечірній полив допоможе втримати тепло землі.'
+            : `Ризик приморозку на ґрунті. ${stage.id === 'late_spring' ? 'Небезпечно для цвіту! Проведіть задимлення або дощування.' : 'Захистіть розсаду. Дайте калій для стійкості.'}`,
+        details: `Мін t: ${d.min_temp}°C, небо ясне (високе випромінювання тепла).`,
         relatedCrops: ['strawberry', 'grape', 'tomato', 'pepper', 'potato', 'apple', 'cherry', 'peach', 'rose']
     });
 
-    // --- 9. АЛЬТЕРНАРІОЗ ---
+    // --- 9. АЛЬТЕРНАРІОЗ (суха плямистість) ---
+    let altHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.temp_avg > 25).length * 10 
+        : 0;
+
     let alternaria =
-        score(d.temp > 26, 40) +
+        score(d.temp > 24, 30) +
+        score(d.temp > 28, 20) +
         score(d.precip > 0.5, 30) +
-        score(d.rh > 70, 30);
+        score(d.rh > 65, 20) +
+        altHistory;
+
     risks.push({
         id: 'alternaria',
         name: '🍂 Альтернаріоз',
         score: Math.min(alternaria, 100),
-        advice: 'Спека + волога. Можлива поява чорних плям. Рекомендовано препарати міді або Квадріс.',
-        details: `t: ${d.temp}°C, вологість присутня.`,
-        relatedCrops: ['tomato', 'potato', 'apple']
+        advice: alternaria >= 80 
+            ? 'Критичний ризик! Обробіть системно: Скор (2мл/10л, дифеноконазол) або Сігнум (10г/10л). Видаліть старе листя з концентричними плямами.' 
+            : 'Умови для плямистостей. Профілактика: Квадріс (6мл/10л, азоксистробін) або Ревус Топ. Слідкуйте за нижнім листям.',
+        details: `Спекотно та волого: ${d.temp}°C, ${d.rh}%. Ризик +${altHistory}% від спеки минулих днів.`,
+        relatedCrops: ['tomato', 'potato', 'apple', 'sunflower']
     });
 
     // --- 11. АНТРАКНОЗ ---
+    let antHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.precip > 0).length * 15 
+        : 0;
+
     let anthracnose =
-        score(d.rh > 80, 35) +
-        score(d.temp >= 20 && d.temp <= 27, 30) +
-        score(d.precip > 0, 25) +
-        score(d.clouds > 70, 10);
+        score(d.rh > 75, 20) +
+        score(d.temp >= 18 && d.temp <= 28, 30) +
+        score(d.precip > 0, 30) +
+        antHistory;
+
     risks.push({
         id: 'anthracnose',
         name: '🥀 Антракноз',
         score: Math.min(anthracnose, 100),
         advice: anthracnose >= 80 
-            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Квадріс (6мл/10л, азоксистробін). Видаліть уражені плоди.' 
-            : 'Сприятливі умови для хвороби. Уникайте густоти. Підсильте імунітет калійно-фосфорними добривами (15-20г/10л).',
-        details: `Вологість: ${d.rh}%, t: ${d.temp}°C, очікуються опади.`,
-        relatedCrops: ['cucumber', 'zucchini', 'strawberry', 'grape', 'raspberry', 'apple', 'cherry']
+            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Сігнум (10г/10л). Не поливайте по листу! Видаліть уражені плоди.' 
+            : 'Умови для поширення плямистостей. Профілактика: Квадріс (6мл/10л) або Топсін-М. Підсильте імунітет фосфорно-калійним підживленням.',
+        details: `Волого та тепло: ${d.rh}%, t: ${d.temp}°C. Ризик +${antHistory}% через минулі дощі.`,
+        relatedCrops: ['cucumber', 'watermelon', 'strawberry', 'grape', 'raspberry', 'apple', 'cherry']
     });
 
     // --- 12. СІРА ГНИЛЬ (Botrytis) ---
+    let botryHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.rh_avg > 80).length * 15 
+        : 0;
+
     let botrytis =
-        score(d.rh > 85, 40) +
-        score(d.temp >= 15 && d.temp <= 22, 30) +
-        score(d.precip > 0.5, 20) +
-        score(d.clouds > 80, 10);
+        score(d.rh > 80, 30) +
+        score(d.temp >= 14 && d.temp <= 24, 30) +
+        score(d.precip > 0.2, 20) +
+        botryHistory;
+
     risks.push({
         id: 'botrytis',
         name: '🍓 Сіра гниль',
         score: Math.min(botrytis, 100),
         advice: botrytis >= 80
-            ? 'Критичний ризик гнилі! Світч (10г/10л, флудіоксоніл) або Тельдор (8г/10л, фенгексамід). Забезпечте вентиляцію.' 
-            : 'Висока вологість. Дайте кальцієву селітру (20г/10л, Ca) — це зміцнює стінки клітин і зменшує ризик гнилі.',
-        details: `Вологість: ${d.rh}%, t: ${d.temp}°C, вогко.`,
-        relatedCrops: ['strawberry', 'grape', 'raspberry', 'peony', 'hydrangea', 'tomato', 'pepper', 'cucumber']
+            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Тельдор (8г/10л, фенгексамід). Видаляйте гнилі ягоди.' 
+            : 'Ризик гнилі. Профілактика: Фітоспорин та Кальцієва селітра (20г/10л) — вона робить шкірку ягід міцнішою.',
+        details: `Вологість: ${d.rh}%, t: ${d.temp}°C. Ризик +${botryHistory}% від вологи минулих днів.`,
+        relatedCrops: ['strawberry', 'grape', 'raspberry', 'tomato', 'pepper', 'cucumber', 'peony']
     });
 
     // --- 13. МОНІЛІОЗ (Monilinia) ---
+    let monHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.precip > 0.1).length * 15 
+        : 0;
+
     let moniliaScore =
-        score(d.temp >= 15 && d.temp <= 25, 30) +
-        score(d.rh > 75, 30) +
-        score(d.precip > 0.2, 30) +
-        score(d.wind_spd > 4, 10);
+        score(d.temp >= 12 && d.temp <= 26, 30) +
+        score(d.rh > 70, 25) +
+        score(d.precip > 0, 25) +
+        monHistory;
+
     risks.push({
         id: 'monilia',
-        name: '🍑 Моніліоз / Плодова гниль',
+        name: '🍑 Моніліоз (опік та плодова гниль)',
         score: Math.min(moniliaScore, 100),
         advice: moniliaScore >= 80
-            ? 'Масовий моніліоз! Терміново: Хорус (3г/10л, ципродиніл) або Скор (2мл/10л, дифеноконазол). Видаліть всохлі пагони.'
-            : `Сприятливі умови. ${stage.id === 'late_spring' ? 'Ризик опіку цвіту. Використовуйте біофунгіциди та Бор (10-15г/10л, B).' : 'Огляньте плоди на наявність гнилі.'}`,
-        details: `Сприятлива t: ${d.temp}°C та вологість для спороношення.`,
+            ? 'Масовий моніліоз! Обробіть: Хорус (3г/10л, ципродиніл) або Магнікур Сенсейшн (3.5мл/10л). Виріжте всохлі гілки на 20см нижче ураження!'
+            : `Сприятливі умови. ${stage.id === 'late_spring' ? 'Ризик опіку цвіту. Використовуйте Світч (10г/10л) або Хорус + Бор для зав’язі.' : 'Огляньте плоди на гниль. Обробіть Сігнум або Скор.'}`,
+        details: `Сприятлива t: ${d.temp}°C. Ризик +${monHistory}% за минулі дощі.`,
         relatedCrops: ['apple', 'pear', 'peach', 'cherry', 'apricot', 'plum']
     });
 
     // --- 14. ІРЖА (Rust) ---
+    let rustHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.rh_avg > 80).length * 15 
+        : 0;
+
     let rust =
-        score(d.rh > 80, 40) +
-        score(d.temp >= 18 && d.temp <= 24, 30) +
-        score(d.clouds > 50, 20) +
-        score(d.wind_spd > 3, 10);
+        score(d.rh > 75, 25) +
+        score(d.temp >= 15 && d.temp <= 26, 30) +
+        score(d.wind_spd > 4, 15) +
+        rustHistory;
+
     risks.push({
         id: 'rust',
-        name: '🍂 Іржа рослин',
+        name: '🍂 Іржа (плямистість)',
         score: Math.min(rust, 100),
         advice: rust >= 80 
-            ? 'Масове ураження іржею! Скор (2мл/10л, дифеноконазол) або Топаз (4мл/10л, пенконазол). Повторіть через 10 днів.'
-            : 'Помаранчеві плями на листі. Застосуйте комплексні мікродобрива та профілактичні фунгіциди.',
-        details: `t: ${d.temp}°C, висока вологість — ідеально для іржі.`,
+            ? 'Масове ураження! Обробіть: Фалькон (6мл/10л) або Магнікур Сенсейшн (3.5мл/10л). На груші іржа приходить з ялівців!'
+            : 'Помаранчеві плями. Профілактика: Скор або Топаз. Дайте мікроелементи (Плантафол 20-20-20 або Хелатин) для імунітету.',
+        details: `Помірна t: ${d.temp}°C та вологість. Ризик +${rustHistory}% через сиру погоду.`,
         relatedCrops: ['pear', 'rose', 'currant', 'conifers', 'apple', 'plum']
     });
 
     // --- 15. ПАВУТИННИЙ КЛІЩ (Spider Mite) ---
+    let miteHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.temp_avg > 28 && h.rh_avg < 50).length * 15 
+        : 0;
+
     let spiderMiteScore =
-        score(d.temp > 28, 40) +
-        score(d.rh < 45, 40) +
-        score(d.precip === 0, 20);
+        score(d.temp > 26, 30) +
+        score(d.rh < 40, 40) +
+        score(d.precip === 0, 15) +
+        miteHistory;
+
     risks.push({
         id: 'spider_mite',
         name: '🕷 Павутинний кліщ',
         score: Math.min(spiderMiteScore, 100),
         advice: spiderMiteScore >= 80
-            ? 'Масовий кліщ! Вертимек (10мл/10л, абамектин), Енвідор (5мл/10л, спіродиклофен) або Санмайт (5г/10л, піридабен).'
-            : 'Суха спека — рай для кліща. Збільште вологість. Ефективні біопрепарати: Актофіт (40-60мл/10л, абамектин).',
-        details: `Спека: ${d.temp}°C, низька вологість: ${d.rh}%.`,
+            ? 'Масовий кліщ! Обробіть: Вертимек (10мл/10л, абамектин) або Санмайт (5г/10л, піридабен). Обов’язково кропіть нижню сторону листа!'
+            : 'Суха спека — рай для кліща. Профілактика: Актофіт (60мл/10л) або Ніссоран (діє на яйця). Підвищуйте вологість (холодне дощування).',
+        details: `Екстремально сухо: ${d.rh}%, t: ${d.temp}°C. Ризик +${miteHistory}% через спеку минулих днів.`,
         relatedCrops: ['cucumber', 'rose', 'grape', 'strawberry', 'apple', 'pepper', 'eggplant']
     });
 
     // --- 16. ПОПЕЛИЦЯ (Aphids) ---
+    let aphidHistory = (history && history.length > 0) 
+        ? history.slice(0, 3).filter(h => h.temp_avg >= 20 && h.temp_avg <= 28).length * 15 
+        : 0;
+
     let aphidScore =
-        score(d.temp >= 20 && d.temp <= 26, 40) +
-        score(d.wind_spd < 3, 30) +
-        score(d.precip === 0, 30);
+        score(d.temp >= 18 && d.temp <= 27, 30) +
+        score(d.wind_spd < 3, 20) +
+        score(d.precip === 0, 20) +
+        aphidHistory;
+
     risks.push({
         id: 'aphids',
         name: '🐜 Попелиця (Тля)',
         score: Math.min(aphidScore, 100),
         advice: aphidScore >= 80
-            ? 'Високий ризик заселення! Актара (1.4г/10л, тіаметоксам), Конфідор (2г/10л, імідаклоприд) або Енжіо (3.6мл/10л).'
-            : 'Комфортна температура для попелиці. Перевірте молоді пагони та мурашники. Можна використати калійне мило.',
-        details: `t: ${d.temp}°C, штиль, без опадів.`,
+            ? 'Високий ризик! Теппекі (2г/10л, флонікамід) — найкращий. Також Енжіо (тіаметоксам+лямбда-цигалотрин) або Актара. Знищуйте мурах!'
+            : 'Комфортна t для попелиці. Перевірте верхівки пагонів. Для профілактики: Актофіт (абамектин) або калійне мило.',
+        details: `t: ${d.temp}°C, штиль. Ризик +${aphidHistory}% через стабільне тепло.`,
         relatedCrops: ['rose', 'apple', 'pepper', 'currant', 'cherry', 'cabbage', 'plum', 'peach']
     });
 
     // --- 17. ХРУЩ (Травневий жук) ---
-    let cockchaferScore = 0;
-    let cockchaferAdvice = '';
-    let cockchaferDetails = '';
+    let cockHistory = (history && history.length > 0) 
+        ? history.slice(0, 5).filter(h => h.temp_avg > 10).length * 10 
+        : 0;
 
-    if (d.temp >= 12 && d.temp <= 22 && d.wind_spd < 4 && d.precip === 0) {
-        cockchaferScore += 60;
-        cockchaferAdvice = 'Сприятливі умови для масового льоту хрущів у вечірній час. Захистіть листя молодих дерев та плодових чагарників.';
-        cockchaferDetails = 'Вечірнє тепло та штиль сприяють льоту.';
-    }
+    let cockchaferScore =
+        score(d.temp >= 12 && d.temp <= 25, 30) +
+        score(d.wind_spd < 5, 10) +
+        score(d.precip === 0, 10) +
+        cockHistory;
 
-    if (history && Array.isArray(history) && history.length >= 3) {
-        let validHistory = history.filter(h => typeof h.temp_avg === 'number');
-        if (validHistory.length >= 3) {
-            let avgTemp = validHistory.reduce((sum, h) => sum + h.temp_avg, 0) / validHistory.length;
-            if (avgTemp > 10) {
-                cockchaferScore += 30;
-                if (cockchaferScore >= 80) {
-                    cockchaferAdvice += ' Ґрунт прогрівся, личинки піднялися до коріння. Час для грунтових інсектицидів.';
-                } else {
-                    cockchaferAdvice = 'Ґрунт прогрівся, личинки активізувалися. Особливо вразливі полуниця та газон.';
-                    cockchaferDetails = `Середня t за тиждень: ${avgTemp.toFixed(1)}°C.`;
-                }
-            }
-        }
-    }
-
-    if (cockchaferScore > 0) {
-        risks.push({
-            id: 'cockchafer',
-            name: '🪲 Хрущ (активність)',
-            score: Math.min(cockchaferScore, 100),
-            advice: cockchaferAdvice,
-            details: cockchaferDetails,
-            relatedCrops: ['strawberry', 'lawn_grass', 'conifers', 'apple', 'cherry']
-        });
-    }
+    risks.push({
+        id: 'cockchafer',
+        name: '🪲 Хрущ (личинка та літ)',
+        score: Math.min(cockchaferScore, 100),
+        advice: cockchaferScore >= 80
+            ? 'Масовий літ та активність личинок! Ґрунт прогрівся — пролийте коріння: Антихрущ (10мл/10л, імідаклоприд+біфентрин) або Актара.'
+            : 'Ризик льоту хрущів. Ґрунт теплий, личинки вже біля коріння! Внесіть у землю Белем (циперметрин) або Метаризин.',
+        details: `t: ${d.temp}°C, вечірній штиль. Ризик +${cockHistory}% через прогрів ґрунту минулих днів.`,
+        relatedCrops: ['strawberry', 'lawn_grass', 'conifers', 'apple', 'cherry', 'potato']
+    });
 
     // --- 18. VPD (Vapor Pressure Deficit) ---
     let svp = 0.61078 * Math.exp((17.27 * d.temp) / (d.temp + 237.3));
@@ -454,7 +544,9 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
     return risks
         .filter(r => {
-            if (!r || typeof r.score !== 'number' || isNaN(r.score) || r.score < 40) return false;
+            if (!r || typeof r.score !== 'number' || isNaN(r.score)) return false;
+            if (r.id === 'spray_check') return true; 
+            if (r.score < 40) return false;
             if (!userCrops || userCrops.length === 0) return true;
             if (!r.relatedCrops || !Array.isArray(r.relatedCrops) || r.relatedCrops.length === 0) return true;
             return r.relatedCrops.some(cropId => userCrops.includes(cropId));
