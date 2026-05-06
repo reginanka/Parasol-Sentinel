@@ -494,17 +494,19 @@ bot.on('callback_query', async (ctx) => {
     // --- Agro recommendations callback ---
     else if (data[0] === 'agro_tomorrow') {
         try {
+            await ctx.answerCbQuery().catch(() => {});
             await connectDB();
+            
             const user = await User.findOne({ telegramId: ctx.from.id }).lean();
             if (!user || !user.lat || !user.lon) {
-                return ctx.answerCbQuery(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
+                return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
 
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
             const cityData = await City.findOne({ externalId: cityKey }).lean();
 
             if (!cityData || !cityData.eveningState?.forecast?.[1]) {
-                return ctx.answerCbQuery(lang === 'uk'
+                return ctx.reply(lang === 'uk'
                     ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу.'
                     : '⚠️ Data not yet updated. Wait for the evening forecast.');
             }
@@ -519,11 +521,11 @@ bot.on('callback_query', async (ctx) => {
             const risks = analyzeAgroRisks(tomorrowForecast, history, user.crops || []);
             const report = formatAgroReport(user.city, risks, lang);
 
-            await ctx.answerCbQuery();
             await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (error) {
             console.error('Agro report error:', error);
-            await ctx.answerCbQuery(lang === 'uk' ? '❌ Помилка при формуванні звіту' : '❌ Error generating report');
+            // Send detailed error to chat for debugging
+            await ctx.reply(`❌ <b>DEBUG ERROR:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => {});
         }
     }
 
