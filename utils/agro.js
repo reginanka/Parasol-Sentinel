@@ -481,8 +481,8 @@ function getGrowthStage() {
  * Форматування звіту для Telegram
  */
 function formatAgroReport(city, risks, lang = 'uk') {
-    const esc = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const cityEsc = esc(city || '');
+    const esc = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const cityEsc = esc(city);
 
     if (risks.length === 0) {
         return lang === 'uk'
