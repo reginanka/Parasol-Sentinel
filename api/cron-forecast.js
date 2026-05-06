@@ -43,6 +43,9 @@ module.exports = async (req, res) => {
                 dew: "🌡 **Точка роси:**",
                 wind: "💨 **Вітер:**",
                 press: "🧭 **Тиск:**",
+                pressLow: "низький",
+                pressNorm: "норма",
+                pressHigh: "високий",
                 details: "🔗 Детальний прогноз",
                 gustsTo: "пориви до",
                 unitMs: "м/с",
@@ -58,6 +61,9 @@ module.exports = async (req, res) => {
                 dew: "🌡 **Dew Point:**",
                 wind: "💨 **Wind:**",
                 press: "🧭 **Pressure:**",
+                pressLow: "low",
+                pressNorm: "normal",
+                pressHigh: "high",
                 details: "🔗 Detailed forecast",
                 gustsTo: "gusts up to",
                 unitMs: "m/s",
@@ -92,9 +98,24 @@ module.exports = async (req, res) => {
             return baseWind;
         };
 
-        const formatPress = (mb, unit, lang) => {
-            if (unit === 'mmhg') return `${Math.round(mb * 0.75006)} ${fDict[lang].unitMmhg}`;
-            return `${Math.round(mb)} ${fDict[lang].unitHpa}`;
+        // pres = actual surface pressure (mb), slp = sea-level pressure (mb)
+        // slp is used to classify low/normal/high regardless of city altitude
+        const formatPress = (pres_mb, slp_mb, unit, lang) => {
+            const convert = (mb) => unit === 'mmhg'
+                ? Math.round(mb * 0.75006)
+                : Math.round(mb);
+            const unitStr = unit === 'mmhg' ? fDict[lang].unitMmhg : fDict[lang].unitHpa;
+
+            const presVal = convert(pres_mb);
+            const slpVal  = convert(slp_mb);
+
+            // Classify based on slp in mb (universal across altitudes)
+            let indicator;
+            if (slp_mb < 1007)       indicator = `🟢(${fDict[lang].pressLow})`;
+            else if (slp_mb <= 1018) indicator = `🟡(${fDict[lang].pressNorm})`;
+            else                     indicator = `🔴(${fDict[lang].pressHigh})`;
+
+            return `${presVal} (slp: ${slpVal}) ${unitStr} ${indicator}`;
         };
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
@@ -137,7 +158,7 @@ module.exports = async (req, res) => {
                             `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n` +
                             `${fDict[lang].dew} ${formatTemp(day.dewpt, tempUnit)}\n` +
                             `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n` +
-                            `${fDict[lang].press} ${formatPress(day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
+                            `${fDict[lang].press} ${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
                     });
 
                     //const sig = generateSignature(user.telegramId, process.env.CRON_SECRET);
