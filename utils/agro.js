@@ -13,7 +13,7 @@ const score = (condition, points) => (condition ? points : 0);
  */
 function analyzeAgroRisks(d, history = [], userCrops = []) {
     const risks = [];
-    
+
     // --- 0. НАУКОВИЙ МІСЯЦЬ (Lunar Impact) ---
     const lunarRisks = analyzeLunarImpact(d);
     risks.push(...lunarRisks);
@@ -33,8 +33,8 @@ function analyzeAgroRisks(d, history = [], userCrops = []) {
         id: 'phytophthora',
         name: '🍄 Фітофтороз',
         score: Math.min(phytophthora, 100),
-        advice: isEarly 
-            ? 'Профілактика: препарати міді (Медян Екстра, Бордоська суміш). Уникайте вологи на листі.' 
+        advice: isEarly
+            ? 'Профілактика: препарати міді (Медян Екстра, Бордоська суміш). Уникайте вологи на листі.'
             : 'Критична фаза! Обробіть системними фунгіцидами (Рідоміл Голд, Квадріс).',
         details: `Вологість ${d.rh}%, t: ${d.temp}°C, очікується дощ.`,
         relatedCrops: ['tomato', 'potato']
@@ -325,10 +325,10 @@ function analyzeAgroRisks(d, history = [], userCrops = []) {
     let pollScore = 0;
     if (d.temp > 32 || d.temp < 12 || d.precip > 0.5 || d.wind_spd > 6) {
         pollScore = score(d.temp > 32, 40) +
-                   score(d.temp < 12, 30) +
-                   score(d.precip > 0.5, 40) +
-                   score(d.wind_spd > 6, 20);
-        
+            score(d.temp < 12, 30) +
+            score(d.precip > 0.5, 40) +
+            score(d.wind_spd > 6, 20);
+
         risks.push({
             id: 'pollination',
             name: '🐝 Ризик запилення',
@@ -340,102 +340,102 @@ function analyzeAgroRisks(d, history = [], userCrops = []) {
     }
 
 
-// --- 20. НІЧНЕ ДИХАННЯ (Respiration Stress) ---
-if (d.min_temp > 20) {
-    risks.push({
-        id: 'night_respiration',
-        name: '🥵 Тепла ніч (Стрес дихання)',
-        score: 60,
-        advice: 'Рослини за ніч витрачають занадто багато енергії на дихання. Вранці бажано дати антистресанти або підживлення по листу.',
-        details: `Мін. t: ${d.min_temp}°C (занадто тепло для відпочинку).`
-    });
-}
-
-// --- 21. ВИМИВАННЯ ДОБРИВ (Leaching Risk) ---
-if (d.precip > 15) {
-    risks.push({
-        id: 'leaching',
-        name: '🌊 Вимивання добрив',
-        score: 70,
-        advice: 'Очікується сильна злива. Не проводьте підживлення під корінь сьогодні — добрива вимиються в глибокі шари.',
-        details: `Прогноз опадів: ${d.precip} мм.`
-    });
-}
-
-// --- 22. ЗАГАРТОВУВАННЯ РОЗСАДИ (Hardening off) ---
-if (d.min_temp >= 12 && d.temp <= 25 && d.uv < 6 && d.wind_spd < 4) {
-    risks.push({
-        id: 'hardening',
-        name: '🌱 Вікно для загартовування',
-        score: 40, // Це позитивний показник, але ми виводимо як пораду
-        advice: 'Ідеальні умови, щоб винести розсаду «погуляти» або почати висадку. Сонце не пече, вітру майже немає.',
-        details: `Комфортна t та низький УФ.`
-    });
-}
-
-
-
-
-
-
-
-// --- 10. СУХОВІЙ ---
-const drought =
-    score(['E', 'SE'].includes(d.wind_cdir), 40) +
-    score(d.rh < 30, 40) +
-    score(d.wind_spd > 6, 20);
-risks.push({
-    id: 'drought',
-    name: '💨 Суховій',
-    score: Math.min(drought, 100),
-    advice: 'Екстремальне випаровування. Додайте мульчу, збільште вечірній полив.',
-    details: `Вітер ${d.wind_cdir}, сухість повітря.`
-});
-
-// --- 11. НАКОПИЧЕНИЙ СТРЕС (ІСТОРІЯ) ---
-if (history && history.length > 0) {
-    // Рахуємо дні спеки
-    const heatDays = history.filter(h => h.temp_max > 30).length;
-    if (heatDays >= 3) {
+    // --- 20. НІЧНЕ ДИХАННЯ (Respiration Stress) ---
+    if (d.min_temp > 20) {
         risks.push({
-            id: 'cumulative_heat',
-            name: '🌵 Тривала спека',
-            score: Math.min(40 + (heatDays * 10), 100),
-            advice: `Це вже ${heatDays}-й день спеки поспіль. Рослини виснажені. Використовуйте антистресанти та рясний полив ввечері.`,
-            details: `Спека триває ${heatDays} днів.`
+            id: 'night_respiration',
+            name: '🥵 Тепла ніч (Стрес дихання)',
+            score: 60,
+            advice: 'Рослини за ніч витрачають занадто багато енергії на дихання. Вранці бажано дати антистресанти або підживлення по листу.',
+            details: `Мін. t: ${d.min_temp}°C (занадто тепло для відпочинку).`
         });
     }
 
-    // Рахуємо дефіцит опадів за 7 днів
-    const totalRain = history.reduce((sum, h) => sum + (h.precip || 0), 0);
-    if (totalRain < 5 && d.temp > 25) {
+    // --- 21. ВИМИВАННЯ ДОБРИВ (Leaching Risk) ---
+    if (d.precip > 15) {
         risks.push({
-            id: 'water_deficit',
-            name: '🚱 Дефіцит вологи',
+            id: 'leaching',
+            name: '🌊 Вимивання добрив',
             score: 70,
-            advice: 'За останній тиждень майже не було опадів. Потрібен глибокий полив під корінь.',
-            details: `Всього ${totalRain.toFixed(1)}мм опадів за тиждень.`
+            advice: 'Очікується сильна злива. Не проводьте підживлення під корінь сьогодні — добрива вимиються в глибокі шари.',
+            details: `Прогноз опадів: ${d.precip} мм.`
         });
     }
-}
+
+    // --- 22. ЗАГАРТОВУВАННЯ РОЗСАДИ (Hardening off) ---
+    if (d.min_temp >= 12 && d.temp <= 25 && d.uv < 6 && d.wind_spd < 4) {
+        risks.push({
+            id: 'hardening',
+            name: '🌱 Вікно для загартовування',
+            score: 40, // Це позитивний показник, але ми виводимо як пораду
+            advice: 'Ідеальні умови, щоб винести розсаду «погуляти» або почати висадку. Сонце не пече, вітру майже немає.',
+            details: `Комфортна t та низький УФ.`
+        });
+    }
 
 
-return risks
-    .filter(r => {
-        // Якщо ризик критичний (score >= 40)
-        if (r.score < 40) return false;
 
-        // Якщо у користувача порожній список — показуємо все
-        if (!userCrops || userCrops.length === 0) return true;
 
-        // Якщо у ризику немає прив'язки до культур — він універсальний
-        if (!r.relatedCrops || r.relatedCrops.length === 0) return true;
 
-        // Інакше показуємо тільки якщо культура збігається
-        return r.relatedCrops.some(cropId => userCrops.includes(cropId));
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+
+
+    // --- 10. СУХОВІЙ ---
+    const drought =
+        score(['E', 'SE'].includes(d.wind_cdir), 40) +
+        score(d.rh < 30, 40) +
+        score(d.wind_spd > 6, 20);
+    risks.push({
+        id: 'drought',
+        name: '💨 Суховій',
+        score: Math.min(drought, 100),
+        advice: 'Екстремальне випаровування. Додайте мульчу, збільште вечірній полив.',
+        details: `Вітер ${d.wind_cdir}, сухість повітря.`
+    });
+
+    // --- 11. НАКОПИЧЕНИЙ СТРЕС (ІСТОРІЯ) ---
+    if (history && history.length > 0) {
+        // Рахуємо дні спеки
+        const heatDays = history.filter(h => h.temp_max > 30).length;
+        if (heatDays >= 3) {
+            risks.push({
+                id: 'cumulative_heat',
+                name: '🌵 Тривала спека',
+                score: Math.min(40 + (heatDays * 10), 100),
+                advice: `Це вже ${heatDays}-й день спеки поспіль. Рослини виснажені. Використовуйте антистресанти та рясний полив ввечері.`,
+                details: `Спека триває ${heatDays} днів.`
+            });
+        }
+
+        // Рахуємо дефіцит опадів за 7 днів
+        const totalRain = history.reduce((sum, h) => sum + (h.precip || 0), 0);
+        if (totalRain < 5 && d.temp > 25) {
+            risks.push({
+                id: 'water_deficit',
+                name: '🚱 Дефіцит вологи',
+                score: 70,
+                advice: 'За останній тиждень майже не було опадів. Потрібен глибокий полив під корінь.',
+                details: `Всього ${totalRain.toFixed(1)}мм опадів за тиждень.`
+            });
+        }
+    }
+
+
+    return risks
+        .filter(r => {
+            // Якщо ризик критичний (score >= 40)
+            if (r.score < 40) return false;
+
+            // Якщо у користувача порожній список — показуємо все
+            if (!userCrops || userCrops.length === 0) return true;
+
+            // Якщо у ризику немає прив'язки до культур — він універсальний
+            if (!r.relatedCrops || r.relatedCrops.length === 0) return true;
+
+            // Інакше показуємо тільки якщо культура збігається
+            return r.relatedCrops.some(cropId => userCrops.includes(cropId));
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5);
 }
 
 /**
@@ -461,8 +461,8 @@ function formatAgroReport(city, risks, lang = 'uk') {
     }
 
     let message = lang === 'uk'
-        ? `🧠 **Weather Syndrome Analysis: ${city}**\n━━━━━━━━━━━━━━━━━━━━\n`
-        : `🧠 **Weather Syndrome Analysis: ${city}**\n━━━━━━━━━━━━━━━━━━━━\n`;
+        ? `🧠 **Аналітика: ${city}**\n━━━━━━━━━━━━━━━━━━━━\n`
+        : `🧠 **Аналітика: ${city}**\n━━━━━━━━━━━━━━━━━━━━\n`;
 
     risks.forEach(r => {
         let level = lang === 'uk' ? '🟡 СЕРЕДНІЙ' : '🟡 MEDIUM';
@@ -491,29 +491,29 @@ function formatAgroReport(city, risks, lang = 'uk') {
 function analyzeSprayingWindow(forecastData, lang = 'uk') {
     if (!forecastData || forecastData.length === 0) return '';
 
-    let report = lang === 'uk' 
-        ? '🚜 **Графік обробок (5 днів):**\n' 
+    let report = lang === 'uk'
+        ? '🚜 **Графік обробок (5 днів):**\n'
         : '🚜 **Spraying Schedule (5 days):**\n';
-    
+
     forecastData.slice(0, 5).forEach(day => {
         const dateObj = new Date(day.valid_date || day.datetime);
         const dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
-        
+
         let score = 0;
         let reasons = [];
-        
+
         if (day.wind_spd > 5) { score += 40; reasons.push(lang === 'uk' ? 'вітер' : 'wind'); }
         if (day.precip > 1) { score += 50; reasons.push(lang === 'uk' ? 'дощ' : 'rain'); }
         if (day.max_temp > 28) { score += 20; reasons.push(lang === 'uk' ? 'спека' : 'heat'); }
-        
+
         let icon = '🟢';
         if (score >= 40) icon = '🟡';
         if (score >= 70) icon = '🔴';
-        
+
         const reasonStr = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
         report += `${icon} **${dayStr}**: ${icon === '🟢' ? (lang === 'uk' ? 'Ідеально' : 'Perfect') : (lang === 'uk' ? 'Ризик' : 'Risk')}${reasonStr}\n`;
     });
-    
+
     return report;
 }
 
@@ -528,7 +528,7 @@ function getLunarPhase(date) {
     const year = date.getFullYear();
     const month = date.getMonth() + 1;
     const day = date.getDate();
-    
+
     let c = 0, e = 0, jd = 0, b = 0;
     if (month < 3) { year--; month += 12; }
     month++;
@@ -550,7 +550,7 @@ function analyzeLunarImpact(d, lang = 'uk') {
     const date = new Date(d.valid_date || d.datetime || Date.now());
     const moon = getLunarPhase(date);
     const risks = [];
-    
+
     // Перевірка на "Припливний пік" + Падіння тиску
     if ((moon.index === 0 || moon.index === 4) && d.slp < 1005) {
         risks.push({
@@ -561,7 +561,7 @@ function analyzeLunarImpact(d, lang = 'uk') {
             details: `${moon.name}, тиск: ${d.slp} hPa.`
         });
     }
-    
+
     return risks;
 }
 
@@ -570,43 +570,43 @@ function analyzeLunarImpact(d, lang = 'uk') {
  */
 async function generateHistoricalReport(history, lang = 'uk') {
     if (!history || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
-    
+
     const count = history.length;
     const avgTemp = history.reduce((s, h) => s + h.temp_avg, 0) / count;
     const totalRain = history.reduce((s, h) => s + (h.precip || 0), 0);
     const heatDays = history.filter(h => h.temp_max > 30).length;
-    
-    let report = lang === 'uk' 
+
+    let report = lang === 'uk'
         ? `📈 **Агро-Архів за останні ${count} днів:**\n━━━━━━━━━━━━━━━━━━━━\n`
         : `📈 **Agro-Archive for last ${count} days:**\n━━━━━━━━━━━━━━━━━━━━\n`;
-        
-    report += lang === 'uk' 
+
+    report += lang === 'uk'
         ? `🌡 Сер. температура: ${avgTemp.toFixed(1)}°C\n`
         : `🌡 Avg Temperature: ${avgTemp.toFixed(1)}°C\n`;
-        
+
     report += lang === 'uk'
         ? `🌧 Сума опадів: ${totalRain.toFixed(1)} мм\n`
         : `🌧 Total Precip: ${totalRain.toFixed(1)} mm\n`;
-        
+
     report += lang === 'uk'
         ? `🔥 Днів спеки (>30°C): ${heatDays}\n`
         : `🔥 Heat days (>30°C): ${heatDays}\n`;
-        
+
     report += `━━━━━━━━━━━━━━━━━━━━\n`;
-    
+
     if (totalRain < 5 && avgTemp > 20) {
         report += lang === 'uk' ? '⚠️ Спостерігається накопичений дефіцит вологи.' : '⚠️ Accumulated moisture deficit observed.';
     } else if (totalRain > 50) {
         report += lang === 'uk' ? '⚠️ Ризик вимивання поживних речовин через надмірні дощі.' : '⚠️ Risk of nutrient leaching due to excessive rain.';
     }
-    
+
     return report;
 }
 
-module.exports = { 
-    analyzeAgroRisks, 
-    formatAgroReport, 
-    analyzeSprayingWindow, 
+module.exports = {
+    analyzeAgroRisks,
+    formatAgroReport,
+    analyzeSprayingWindow,
     generateHistoricalReport,
     getLunarPhase,
     getGrowthStage
