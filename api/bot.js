@@ -338,23 +338,23 @@ bot.on('text', async (ctx) => {
     if (query === dict.uk.agroScheduleBtn || query === dict.en.agroScheduleBtn) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
-        
+
         const { analyzeSprayingWindow } = require('../utils/agro');
         const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
         const cityData = await City.findOne({ externalId: cityKey });
-        
+
         if (!cityData || !cityData.eveningState?.forecast) {
             return ctx.reply(lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.');
         }
-        
-        const report = analyzeSprayingWindow(cityData.eveningState.forecast, lang);
+
+        const report = analyzeSprayingWindow(cityData.eveningState.forecast, lang, user.crops || []);
         return ctx.reply(report, { parse_mode: 'HTML' });
     }
 
     if (query === dict.uk.agroArchiveBtn || query === dict.en.agroArchiveBtn) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
-        
+
         // Show inline keyboard to select period
         const archiveKeyboard = {
             inline_keyboard: [
@@ -363,7 +363,7 @@ bot.on('text', async (ctx) => {
                 [{ text: lang === 'uk' ? 'Пів року' : '6 Months', callback_data: 'archive|180' }]
             ]
         };
-        
+
         return ctx.reply(lang === 'uk' ? '📊 Оберіть період для аналізу:' : '📊 Select period for analysis:', {
             reply_markup: archiveKeyboard
         });
@@ -494,9 +494,9 @@ bot.on('callback_query', async (ctx) => {
     // --- Agro recommendations callback ---
     else if (data[0] === 'agro_tomorrow') {
         try {
-            await ctx.answerCbQuery().catch(() => {});
+            await ctx.answerCbQuery().catch(() => { });
             await connectDB();
-            
+
             const user = await User.findOne({ telegramId: ctx.from.id }).lean();
             if (!user || !user.lat || !user.lon) {
                 return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
@@ -525,7 +525,7 @@ bot.on('callback_query', async (ctx) => {
         } catch (error) {
             console.error('Agro report error:', error);
             // Send detailed error to chat for debugging
-            await ctx.reply(`❌ <b>DEBUG ERROR:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => {});
+            await ctx.reply(`❌ <b>DEBUG ERROR:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }
 
@@ -657,14 +657,14 @@ bot.on('callback_query', async (ctx) => {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
-            
+
             const history = await History.find({ externalId: cityKey })
                 .sort({ date: -1 })
                 .limit(days);
-            
+
             const { generateHistoricalReport } = require('../utils/agro');
             const report = await generateHistoricalReport(history, lang);
-            
+
             await ctx.answerCbQuery();
             await ctx.editMessageText(report, { parse_mode: 'HTML' });
         } catch (error) {
