@@ -495,13 +495,13 @@ bot.on('callback_query', async (ctx) => {
     else if (data[0] === 'agro_tomorrow') {
         try {
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ctx.from.id }).lean();
             if (!user || !user.lat || !user.lon) {
                 return ctx.answerCbQuery(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
 
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
-            const cityData = await City.findOne({ externalId: cityKey });
+            const cityData = await City.findOne({ externalId: cityKey }).lean();
 
             if (!cityData || !cityData.eveningState?.forecast?.[1]) {
                 return ctx.answerCbQuery(lang === 'uk'
@@ -514,7 +514,7 @@ bot.on('callback_query', async (ctx) => {
             // Fetch last 7 days of history for this city
             const history = await History.find({
                 externalId: cityKey
-            }).sort({ date: -1 }).limit(7);
+            }).sort({ date: -1 }).limit(7).lean();
 
             const risks = analyzeAgroRisks(tomorrowForecast, history, user.crops || []);
             const report = formatAgroReport(user.city, risks, lang);
