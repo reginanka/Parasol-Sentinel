@@ -165,10 +165,6 @@ function buildHelpKeyboard(lang, activeTopic = null) {
         )
     };
 }
-
-    };
-}
-
 // Build crops main categories keyboard
 function buildCropsCategoriesKeyboard(lang) {
     const d = dict[lang];
@@ -678,20 +674,8 @@ bot.on('callback_query', async (ctx) => {
     }
 });
 
+
 // --- Local Development Support (Polling Mode) ---
-// If the script is run directly (not via a serverless require), launch in polling mode.
-if (require.main === module) {
-    (async () => {
-        try {
-            console.log('🚀 Launching Parasol Sentinel in POLLING mode (Local Dev)...');
-            await connectDB();
-            await bot.launch();
-            console.log('✅ Bot is active and polling.');
-        } catch (e) {
-            console.error('❌ Failed to launch bot locally:', e.message);
-        }
-    })();
-}
 // If the script is run directly (not via a serverless require), launch in polling mode.
 if (require.main === module) {
     (async () => {
