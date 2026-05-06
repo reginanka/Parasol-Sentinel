@@ -138,6 +138,7 @@ module.exports = async (req, res) => {
                         precip: todayData.precip,
                         uv_max: todayData.uv,
                         rh_avg: todayData.rh,
+                        clouds_avg: todayData.clouds,
                         wind_spd_max: todayData.wind_gust_spd || todayData.wind_spd
                     },
                     { upsert: true }

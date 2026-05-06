@@ -519,7 +519,7 @@ bot.on('callback_query', async (ctx) => {
             }).sort({ date: -1 }).limit(7).lean();
 
             const risks = analyzeAgroRisks(tomorrowForecast, history, user.crops || []);
-            const report = formatAgroReport(user.city, risks, lang);
+            const report = formatAgroReport(user.city, risks, lang, tomorrowForecast.valid_date || tomorrowForecast.datetime);
 
             await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (error) {
