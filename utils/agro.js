@@ -47,7 +47,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     const isEarly = stage === 'early_spring';
 
     // --- 1. ФІТОФТОРОЗ (Phytophthora infestans) ---
-    const phytophthora =
+    let phytophthora =
         score(d.rh > 85, 30) +
         score(d.temp >= 16 && d.temp <= 22, 25) +
         score(d.precip > 0.8, 25) +
@@ -67,7 +67,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     // --- 2. ПЕРОНОСПОРOZ / НЕСПРАВЖНЯ БОРОШНИСТА РОСА ---
-    const downyMildew =
+    let downyMildew =
         score(d.temp - d.dewpt < 2, 40) + // повітря насичене, буде роса
         score(d.temp >= 10 && d.temp <= 18, 30) +
         score(d.rh > 90, 20) +
@@ -83,7 +83,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     // --- 3. БОРОШНИСТА РОСА (Powdery Mildew) ---
-    const powderyMildew =
+    let powderyMildew =
         score(d.temp >= 22 && d.temp <= 28, 30) +
         score(d.rh >= 50 && d.rh <= 70, 25) +
         score(d.precip === 0, 25) + // цей грибок не любить змивання водою
@@ -99,7 +99,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     // --- 4. ТЕРМІЧНИЙ СТРЕС (Heat Stress) ---
-    const heatStress =
+    let heatStress =
         score(d.temp > 32, 40) +
         score(d.temp > 35, 30) +
         score(d.uv > 8, 20) +
@@ -114,7 +114,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
     // --- СОНЯЧНИЙ ОПІК ТА УФ-РИЗИК ---
     // Логіка: 5-6 — помірно (попередження лише при спеці), 7+ — високий ризик
-    const sunburn =
+    let sunburn =
         score(d.uv >= 5 && d.uv < 7, 25) + // Помірна небезпека
         score(d.uv >= 7, 50) +             // Висока небезпека (High)
         score(d.uv >= 9, 30) +             // Екстремальна небезпека (Very High)
@@ -132,7 +132,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     // --- 5. ВІКНО ДЛЯ ОБПРИСКУВАННЯ (Spraying Window) ---
-    const sprayRisk =
+    let sprayRisk =
         score(d.wind_spd > 5, 50) + // знос препарату
         score(d.precip > 0.2, 40) + // змивання препарату
         score(d.temp > 25, 10);    // швидке випаровування
@@ -145,7 +145,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 6. ГІПОКСІЯ / ПЕРЕЗВОЛОЖЕННЯ ---
-    const hypoxia =
+    let hypoxia =
         score(d.precip > 20, 50) +
         score(d.clouds > 90 && d.rh > 90, 30) +
         score(d.temp < 15, 20);
@@ -158,7 +158,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 7. ПАРША (Venturia) ---
-    const scab =
+    let scab =
         score(d.precip > 0.5 && d.temp >= 14 && d.temp <= 22, 60) +
         score(d.rh > 85, 40);
     risks.push({
@@ -172,7 +172,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     // --- 8. ЗАМОРОЗОК ---
-    const frost =
+    let frost =
         score(d.min_temp <= 2, 50) +
         score(d.clouds < 20, 30) +
         score(d.wind_spd < 2, 20);
@@ -185,7 +185,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 9. АЛЬТЕРНАРІОЗ ---
-    const alternaria =
+    let alternaria =
         score(d.temp > 26, 40) +
         score(d.precip > 0.5, 30) +
         score(d.rh > 70, 30);
@@ -199,7 +199,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 11. АНТРАКНОЗ ---
-    const anthracnose =
+    let anthracnose =
         score(d.rh > 80, 35) +
         score(d.temp >= 20 && d.temp <= 27, 30) +
         score(d.precip > 0, 25) +
@@ -213,7 +213,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 12. СІРА ГНИЛЬ (Botrytis) ---
-    const botrytis =
+    let botrytis =
         score(d.rh > 85, 40) +
         score(d.temp >= 15 && d.temp <= 22, 30) +
         score(d.precip > 0.5, 20) +
@@ -243,7 +243,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 14. ІРЖА (Rust) ---
-    const rust =
+    let rust =
         score(d.rh > 80, 40) +
         score(d.temp >= 18 && d.temp <= 24, 30) +
         score(d.clouds > 50, 20) +
@@ -407,7 +407,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 
     // --- 10. СУХОВІЙ ---
-    const drought =
+    let drought =
         score(['E', 'SE'].includes(d.wind_cdir), 40) +
         score(d.rh < 30, 40) +
         score(d.wind_spd > 6, 20);
@@ -577,9 +577,9 @@ function getLunarPhase(date) {
  * Аналіз впливу Місяця та тиску (Науковий Місяць)
  */
 function analyzeLunarImpact(d, lang = 'uk') {
-    const date = new Date(d.valid_date || d.datetime || Date.now());
-    const moon = getLunarPhase(date);
-    const risks = [];
+    let date = new Date(d.valid_date || d.datetime || Date.now());
+    let moon = getLunarPhase(date);
+    let risks = [];
 
     // Перевірка на "Припливний пік" + Падіння тиску
     if ((moon.index === 0 || moon.index === 4) && d.slp < 1005) {
