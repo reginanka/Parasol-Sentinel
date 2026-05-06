@@ -9,6 +9,7 @@ const HistorySchema = new mongoose.Schema({
     precip: Number,
     uv_max: Number,
     rh_avg: Number,
+    clouds_avg: Number,
     wind_spd_max: Number,
     createdAt: {
         type: Date,
