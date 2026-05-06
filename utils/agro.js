@@ -3,7 +3,7 @@
  * Розрахунок ризиків для рослин на основі даних Weatherbit API
  */
 
-const score = (condition, points) => (condition ? points : 0);
+let score = (condition, points) => (condition ? points : 0);
 
 /**
  * Основна функція аналізу
@@ -16,7 +16,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     if (!rawD || typeof rawD !== 'object') return [];
 
     // Neutral defaults to prevent crashes while maintaining some logic sanity
-    const d = {
+    let d = {
         rh: typeof rawD.rh === 'number' ? rawD.rh : 50,
         temp: typeof rawD.temp === 'number' ? rawD.temp : 20,
         max_temp: typeof rawD.max_temp === 'number' ? rawD.max_temp : (rawD.temp || 20),
@@ -32,19 +32,19 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         valid_date: rawD.valid_date || rawD.datetime || new Date().toISOString()
     };
 
-    const risks = [];
+    let risks = [];
 
     // --- 0. НАУКОВИЙ МІСЯЦЬ (Lunar Impact) ---
     try {
-        const lunarRisks = analyzeLunarImpact(d);
+        let lunarRisks = analyzeLunarImpact(d);
         risks.push(...lunarRisks);
     } catch (e) {
         console.error('Lunar analysis failed:', e);
     }
 
 
-    const stage = getGrowthStage();
-    const isEarly = stage === 'early_spring';
+    let stage = getGrowthStage();
+    let isEarly = stage === 'early_spring';
 
     // --- 1. ФІТОФТОРОЗ (Phytophthora infestans) ---
     let phytophthora =
@@ -64,8 +64,6 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         relatedCrops: ['tomato', 'potato']
     });
 
-
-
     // --- 2. ПЕРОНОСПОРOZ / НЕСПРАВЖНЯ БОРОШНИСТА РОСА ---
     let downyMildew =
         score(d.temp - d.dewpt < 2, 40) + // повітря насичене, буде роса
@@ -80,7 +78,6 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         details: `Точка роси: ${d.dewpt}°C (дуже близько до t), ризик конденсату.`,
         relatedCrops: ['cucumber', 'zucchini', 'grape']
     });
-
 
     // --- 3. БОРОШНИСТА РОСА (Powdery Mildew) ---
     let powderyMildew =
@@ -97,7 +94,6 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         relatedCrops: ['zucchini', 'rose', 'grape', 'apple']
     });
 
-
     // --- 4. ТЕРМІЧНИЙ СТРЕС (Heat Stress) ---
     let heatStress =
         score(d.temp > 32, 40) +
@@ -113,11 +109,10 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- СОНЯЧНИЙ ОПІК ТА УФ-РИЗИК ---
-    // Логіка: 5-6 — помірно (попередження лише при спеці), 7+ — високий ризик
     let sunburn =
-        score(d.uv >= 5 && d.uv < 7, 25) + // Помірна небезпека
-        score(d.uv >= 7, 50) +             // Висока небезпека (High)
-        score(d.uv >= 9, 30) +             // Екстремальна небезпека (Very High)
+        score(d.uv >= 5 && d.uv < 7, 25) +
+        score(d.uv >= 7, 50) +
+        score(d.uv >= 9, 30) +
         score(d.temp > 30, 20) +
         score(d.clouds < 15, 10);
     risks.push({
@@ -130,12 +125,11 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         details: `УФ-індекс: ${d.uv}, хмарність: ${d.clouds}%, t: ${d.temp}°C.`
     });
 
-
     // --- 5. ВІКНО ДЛЯ ОБПРИСКУВАННЯ (Spraying Window) ---
     let sprayRisk =
-        score(d.wind_spd > 5, 50) + // знос препарату
-        score(d.precip > 0.2, 40) + // змивання препарату
-        score(d.temp > 25, 10);    // швидке випаровування
+        score(d.wind_spd > 5, 50) +
+        score(d.precip > 0.2, 40) +
+        score(d.temp > 25, 10);
     risks.push({
         id: 'spray_check',
         name: '🚫 Ризик оприскування',
@@ -169,7 +163,6 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         details: `Вологий лист при t: ${d.temp}°C.`,
         relatedCrops: ['apple', 'pear']
     });
-
 
     // --- 8. ЗАМОРОЗОК ---
     let frost =
@@ -290,18 +283,16 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     let cockchaferAdvice = '';
     let cockchaferDetails = '';
 
-    // Аналіз льоту (дорослих особин)
     if (d.temp >= 12 && d.temp <= 22 && d.wind_spd < 4 && d.precip === 0) {
         cockchaferScore += 60;
         cockchaferAdvice = 'Сприятливі умови для масового льоту хрущів у вечірній час. Захистіть листя молодих дерев та плодових чагарників.';
         cockchaferDetails = 'Вечірнє тепло та штиль сприяють льоту.';
     }
 
-    // Аналіз активності личинок (через історію прогріву ґрунту)
     if (history && Array.isArray(history) && history.length >= 3) {
-        const validHistory = history.filter(h => typeof h.temp_avg === 'number');
+        let validHistory = history.filter(h => typeof h.temp_avg === 'number');
         if (validHistory.length >= 3) {
-            const avgTemp = validHistory.reduce((sum, h) => sum + h.temp_avg, 0) / validHistory.length;
+            let avgTemp = validHistory.reduce((sum, h) => sum + h.temp_avg, 0) / validHistory.length;
             if (avgTemp > 10) {
                 cockchaferScore += 30;
                 if (cockchaferScore >= 80) {
@@ -325,11 +316,10 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         });
     }
 
-    // --- 18. VPD (Vapor Pressure Deficit) - Дефіцит пружності водяної пари ---
-    // Формула Тетенса для тиску насиченої пари (svp) та реального тиску (avp)
-    const svp = 0.61078 * Math.exp((17.27 * d.temp) / (d.temp + 237.3));
-    const avp = svp * (d.rh / 100);
-    const vpd = svp - avp; // Значення в кПа
+    // --- 18. VPD (Vapor Pressure Deficit) ---
+    let svp = 0.61078 * Math.exp((17.27 * d.temp) / (d.temp + 237.3));
+    let avp = svp * (d.rh / 100);
+    let vpd = svp - avp;
 
     if (vpd > 1.8) {
         risks.push({
@@ -348,6 +338,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             details: `VPD: ${vpd.toFixed(2)} кПа (занадто низький).`
         });
     }
+
     // --- 19. РИЗИК ЗАПИЛЕННЯ (Pollination Risk) ---
     let pollScore = 0;
     if (d.temp > 32 || d.temp < 12 || d.precip > 0.5 || d.wind_spd > 6) {
@@ -365,7 +356,6 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             relatedCrops: ['tomato', 'pepper', 'cucumber', 'apple', 'pear', 'cherry', 'peach', 'strawberry', 'raspberry', 'grape']
         });
     }
-
 
     // --- 20. НІЧНЕ ДИХАННЯ (Respiration Stress) ---
     if (d.min_temp > 20) {
@@ -394,17 +384,11 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         risks.push({
             id: 'hardening',
             name: '🌱 Вікно для загартовування',
-            score: 40, // Це позитивний показник, але ми виводимо як пораду
+            score: 40,
             advice: 'Ідеальні умови, щоб винести розсаду «погуляти» або почати висадку. Сонце не пече, вітру майже немає.',
             details: `Комфортна t та низький УФ.`
         });
     }
-
-
-
-
-
-
 
     // --- 10. СУХОВІЙ ---
     let drought =
@@ -421,8 +405,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
     // --- 11. НАКОПИЧЕНИЙ СТРЕС (ІСТОРІЯ) ---
     if (history && history.length > 0) {
-        // Рахуємо дні спеки
-        const heatDays = history.filter(h => h.temp_max > 30).length;
+        let heatDays = history.filter(h => h.temp_max > 30).length;
         if (heatDays >= 3) {
             risks.push({
                 id: 'cumulative_heat',
@@ -433,8 +416,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             });
         }
 
-        // Рахуємо дефіцит опадів за 7 днів
-        const totalRain = history.reduce((sum, h) => sum + (h.precip || 0), 0);
+        let totalRain = history.reduce((sum, h) => sum + (h.precip || 0), 0);
         if (totalRain < 5 && d.temp > 25) {
             risks.push({
                 id: 'water_deficit',
@@ -446,30 +428,19 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         }
     }
 
-
     return risks
         .filter(r => {
-            // Safe score check
             if (!r || typeof r.score !== 'number' || isNaN(r.score) || r.score < 40) return false;
-
-            // Якщо у користувача порожній список — показуємо все
             if (!userCrops || userCrops.length === 0) return true;
-
-            // Якщо у ризику немає прив'язки до культур — він універсальний
             if (!r.relatedCrops || !Array.isArray(r.relatedCrops) || r.relatedCrops.length === 0) return true;
-
-            // Інакше показуємо тільки якщо культура збігається
             return r.relatedCrops.some(cropId => userCrops.includes(cropId));
         })
         .sort((a, b) => (b.score || 0) - (a.score || 0))
         .slice(0, 5);
 }
 
-/**
- * Визначення стадії росту за календарем
- */
 function getGrowthStage() {
-    const month = new Date().getMonth() + 1; // 1-12
+    let month = new Date().getMonth() + 1;
     if (month >= 3 && month <= 4) return 'early_spring';
     if (month === 5) return 'late_spring';
     if (month >= 6 && month <= 8) return 'summer';
@@ -477,12 +448,9 @@ function getGrowthStage() {
     return 'winter';
 }
 
-/**
- * Форматування звіту для Telegram
- */
 function formatAgroReport(city, risks, lang = 'uk') {
-    const esc = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const cityEsc = esc(city);
+    let esc = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let cityEsc = esc(city);
 
     if (risks.length === 0) {
         return lang === 'uk'
@@ -504,7 +472,7 @@ function formatAgroReport(city, risks, lang = 'uk') {
         message += lang === 'uk' ? `  👉 <b>Порада:</b> ${esc(r.advice || '')}\n\n` : `  👉 <b>Advice:</b> ${esc(r.advice || '')}\n\n`;
     });
 
-    const moon = getLunarPhase(new Date());
+    let moon = getLunarPhase(new Date());
     message += `━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🌙 ${esc(moon.name)}\n`;
     message += `<i>`;
@@ -514,58 +482,37 @@ function formatAgroReport(city, risks, lang = 'uk') {
     return message;
 }
 
-
-/**
- * Аналіз вікна для обприскування на 5 днів
- */
 function analyzeSprayingWindow(forecastData, lang = 'uk') {
     if (!forecastData || !Array.isArray(forecastData)) return '';
-
-    let report = lang === 'uk'
-        ? '🚜 <b>Графік обробок (5 днів):</b>\n'
-        : '🚜 <b>Spraying Schedule (5 days):</b>\n';
+    let report = lang === 'uk' ? '🚜 <b>Графік обробок (5 днів):</b>\n' : '🚜 <b>Spraying Schedule (5 days):</b>\n';
 
     forecastData.slice(0, 5).forEach(day => {
-        const dateObj = new Date(day.valid_date || day.datetime);
-        const dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
-
+        let dateObj = new Date(day.valid_date || day.datetime);
+        let dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
         let score = 0;
         let reasons = [];
-
         if (day.wind_spd > 5) { score += 40; reasons.push(lang === 'uk' ? 'вітер' : 'wind'); }
         if (day.precip > 1) { score += 50; reasons.push(lang === 'uk' ? 'дощ' : 'rain'); }
         if (day.max_temp > 28) { score += 20; reasons.push(lang === 'uk' ? 'спека' : 'heat'); }
-
-        let icon = '🟢';
-        if (score >= 40) icon = '🟡';
-        if (score >= 70) icon = '🔴';
-
-        const reasonStr = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
+        let icon = score >= 70 ? '🔴' : (score >= 40 ? '🟡' : '🟢');
+        let reasonStr = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
         report += `${icon} <b>${dayStr}</b>: ${icon === '🟢' ? (lang === 'uk' ? 'Ідеально' : 'Perfect') : (lang === 'uk' ? 'Ризик' : 'Risk')}${reasonStr}\n`;
     });
-
     return report;
 }
 
-/**
- * Розрахунок фази Місяця (спрощений)
- */
 function getLunarPhase(date) {
-    const lp = [
-        '🌑 Молодик', '🌒 Молодий місяць', '🌓 Перша чверть', '🌔 Випуклий місяць',
-        '🌕 Повня', '🌖 Спадаючий місяць', '🌗 Остання чверть', '🌘 Старий місяць'
-    ];
-    const year = date.getFullYear();
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-
+    let lp = ['🌑 Молодик', '🌒 Молодий місяць', '🌓 Перша чверть', '🌔 Випуклий місяць', '🌕 Повня', '🌖 Спадаючий місяць', '🌗 Остання чверть', '🌘 Старий місяць'];
+    let year = date.getFullYear();
+    let month = date.getMonth() + 1;
+    let day = date.getDate();
     let c = 0, e = 0, jd = 0, b = 0;
     if (month < 3) { year--; month += 12; }
     month++;
     c = 365.25 * year;
     e = 30.6 * month;
-    jd = c + e + day - 694039.09; // Julian day relative to 1900
-    jd /= 29.5305882; // Lunar month
+    jd = c + e + day - 694039.09;
+    jd /= 29.5305882;
     b = parseInt(jd);
     jd -= b;
     b = Math.round(jd * 8);
@@ -573,15 +520,10 @@ function getLunarPhase(date) {
     return { index: b, name: lp[b] };
 }
 
-/**
- * Аналіз впливу Місяця та тиску (Науковий Місяць)
- */
 function analyzeLunarImpact(d, lang = 'uk') {
     let date = new Date(d.valid_date || d.datetime || Date.now());
     let moon = getLunarPhase(date);
     let risks = [];
-
-    // Перевірка на "Припливний пік" + Падіння тиску
     if ((moon.index === 0 || moon.index === 4) && d.slp < 1005) {
         risks.push({
             id: 'lunar_storm',
@@ -591,57 +533,24 @@ function analyzeLunarImpact(d, lang = 'uk') {
             details: `${moon.name}, тиск: ${d.slp} hPa.`
         });
     }
-
     return risks;
 }
 
-/**
- * Агрегація історії (Архів)
- */
 async function generateHistoricalReport(history, lang = 'uk') {
     if (!history || !Array.isArray(history) || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
-
-    const validHistory = history.filter(h => typeof h.temp_avg === 'number');
+    let validHistory = history.filter(h => typeof h.temp_avg === 'number');
     if (validHistory.length === 0) return lang === 'uk' ? '❌ Недостатньо даних для аналізу.' : '❌ Not enough data for analysis.';
-
-    const count = validHistory.length;
-    const avgTemp = validHistory.reduce((s, h) => s + h.temp_avg, 0) / count;
-    const totalRain = validHistory.reduce((s, h) => s + (h.precip || 0), 0);
-    const heatDays = validHistory.filter(h => (h.temp_max || 0) > 30).length;
-
-    let report = lang === 'uk'
-        ? `📈 <b>Агро-Архів за останні ${count} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n`
-        : `📈 <b>Agro-Archive for last ${count} days:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-
-    report += lang === 'uk'
-        ? `🌡 Сер. температура: ${avgTemp.toFixed(1)}°C\n`
-        : `🌡 Avg Temperature: ${avgTemp.toFixed(1)}°C\n`;
-
-    report += lang === 'uk'
-        ? `🌧 Сума опадів: ${totalRain.toFixed(1)} мм\n`
-        : `🌧 Total Precip: ${totalRain.toFixed(1)} mm\n`;
-
-    report += lang === 'uk'
-        ? `🔥 Днів спеки (>30°C): ${heatDays}\n`
-        : `🔥 Heat days (>30°C): ${heatDays}\n`;
-
+    let count = validHistory.length;
+    let avgTemp = validHistory.reduce((s, h) => s + h.temp_avg, 0) / count;
+    let totalRain = validHistory.reduce((s, h) => s + (h.precip || 0), 0);
+    let heatDays = validHistory.filter(h => (h.temp_max || 0) > 30).length;
+    let report = lang === 'uk' ? `📈 <b>Агро-Архів за останні ${count} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n` : `📈 <b>Agro-Archive for last ${count} days:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    report += `🌡 ${lang === 'uk' ? 'Сер. температура' : 'Avg Temperature'}: ${avgTemp.toFixed(1)}°C\n`;
+    report += `🌧 ${lang === 'uk' ? 'Сума опадів' : 'Total Precip'}: ${totalRain.toFixed(1)} мм\n`;
+    report += `🔥 ${lang === 'uk' ? 'Днів спеки' : 'Heat days'} (>30°C): ${heatDays}\n`;
     report += `━━━━━━━━━━━━━━━━━━━━\n`;
-
-    if (totalRain < 5 && avgTemp > 20) {
-        report += lang === 'uk' ? '⚠️ Спостерігається накопичений дефіцит вологи.' : '⚠️ Accumulated moisture deficit observed.';
-    } else if (totalRain > 50) {
-        report += lang === 'uk' ? '⚠️ Ризик вимивання поживних речовин через надмірні дощі.' : '⚠️ Risk of nutrient leaching due to excessive rain.';
-    }
-
+    if (totalRain < 5 && avgTemp > 20) report += lang === 'uk' ? '⚠️ Спостерігається накопичений дефіцит вологи.' : '⚠️ Accumulated moisture deficit observed.';
     return report;
 }
 
-module.exports = {
-    analyzeAgroRisks,
-    formatAgroReport,
-    analyzeSprayingWindow,
-    generateHistoricalReport,
-    getLunarPhase,
-    getGrowthStage
-};
-
+module.exports = { analyzeAgroRisks, formatAgroReport, analyzeSprayingWindow, generateHistoricalReport, getLunarPhase, getGrowthStage };
