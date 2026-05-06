@@ -622,20 +622,58 @@ function analyzeLunarImpact(d, lang = 'uk') {
     return risks;
 }
 
-async function generateHistoricalReport(history, lang = 'uk') {
+function generateHistoricalReport(history, lang = 'uk') {
     if (!history || !Array.isArray(history) || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
-    let validHistory = history.filter(h => typeof h.temp_avg === 'number');
+    
+    let validHistory = history.filter(h => typeof h.temp_avg === 'number' || typeof h.temp_max === 'number');
     if (validHistory.length === 0) return lang === 'uk' ? '❌ Недостатньо даних для аналізу.' : '❌ Not enough data for analysis.';
-    let count = validHistory.length;
-    let avgTemp = validHistory.reduce((s, h) => s + h.temp_avg, 0) / count;
-    let totalRain = validHistory.reduce((s, h) => s + (h.precip || 0), 0);
-    let heatDays = validHistory.filter(h => (h.temp_max || 0) > 30).length;
-    let report = lang === 'uk' ? `📈 <b>Агро-Архів за останні ${count} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n` : `📈 <b>Agro-Archive for last ${count} days:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-    report += `🌡 ${lang === 'uk' ? 'Сер. температура' : 'Avg Temperature'}: ${avgTemp.toFixed(1)}°C\n`;
-    report += `🌧 ${lang === 'uk' ? 'Сума опадів' : 'Total Precip'}: ${totalRain.toFixed(1)} мм\n`;
-    report += `🔥 ${lang === 'uk' ? 'Днів спеки' : 'Heat days'} (>30°C): ${heatDays}\n`;
-    report += `━━━━━━━━━━━━━━━━━━━━\n`;
-    if (totalRain < 5 && avgTemp > 20) report += lang === 'uk' ? '⚠️ Спостерігається накопичений дефіцит вологи.' : '⚠️ Accumulated moisture deficit observed.';
+    
+    let totalDays = validHistory.length;
+    let avgTemp = validHistory.reduce((sum, d) => sum + (d.temp_avg || (d.temp_max + d.temp_min)/2 || 0), 0) / totalDays;
+    let totalPrecip = validHistory.reduce((sum, d) => sum + (d.precip || 0), 0);
+    let heatDays = validHistory.filter(d => (d.temp_max || 0) > 30).length;
+    let frostDays = validHistory.filter(d => (d.temp_min || 0) < 0).length;
+    
+    // Sunny days calculation
+    let sunnyDays = validHistory.filter(d => (d.clouds_avg !== undefined ? d.clouds_avg < 25 : (d.uv_max || 0) > 6)).length;
+    
+    let absMax = Math.max(...validHistory.map(d => d.temp_max || -99));
+    let absMin = Math.min(...validHistory.map(d => d.temp_min || 99));
+    let avgRh = validHistory.reduce((sum, d) => sum + (d.rh_avg || 0), 0) / totalDays;
+    
+    // GDD (Growing Degree Days) calculation with Tbase = 10°C
+    let gdd = validHistory.reduce((sum, d) => {
+        let tMax = d.temp_max || d.temp_avg || 10;
+        let tMin = d.temp_min || d.temp_avg || 10;
+        let dailyGdd = ((tMax + tMin) / 2) - 10;
+        return sum + Math.max(0, dailyGdd);
+    }, 0);
+
+    let report = lang === 'uk' 
+        ? `📈 <b>Агро-Архів за останні ${totalDays} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n`
+        : `📈 <b>Agro-Archive for last ${totalDays} days:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (lang === 'uk') {
+        report += `🌡 <b>Темп:</b> сер. ${avgTemp.toFixed(1)}°C (від ${absMin.toFixed(1)} до ${absMax.toFixed(1)})\n`;
+        report += `☀️ <b>Сонячних днів:</b> ${sunnyDays}\n`;
+        report += `🧊 <b>Заморозки:</b> ${frostDays} ночей\n`;
+        report += `🧬 <b>СЕТ (>10°C):</b> ${gdd.toFixed(1)}°C\n`;
+        report += `💧 <b>Опади:</b> ${totalPrecip.toFixed(1)} мм (вологість ~${Math.round(avgRh)}%)\n`;
+        if (heatDays > 0) report += `🔥 <b>Спека (>30°C):</b> ${heatDays} днів\n`;
+        
+        report += `━━━━━━━━━━━━━━━━━━━━\n`;
+        if (totalPrecip < 5 && avgTemp > 20) {
+            report += `⚠️ <b>Порада:</b> Накопичений дефіцит вологи. Рекомендується полив.`;
+        }
+    } else {
+        report += `🌡 <b>Temp:</b> avg ${avgTemp.toFixed(1)}°C (from ${absMin.toFixed(1)} to ${absMax.toFixed(1)})\n`;
+        report += `☀️ <b>Sunny days:</b> ${sunnyDays}\n`;
+        report += `🧊 <b>Frost nights:</b> ${frostDays}\n`;
+        report += `🧬 <b>GDD (>10°C):</b> ${gdd.toFixed(1)}°C\n`;
+        report += `💧 <b>Precip:</b> ${totalPrecip.toFixed(1)} mm (humidity ~${Math.round(avgRh)}%)\n`;
+        if (heatDays > 0) report += `🔥 <b>Heat days (>30°C):</b> ${heatDays}\n`;
+    }
+
     return report;
 }
 
