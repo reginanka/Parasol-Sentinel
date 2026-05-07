@@ -905,8 +905,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
                     if (wAvg >= 0 && wAvg <= 7) chillHours += 12;
                     else if (wMin >= 0 && wMin <= 7) chillHours += 6;
                     if (prevW !== null) {
-                        if (prevW < 0 && wAvg > 5) hardeningLossEvents++;
-                        if (prevW > 5 && wAvg < -3) hardeningLossEvents++;
+                        if ((prevW < 0 && wAvg > 5) || (prevW > 5 && wAvg < -3)) hardeningLossEvents++;
                     }
                     prevW = wAvg;
                 });
@@ -962,8 +961,8 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         report += `\n📊 <b>Індекс складності: ${diffIndex}/10 (${diffLabel})</b>\n`;
         report += `━━━━━━━━━━━━━━━━━━━━\n`;
 
-        // EXPERT SUMMARY SECTION (FOR LONG PERIODS)
-        if (totalDays >= 30) {
+        // EXPERT SUMMARY SECTION (FOR ALL REPORTS LONGER THAN 3 DAYS)
+        if (totalDays >= 3) {
             report += `🧐 <b>Експертний висновок:</b>\n`;
 
             // 1. Characterization
@@ -1016,10 +1015,10 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
                     (tropicalNights >= 2 && tropicalNights <= 4) ? 'тропічні ночі' : 'тропічних ночей';
                 stressInfo += `Через ${tropicalNights} ${nightWord} (>20°C) рослини не мали нічного відпочинку, що виснажувало їх енергію. `;
             }
-            if (windStressDays > 5) {
+            if (windStressDays > 2) {
                 stressInfo += `Сильні вітри (${windStressDays} дн.) спричиняли механічні стреси та критично прискорювали висушування листя. `;
             }
-            if (vpdStressDays > 15) {
+            if (vpdStressDays > 3) {
                 stressInfo += `Тривала повітряна посуха (${vpdStressDays} дн.) була основним викликом для вологолюбних культур. `;
             }
             if (stressInfo) report += `• <b>Аномалії:</b> ${stressInfo}\n`;
@@ -1053,21 +1052,21 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
             if (chillNeeded) {
                 const sourcePrefix = hasWinterMonths ? "За поточний період" : "За даними попередньої зими";
                 if (chillHours >= 800) {
-                    winterMsg += `${sourcePrefix} норма загартовування виконана (${chillHours} год.). `;
+                    winterMsg += `${sourcePrefix} норма загартовування виконана (${chillHours} год.). Це гарантує рівномірне пробудження бруньок та стабільне цвітіння. `;
                 } else if (chillHours >= 500) {
-                    winterMsg += `${sourcePrefix} норма виконана частково (${chillHours} год.). `;
+                    winterMsg += `${sourcePrefix} норма виконана частково (${chillHours} год.). Деякі пізні сорти можуть прокинутись нерівномірно, що розтягне період цвітіння. `;
                 } else {
-                    winterMsg += `${sourcePrefix} зима була занадто теплою (лише ${chillHours} год. холоду). `;
+                    winterMsg += `${sourcePrefix} зима була занадто теплою (лише ${chillHours} год. холоду). Це критично: можливе скидання плодових бруньок або слабкий врожай. `;
                 }
             }
             if (hardeningLossEvents > 0) {
-                winterMsg += `Зафіксовано ${hardeningLossEvents} небезпечних відлиг взимку — рослини втрачали захист і ставали вразливими до наступного морозу. `;
+                winterMsg += `Через ${hardeningLossEvents} небезпечних відлиг рослини втратили частину зимостійкості (сокорух міг початися передчасно), що підвищує ризик вимерзання при запізнілих морозах. `;
             }
             if (winterMsg) report += `• <b>Зимівля (загартовування):</b> ${winterMsg}\n`;
 
             // 6. Гіпоксія та Інфекційний фон
             let soilMsg = "";
-            if (hypoxiaDays > 5) {
+            if (hypoxiaDays > 2) {
                 soilMsg += `Тривале перезволоження (${hypoxiaDays} дн. > 15мм) загрожувало кисневим голодуванням коренів. `;
             } else if (hypoxiaDays > 0) {
                 soilMsg += `${hypoxiaDays} дн. інтенсивних опадів (гіпоксія) вимагали розпушення грунту після. `;
