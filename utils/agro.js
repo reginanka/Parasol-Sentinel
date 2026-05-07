@@ -614,7 +614,13 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
     risks.forEach(r => {
         let level = lang === 'uk' ? '🟡 СЕРЕДНІЙ' : '🟡 MEDIUM';
         if (r.score >= 80) level = lang === 'uk' ? '🔴 КРИТИЧНИЙ' : '🔴 CRITICAL';
-        if (r.id === 'spray_check' && r.score < 50) level = lang === 'uk' ? '🟢 СПРИЯТЛИВО' : '🟢 FAVORABLE';
+
+        // Спеціальні пороги для вікна обробки, щоб узгодити з графіком
+        if (r.id === 'spray_check') {
+            if (r.score >= 70) level = lang === 'uk' ? '🔴 РИЗИКОВАНО' : '🔴 RISKY';
+            else if (r.score >= 40) level = lang === 'uk' ? '🟡 ПОМІРНИЙ РИЗИК' : '🟡 MODERATE RISK';
+            else level = lang === 'uk' ? '🟢 СПРИЯТЛИВО' : '🟢 FAVORABLE';
+        }
 
         message += `${esc(r.name)}: ${level} (${Math.round(r.score)}/100)\n`;
         message += `  ↳ <i>${esc(r.details || '')}</i>\n`;
