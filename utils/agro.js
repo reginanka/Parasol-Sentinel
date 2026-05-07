@@ -901,9 +901,26 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
             // Показуємо декілька головних ризиків з балами
             let otherRisks = res.risks.filter(r => r.id !== 'spray_check' && r.score >= 40).slice(0, 2);
             if (otherRisks.length > 0) {
+                const { CROPS_DATA } = require('./crops');
                 let riskItems = otherRisks.map(r => {
                     let cleanN = r.name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim();
-                    return `${cleanN} (${Math.round(r.score)})`;
+                    
+                    // Пошук культур користувача, яких стосується цей ризик
+                    let cropNames = [];
+                    if (userCrops && userCrops.length > 0 && r.relatedCrops) {
+                        r.relatedCrops.filter(id => userCrops.includes(id)).slice(0, 4).forEach(id => {
+                            for (let cat in CROPS_DATA) {
+                                if (CROPS_DATA[cat].items[id]) {
+                                    cropNames.push(CROPS_DATA[cat].items[id][lang]);
+                                    break;
+                                }
+                            }
+                        });
+                        if (r.relatedCrops.filter(id => userCrops.includes(id)).length > 4) cropNames.push('...');
+                    }
+                    
+                    let cropLabel = cropNames.length > 0 ? ` <b>[${cropNames.join(', ')}]</b>` : '';
+                    return `${cleanN} (${Math.round(r.score)})${cropLabel}`;
                 }).join(', ');
 
                 let actionIcon = '🛡️';
@@ -911,7 +928,7 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
                 else if (otherRisks[0].id.includes('stress') || otherRisks[0].id === 'frost') actionIcon = '⚠️';
 
                 let shortAdvice = otherRisks[0].advice.split(/[.!?]/).filter(s => s.trim().length > 0)[0].trim();
-                expertSummary += `   ↳ ${actionIcon} <b>${riskItems}:</b> ${shortAdvice}.\n`;
+                expertSummary += `   ↳ ${actionIcon} ${riskItems}: ${shortAdvice}.\n`;
             } else {
                 expertSummary += `   ↳ ✅ <b>Все спокійно:</b> Оптимальний час для планових робіт та догляду.\n`;
             }
