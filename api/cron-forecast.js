@@ -5,6 +5,7 @@ const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const City = require('../models/City');
+
 const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
@@ -128,21 +129,25 @@ module.exports = async (req, res) => {
 
                 const todayData = fullResponse[0];
 
-                // --- SAVE HISTORY (Today's snapshot) ---
+                // --- SYNC HISTORY with supplementary data (precip, rh, clouds, uv, wind) ---
+                // $min/$max protect temp_min/temp_max that cron-check already set from actual readings.
+                // $set fills fields that cron-check does NOT track.
                 await History.findOneAndUpdate(
                     { externalId: key, date: todayData.valid_date },
                     {
-                        temp_max: todayData.max_temp,
-                        temp_min: todayData.min_temp,
-                        temp_avg: todayData.temp,
-                        precip: todayData.precip,
-                        uv_max: todayData.uv,
-                        rh_avg: todayData.rh,
-                        clouds_avg: todayData.clouds,
-                        wind_spd_max: todayData.wind_gust_spd || todayData.wind_spd
+                        $min: { temp_min: todayData.min_temp },
+                        $max: { temp_max: todayData.max_temp },
+                        $set: {
+                            temp_avg: todayData.temp,
+                            precip: todayData.precip,
+                            uv_max: todayData.uv,
+                            rh_avg: todayData.rh,
+                            clouds_avg: todayData.clouds,
+                            wind_spd_max: todayData.wind_gust_spd || todayData.wind_spd
+                        }
                     },
                     { upsert: true }
-                ).catch(e => console.error('History save error:', e.message));
+                ).catch(e => console.error('History sync error:', e.message));
 
                 // --- SAVE EVENING SNAPSHOT to City collection for the morning check ---
                 await City.findOneAndUpdate(

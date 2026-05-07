@@ -5,6 +5,7 @@ const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const City = require('../models/City');
+const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
@@ -104,36 +105,24 @@ module.exports = async (req, res) => {
                         alertTriggered = true;
                     }
 
-                    // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" ---
+                    // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" (±5°C threshold) ---
                     const curTemp = current.temp;
                     let isAnomaly = false;
                     let expectedBase = 0;
                     let direction = '';
 
-                    if (localHour < 12) {
-                        // Morning: check if it's much colder than expected min, or already past max
-                        if (curTemp < (oldMin - 4)) {
-                            isAnomaly = true;
-                            expectedBase = oldMin;
-                            direction = 'cooler';
-                        } else if (curTemp > (oldMax + 2)) {
-                            isAnomaly = true;
-                            expectedBase = oldMax;
-                            direction = 'warmer';
-                        }
-                        // Note: if temp is between min and max, it's just normal morning warming.
-                    } else {
-                        // Day/Evening: check if it's much hotter than expected max, or dropped below min
-                        if (curTemp > (oldMax + 4)) {
-                            isAnomaly = true;
-                            expectedBase = oldMax;
-                            direction = 'warmer';
-                        } else if (curTemp < (oldMin - 2)) {
-                            isAnomaly = true;
-                            expectedBase = oldMin;
-                            direction = 'cooler';
-                        }
+                    if (curTemp < (oldMin - 5)) {
+                        // More than 5°C colder than expected minimum → anomaly
+                        isAnomaly = true;
+                        expectedBase = oldMin;
+                        direction = 'cooler';
+                    } else if (curTemp > (oldMax + 5)) {
+                        // More than 5°C hotter than expected maximum → anomaly
+                        isAnomaly = true;
+                        expectedBase = oldMax;
+                        direction = 'warmer';
                     }
+                    // If temp is within min..max or within ±5°C of them → no alert needed
 
                     if (isAnomaly) {
                         reasons.push("аномалія темп.");
@@ -151,6 +140,22 @@ module.exports = async (req, res) => {
                         }
                         alertTriggered = true;
                     }
+                }
+
+                // --- SMART HISTORY UPDATE ---
+                // Use $min/$max so MongoDB only updates if the current temp
+                // is a new extreme for today. Values inside min..max are ignored.
+                try {
+                    await History.findOneAndUpdate(
+                        { externalId: key, date: todayStr },
+                        {
+                            $min: { temp_min: current.temp },
+                            $max: { temp_max: current.temp }
+                        },
+                        { upsert: true }
+                    );
+                } catch (histErr) {
+                    console.error('History smart update error:', histErr.message);
                 }
 
                 // --- LOGIC C: Precipitation Start ---
