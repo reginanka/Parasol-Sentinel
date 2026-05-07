@@ -364,7 +364,8 @@ bot.on('text', async (ctx) => {
     const lang = getLang(ctx);
 
     // Handle Menu Buttons
-    if (query === dict.uk.settingsBtn || query === dict.en.settingsBtn) {
+    const isSettings = query.includes(dict.uk.settingsBtn) || query.includes(dict.en.settingsBtn);
+    if (isSettings) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user) {
             return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
@@ -374,7 +375,8 @@ bot.on('text', async (ctx) => {
         });
     }
 
-    if (query === dict.uk.helpBtn || query === dict.en.helpBtn) {
+    const isHelp = query.includes(dict.uk.helpBtn) || query.includes(dict.en.helpBtn);
+    if (isHelp) {
         return sendHelpMenu(ctx);
     }
 
@@ -384,7 +386,8 @@ bot.on('text', async (ctx) => {
         });
     }
 
-    if (query === dict.uk.agroForecastBtn || query === dict.en.agroForecastBtn) {
+    const isAgroForecast = query.includes(dict.uk.agroForecastBtn) || query.includes(dict.en.agroForecastBtn);
+    if (isAgroForecast) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
 
@@ -413,7 +416,8 @@ bot.on('text', async (ctx) => {
         return ctx.reply(report, { parse_mode: 'HTML' });
     }
 
-    if (query === dict.uk.agroArchiveBtn || query === dict.en.agroArchiveBtn) {
+    const isArchive = query.includes(dict.uk.agroArchiveBtn) || query.includes(dict.en.agroArchiveBtn);
+    if (isArchive) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
 
