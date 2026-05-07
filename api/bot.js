@@ -8,7 +8,13 @@ const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { formatUrl, generateSignature } = require('../utils/helpers');
-const { analyzeAgroRisks, formatAgroReport, fetchMissingHistory } = require('../utils/agro');
+const { 
+    analyzeAgroRisks, 
+    formatAgroReport, 
+    analyzeSprayingWindow, 
+    generateHistoricalReport, 
+    fetchMissingHistory 
+} = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
 
 /**
@@ -373,7 +379,7 @@ bot.on('text', async (ctx) => {
             .limit(7)
             .lean();
 
-        const { analyzeSprayingWindow } = require('../utils/agro');
+
         const report = analyzeSprayingWindow(cityData.eveningState.forecast, history, lang, user.crops || []);
         return ctx.reply(report, { parse_mode: 'HTML' });
     }
@@ -411,8 +417,8 @@ bot.on('text', async (ctx) => {
                     date: { $gte: start, $lte: end }
                 }).sort({ date: -1 }).lean();
 
-                const { generateHistoricalReport } = require('../utils/agro');
-                const report = generateHistoricalReport(history, lang);
+
+                const report = generateHistoricalReport(history, lang, user.crops || []);
                 
                 return ctx.reply(report, { 
                     parse_mode: 'HTML',
@@ -759,8 +765,8 @@ bot.on('callback_query', async (ctx) => {
                 history = await History.find(historyQuery).sort({ date: -1 }).limit(fetchDays).lean();
             }
 
-            const { generateHistoricalReport } = require('../utils/agro');
-            const report = generateHistoricalReport(history, lang);
+
+            const report = generateHistoricalReport(history, lang, user.crops || []);
 
             await ctx.answerCbQuery().catch(() => {});
             // Send as a new message as requested by the user
