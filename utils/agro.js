@@ -3,6 +3,9 @@
  * Розрахунок ризиків для рослин на основі даних Weatherbit API
  */
 
+const axios = require('axios');
+const History = require('../models/History');
+
 let score = (condition, points) => (condition ? points : 0);
 
 /**
@@ -717,28 +720,48 @@ function analyzeLunarImpact(d, lang = 'uk') {
 function generateHistoricalReport(history, lang = 'uk') {
     if (!history || !Array.isArray(history) || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
     
-    let validHistory = history.filter(h => typeof h.temp_avg === 'number' || typeof h.temp_max === 'number');
+    // Filter out records that don't have essential temperature data
+    let validHistory = history.filter(h => 
+        (typeof h.temp_avg === 'number' && !isNaN(h.temp_avg)) || 
+        (typeof h.temp_max === 'number' && !isNaN(h.temp_max))
+    );
+    
     if (validHistory.length === 0) return lang === 'uk' ? '❌ Недостатньо даних для аналізу.' : '❌ Not enough data for analysis.';
     
     let totalDays = validHistory.length;
-    let avgTemp = validHistory.reduce((sum, d) => sum + (d.temp_avg || (d.temp_max + d.temp_min)/2 || 0), 0) / totalDays;
+    
+    // Calculate average temperature safely, handling 0 and nulls
+    let avgTemp = validHistory.reduce((sum, d) => {
+        let t = (typeof d.temp_avg === 'number') ? d.temp_avg : ((d.temp_max + d.temp_min) / 2);
+        return sum + (isNaN(t) ? 0 : t);
+    }, 0) / totalDays;
+    
     let totalPrecip = validHistory.reduce((sum, d) => sum + (d.precip || 0), 0);
     let heatDays = validHistory.filter(d => (d.temp_max || 0) > 30).length;
-    let frostDays = validHistory.filter(d => (d.temp_min || 0) < 0).length;
+    let frostDays = validHistory.filter(d => (d.temp_min !== undefined && d.temp_min !== null) && d.temp_min < 0).length;
     
-    // Sunny days calculation
-    let sunnyDays = validHistory.filter(d => (d.clouds_avg !== undefined ? d.clouds_avg < 25 : (d.uv_max || 0) > 6)).length;
+    // Sunny days calculation (handling null/undefined)
+    let sunnyDays = validHistory.filter(d => {
+        if (d.clouds_avg !== undefined && d.clouds_avg !== null) return d.clouds_avg < 25;
+        if (d.uv_max !== undefined && d.uv_max !== null) return d.uv_max > 6;
+        return false;
+    }).length;
     
-    let absMax = Math.max(...validHistory.map(d => d.temp_max || -99));
-    let absMin = Math.min(...validHistory.map(d => d.temp_min || 99));
+    // Find absolute min/max safely
+    let tempMaxList = validHistory.map(d => d.temp_max).filter(v => typeof v === 'number' && !isNaN(v));
+    let tempMinList = validHistory.map(d => d.temp_min).filter(v => typeof v === 'number' && !isNaN(v));
+    
+    let absMax = tempMaxList.length > 0 ? Math.max(...tempMaxList) : avgTemp;
+    let absMin = tempMinList.length > 0 ? Math.min(...tempMinList) : avgTemp;
+    
     let avgRh = validHistory.reduce((sum, d) => sum + (d.rh_avg || 0), 0) / totalDays;
     
     // GDD (Growing Degree Days) calculation with Tbase = 10°C
     let gdd = validHistory.reduce((sum, d) => {
-        let tMax = d.temp_max || d.temp_avg || 10;
-        let tMin = d.temp_min || d.temp_avg || 10;
+        let tMax = (typeof d.temp_max === 'number') ? d.temp_max : (d.temp_avg || 10);
+        let tMin = (typeof d.temp_min === 'number') ? d.temp_min : (d.temp_avg || 10);
         let dailyGdd = ((tMax + tMin) / 2) - 10;
-        return sum + Math.max(0, dailyGdd);
+        return sum + Math.max(0, isNaN(dailyGdd) ? 0 : dailyGdd);
     }, 0);
 
     let report = lang === 'uk' 
@@ -769,4 +792,104 @@ function generateHistoricalReport(history, lang = 'uk') {
     return report;
 }
 
-module.exports = { analyzeAgroRisks, formatAgroReport, analyzeSprayingWindow, generateHistoricalReport, getLunarPhase, getGrowthStage };
+/**
+ * Дозавантаження відсутніх історичних даних
+ * @param {Object} cityDoc - Документ міста з БД
+ * @param {number} days - Глибина перевірки в днях
+ */
+async function fetchMissingHistory(cityDoc, days = 30) {
+    if (!cityDoc || !cityDoc.lat || !cityDoc.lon) return;
+
+    const externalId = cityDoc.externalId || `${cityDoc.lat.toFixed(2)},${cityDoc.lon.toFixed(2)}`;
+    
+    // 1. Визначаємо часовий проміжок
+    const today = new Date();
+    const startDate = new Date(today);
+    startDate.setDate(today.getDate() - days);
+    
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const endDateStr = yesterday.toISOString().split('T')[0];
+
+    // 2. Отримуємо список дат, які вже є в базі
+    const existingRecords = await History.find({
+        externalId,
+        date: { $gte: startDateStr, $lte: endDateStr }
+    }, { date: 1 }).lean();
+    
+    const existingDates = new Set(existingRecords.map(r => r.date));
+
+    // 3. Генеруємо список усіх дат у проміжку
+    const allDates = [];
+    let current = new Date(startDate);
+    // Set time to noon to avoid DST and time-of-day edge cases
+    current.setHours(12, 0, 0, 0);
+    const end = new Date(yesterday);
+    end.setHours(12, 0, 0, 0);
+
+    while (current <= end) {
+        allDates.push(current.toISOString().split('T')[0]);
+        current.setDate(current.getDate() + 1);
+    }
+
+    // 4. Знаходимо пропущені дати
+    const missingDates = allDates.filter(d => !existingDates.has(d));
+    
+    if (missingDates.length === 0) return;
+
+    console.log(`[Agro] Missing ${missingDates.length} days for ${cityDoc.name}. Fetching...`);
+
+    try {
+        // Отримуємо дані з Open-Meteo Archive API за весь період (так простіше і швидше за 1 запит)
+        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${cityDoc.lat}&longitude=${cityDoc.lon}&start_date=${startDateStr}&end_date=${endDateStr}&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,relative_humidity_2m_mean,wind_speed_10m_max,cloud_cover_mean&timezone=auto`;
+        
+        const response = await axios.get(url);
+        const daily = response.data.daily;
+
+        if (!daily || !daily.time) return;
+
+        const bulkOps = [];
+        for (let i = 0; i < daily.time.length; i++) {
+            const date = daily.time[i];
+            
+            // ДОДАЄМО ТІЛЬКИ ЯКЩО ДАТИ НЕМАЄ В БАЗІ (як просив користувач)
+            if (missingDates.includes(date)) {
+                bulkOps.push({
+                    updateOne: {
+                        filter: { externalId, date },
+                        update: {
+                            $setOnInsert: { // Використовуємо $setOnInsert про всяк випадок, хоча ми вже відфільтрували
+                                temp_max: daily.temperature_2m_max[i],
+                                temp_min: daily.temperature_2m_min[i],
+                                temp_avg: daily.temperature_2m_mean[i],
+                                precip: daily.precipitation_sum[i],
+                                rh_avg: daily.relative_humidity_2m_mean[i],
+                                wind_spd_max: daily.wind_speed_10m_max[i] / 3.6,
+                                clouds_avg: daily.cloud_cover_mean[i]
+                            }
+                        },
+                        upsert: true
+                    }
+                });
+            }
+        }
+
+        if (bulkOps.length > 0) {
+            await History.bulkWrite(bulkOps, { ordered: false });
+            console.log(`[Agro] Successfully loaded ${bulkOps.length} missing records for ${cityDoc.name}`);
+        }
+    } catch (error) {
+        console.error(`[Agro] Failed to fetch missing history for ${cityDoc.name}:`, error.message);
+    }
+}
+
+module.exports = { 
+    analyzeAgroRisks, 
+    formatAgroReport, 
+    analyzeSprayingWindow, 
+    generateHistoricalReport, 
+    getLunarPhase, 
+    getGrowthStage,
+    fetchMissingHistory 
+};
