@@ -1,0 +1,26 @@
+name: Manual Initial History Load
+
+on:
+  workflow_dispatch: # Дозволяє ручний запуск з вкладки Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Initial History Load
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        run: npm run init-history
