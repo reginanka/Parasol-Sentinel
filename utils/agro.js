@@ -556,7 +556,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         risks.push({
             id: 'soil_perfect',
             name: '🌱 Ідеальний ґрунт',
-            score: 40,
+            score: 41, // Трохи вище 40, щоб проходило фільтр
             advice: 'Температура та вологість ґрунту ідеальні для висадки. Не проґавте вікно!',
             details: `t ґрунту: ~${soilTemp.toFixed(1)}°C, вологи достатньо.`
         });
@@ -646,10 +646,10 @@ function getGrowthStage(history = []) {
     // Якщо історії немає, використовуємо поточну дату як fallback
     if (!history || history.length < 5) {
         let month = new Date().getMonth() + 1;
-        if (month >= 3 && month <= 4) return { id: 'early_spring', name: 'Рання весна (стадія бруньки)', gdd: 0 };
-        if (month === 5) return { id: 'late_spring', name: 'Пізня весна (цвітіння)', gdd: 300 };
-        if (month >= 6 && month <= 8) return { id: 'summer', name: 'Літо (плодоношення)', gdd: 800 };
-        return { id: 'autumn', name: 'Осінь', gdd: 1500 };
+        if (month >= 3 && month <= 4) return { id: 'early_spring', name: 'Рання весна (стадія бруньки)', gdd: 0, fertilizer: 'Азот (Селітра 20-30г/10л)' };
+        if (month === 5) return { id: 'late_spring', name: 'Пізня весна (цвітіння)', gdd: 300, fertilizer: 'Бор (10-15мл) + NPK 20-20-20' };
+        if (month >= 6 && month <= 8) return { id: 'summer', name: 'Літо (плодоношення)', gdd: 800, fertilizer: 'Калій (Монофосфат калію 20-25г)' };
+        return { id: 'autumn', name: 'Осінь', gdd: 1500, fertilizer: 'Фосфор-Калій (0-25-50)' };
     }
 
     let gdd5 = history.reduce((sum, h) => sum + Math.max(0, (h.temp_avg || h.temp || 0) - 5), 0);
@@ -777,8 +777,10 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
         let pestAdvice = '';
         Object.keys(pestStats).forEach(id => {
             let maxS = Math.max(...pestStats[id].scores);
-            if (maxS >= 70) pestAdvice += `• 🪲 **${pestStats[id].name}:** Активно плодиться (${Math.round(maxS)}/100). Обробіть уже зараз!\n`;
-            else if (maxS < 30 && maxS > 0) pestAdvice += `• 🪲 **${pestStats[id].name}:** Ризик низький (${Math.round(maxS)}/100). Ще зарано, не витрачайте ліки.\n`;
+            // Очищуємо назву від емодзі для висновку
+            let cleanName = pestStats[id].name.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
+            if (maxS >= 70) pestAdvice += `• 🪲 **${cleanName}:** Активно плодиться (${Math.round(maxS)}/100). Обробіть уже зараз!\n`;
+            else if (maxS < 30 && maxS > 0) pestAdvice += `• 🪲 **${cleanName}:** Ризик низький (${Math.round(maxS)}/100). Ще зарано.\n`;
         });
         if (pestAdvice) expertSummary += pestAdvice;
 
@@ -823,7 +825,11 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
             else if (['heat_stress', 'frost', 'hypoxia', 'sunburn', 'recovery_mode'].includes(primaryRisk.id)) actionIcon = '⚠️';
             else if (primaryRisk.id.includes('support') || primaryRisk.id.includes('soil')) actionIcon = '🧪';
 
-            expertSummary += `   ↳ ${actionIcon} <b>${primaryRisk.name}:</b> ${primaryRisk.advice.split('.')[0]}.\n`;
+            // Очищуємо назву від вбудованого емодзі, щоб не було дублів
+            let cleanName = primaryRisk.name.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
+            let shortAdvice = primaryRisk.advice.split('.')[0]; // Тільки перше речення
+            
+            expertSummary += `   ↳ ${actionIcon} <b>${cleanName}:</b> ${shortAdvice}.\n`;
         }
     });
 
