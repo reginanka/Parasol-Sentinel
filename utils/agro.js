@@ -104,10 +104,11 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
     // --- 3. БОРОШНИСТА РОСА (Powdery Mildew) ---
     let powderyMildew =
-        score(d.temp >= 22 && d.temp <= 28, 30) +
-        score(d.rh >= 50 && d.rh <= 70, 25) +
-        score(d.precip === 0, 25) + // цей грибок не любить змивання водою
-        score(d.clouds < 40, 20);
+        score(d.temp >= 22 && d.temp <= 28, 35) +
+        score(d.temp >= 18 && d.temp < 22, 15) +
+        score(d.rh >= 50 && d.rh <= 75, 20) +
+        score(d.precip === 0 && d.temp > 16, 25) +
+        score(d.clouds < 30 && d.temp > 16, 20);
     risks.push({
         id: 'powdery_mildew',
         name: '🍄 Борошниста роса',
@@ -834,39 +835,6 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
             expertSummary += `• 🧪 <b>Живлення:</b> ${stage.fertilizer}. ${stage.fertilizer.includes('Азот') ? 'Зараз активний ріст зеленої маси.' : 'Рослина переходить до формування врожаю.'}\n`;
         }
 
-        // г) Персоналізовані поради по культурах
-        if (userCrops && userCrops.length > 0) {
-            const { CROPS_DATA } = require('./crops');
-            let cropAdvice = '';
-            
-            userCrops.forEach(cropId => {
-                let maxRisk = null;
-                dailyResults.forEach(res => {
-                    res.risks.forEach(r => {
-                        if (r.relatedCrops && r.relatedCrops.includes(cropId) && r.score >= 45) {
-                            if (!maxRisk || r.score > maxRisk.score) maxRisk = r;
-                        }
-                    });
-                });
-
-                if (maxRisk) {
-                    let cropName = cropId;
-                    for (let cat in CROPS_DATA) {
-                        if (CROPS_DATA[cat].items[cropId]) {
-                            cropName = CROPS_DATA[cat].items[cropId][lang];
-                            break;
-                        }
-                    }
-                    let riskN = maxRisk.name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim();
-                    let shortA = maxRisk.advice.split(/[.!?]/).filter(s => s.trim().length > 0)[0].trim();
-                    cropAdvice += `• 📍 <b>${cropName}:</b> Загроза — ${riskN} (${Math.round(maxRisk.score)}). ${shortA}.\n`;
-                }
-            });
-
-            if (cropAdvice) {
-                expertSummary += `\n🎯 <b>ПОРАДИ ДЛЯ ВАШИХ КУЛЬТУР:</b>\n${cropAdvice}`;
-            }
-        }
     } else {
         expertSummary = `🚜 <b>SMART AGRO-PLAN (5 DAYS)</b>\n━━━━━━━━━━━━━━━━━━━━\n🧐 <b>EXPERT SUMMARY:</b>\n• Analysis of pests and infection trends included below.\n`;
     }
