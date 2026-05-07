@@ -755,7 +755,7 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
         const startD = dailyResults[0].date.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' });
         const endD = dailyResults[dailyResults.length - 1].date.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' });
         
-        expertSummary = `🚜 **РОЗУМНИЙ АГРО-ПЛАН (5 ДНІВ: ${startD} — ${endD})**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **ЕКСПЕРТНИЙ ВИСНОВОК:**\n`;
+        expertSummary = `🚜 <b>РОЗУМНИЙ АГРО-ПЛАН (5 ДНІВ: ${startD} — ${endD})</b>\n━━━━━━━━━━━━━━━━━━━━\n🧐 <b>ЕКСПЕРТНИЙ ВИСНОВОК:</b>\n`;
         
         // а) Аналіз шкідників (Тренди)
         let pestStats = {};
@@ -777,17 +777,29 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
             
             if (maxS >= 80) {
                 if (lastS >= maxS) {
-                    pestAdvice += `• 🪲 **${cleanName}:** Прогресує! Досягне максимуму (${Math.round(maxS)}/100) до кінця тижня. **Обробка обов'язкова.**\n`;
+                    pestAdvice += `• 🪲 <b>${cleanName}:</b> Прогресує! Досягне максимуму (${Math.round(maxS)}/100) до кінця тижня. <b>Обробка обов'язкова.</b>\n`;
                 } else {
-                    pestAdvice += `• 🪲 **${cleanName}:** На піку активності (${Math.round(maxS)}/100). Не зволікайте з захистом.\n`;
+                    pestAdvice += `• 🪲 <b>${cleanName}:</b> На піку активності (${Math.round(maxS)}/100). Не зволікайте з захистом.\n`;
                 }
             } else if (maxS >= 50) {
-                pestAdvice += `• 🪲 **${cleanName}:** Популяція зростає (${Math.round(maxS)}/100). Готуйте засоби захисту.\n`;
+                pestAdvice += `• 🪲 <b>${cleanName}:</b> Популяція зростає (${Math.round(maxS)}/100). Готуйте засоби захисту.\n`;
             }
         });
         if (pestAdvice) expertSummary += pestAdvice;
 
-        // б) Аналіз інфекційного фону та імунітету (з урахуванням стадії)
+        // б) Аналіз інфекційного фону та імунітету
+        let diseaseStats = [];
+        const diseaseIds = ['phytophthora', 'downy_mildew', 'powdery_mildew', 'scab', 'alternaria', 'anthracnose', 'botrytis', 'monilia', 'rust'];
+        
+        dailyResults.forEach(res => {
+            res.risks.forEach(r => {
+                if (diseaseIds.includes(r.id) && r.score >= 40) {
+                    diseaseStats.push(r);
+                }
+            });
+        });
+
+        // Також враховуємо загальний кліматичний індекс інфекції
         let infScore = 0;
         let maxInf = 0;
         relevantForecast.forEach(d => {
@@ -796,30 +808,70 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
             if (infScore > maxInf) maxInf = infScore;
         });
 
-        if (maxInf >= 70) {
-            expertSummary += `• 🦠 **Інфекція:** Критичний поріг (${maxInf}/100). Грибки атакують! Потрібні сильні системні фунгіциди.\n`;
-        } else if (maxInf >= 30) {
-            let logicAdvice = "Підкорміть Кальцієм або Кремнієм для зміцнення стінок листя (науково доведено: Са та Si створюють механічний бар'єр).";
-            if (stage.id === 'late_spring') logicAdvice = "Стадія цвітіння: додайте Бор та Кальцій — це зміцнить зав'язь та імунітет проти патогенів.";
-            else if (stage.id === 'summer') logicAdvice = "Плодоношення: дайте Калій та Кремній для щільності шкірки та захисту від гнилей.";
+        const topDisease = diseaseStats.sort((a, b) => b.score - a.score)[0];
+        
+        if (topDisease && topDisease.score >= 70) {
+            let cleanN = topDisease.name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim();
+            expertSummary += `• 🦠 <b>Інфекція:</b> Високий ризик ${cleanN} (${Math.round(topDisease.score)}/100). Потрібні системні фунгіциди.\n`;
+        } else if (topDisease || maxInf >= 30) {
+            let currentScore = topDisease ? Math.max(topDisease.score, maxInf) : maxInf;
+            let logicAdvice = "Підкорміть Кальцієм або Кремнієм для зміцнення стінок листя (Si створює механічний бар'єр).";
+            if (stage.id === 'late_spring') logicAdvice = "Стадія цвітіння: додайте Бор та Кальцій — це зміцнить зав'язь та імунітет.";
+            else if (stage.id === 'summer') logicAdvice = "Плодоношення: дайте Калій та Кремній для щільності шкірки.";
             
-            expertSummary += `• 🦠 **Інфекція:** Грибки набирають обертів (${maxInf}/100). **Дія:** ${logicAdvice}\n`;
+            let name = topDisease ? topDisease.name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim() : "Грибки";
+            expertSummary += `• 🦠 <b>Інфекція:</b> ${name} набирають обертів (${Math.round(currentScore)}/100). <b>Дія:</b> ${logicAdvice}\n`;
         } else {
-            expertSummary += `• 🦠 **Інфекція:** Фон чистий. Рослини в безпеці.\n`;
+            expertSummary += `• 🦠 <b>Інфекція:</b> Фон чистий. Рослини в безпеці.\n`;
         }
 
         // в) Реабілітація та фаза
         let isRecovery = dailyResults.some(r => r.risks.some(risk => risk.id === 'recovery_mode'));
         if (isRecovery) {
-            expertSummary += `• 🏥 **Реабілітація:** Рослини в стресі. Тільки амінокислоти, ніяких добрив під корінь!\n`;
+            expertSummary += `• 🏥 <b>Реабілітація:</b> Рослини в стресі. Тільки амінокислоти, ніяких добрив під корінь!\n`;
         } else {
-            expertSummary += `• 🌱 **Фаза розвитку:** ${stage.name}. ${stage.fertilizer.includes('Азот') ? 'Зараз активний ріст зеленої маси.' : 'Рослина переходить до формування врожаю.'}\n`;
+            expertSummary += `• 🌱 <b>Фаза розвитку:</b> ${stage.name}.\n`;
+            expertSummary += `• 🧪 <b>Живлення:</b> ${stage.fertilizer}. ${stage.fertilizer.includes('Азот') ? 'Зараз активний ріст зеленої маси.' : 'Рослина переходить до формування врожаю.'}\n`;
+        }
+
+        // г) Персоналізовані поради по культурах
+        if (userCrops && userCrops.length > 0) {
+            const { CROPS_DATA } = require('./crops');
+            let cropAdvice = '';
+            
+            userCrops.forEach(cropId => {
+                let maxRisk = null;
+                dailyResults.forEach(res => {
+                    res.risks.forEach(r => {
+                        if (r.relatedCrops && r.relatedCrops.includes(cropId) && r.score >= 45) {
+                            if (!maxRisk || r.score > maxRisk.score) maxRisk = r;
+                        }
+                    });
+                });
+
+                if (maxRisk) {
+                    let cropName = cropId;
+                    for (let cat in CROPS_DATA) {
+                        if (CROPS_DATA[cat].items[cropId]) {
+                            cropName = CROPS_DATA[cat].items[cropId][lang];
+                            break;
+                        }
+                    }
+                    let riskN = maxRisk.name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim();
+                    let shortA = maxRisk.advice.split(/[.!?]/).filter(s => s.trim().length > 0)[0].trim();
+                    cropAdvice += `• 📍 <b>${cropName}:</b> Загроза — ${riskN} (${Math.round(maxRisk.score)}). ${shortA}.\n`;
+                }
+            });
+
+            if (cropAdvice) {
+                expertSummary += `\n🎯 <b>ПОРАДИ ДЛЯ ВАШИХ КУЛЬТУР:</b>\n${cropAdvice}`;
+            }
         }
     } else {
-        expertSummary = `🚜 **SMART AGRO-PLAN (5 DAYS)**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **EXPERT SUMMARY:**\n• Analysis of pests and infection trends included below.\n`;
+        expertSummary = `🚜 <b>SMART AGRO-PLAN (5 DAYS)</b>\n━━━━━━━━━━━━━━━━━━━━\n🧐 <b>EXPERT SUMMARY:</b>\n• Analysis of pests and infection trends included below.\n`;
     }
 
-    expertSummary += `\n📅 **ПОКРОКОВИЙ ПЛАН:**\n`;
+    expertSummary += `\n📅 <b>ПОКРОКОВИЙ ПЛАН:</b>\n`;
 
     // 3. ФОРМУВАННЯ ГРАФІКА
     dailyResults.forEach(res => {
