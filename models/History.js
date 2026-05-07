@@ -14,7 +14,7 @@ const HistorySchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now,
-        expires: 60 * 60 * 24 * 1095 // Automatically delete after 1 year (in seconds)
+        expires: 60 * 60 * 24 * 1095 // Automatically delete after 3 years (in seconds)
     }
 });
 
