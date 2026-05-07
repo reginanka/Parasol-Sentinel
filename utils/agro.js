@@ -804,8 +804,8 @@ function generateHistoricalReport(history, lang = 'uk') {
         report += `🌡 <b>Температура:</b>\n`;
         report += `• Середня: ${avgTemp.toFixed(1)}°C\n`;
         report += `• Розмах: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
-        report += `• СЕТ (>10°C): ${gdd10.toFixed(1)}°C\n`;
-        report += `• СЕТ (>5°C): ${gdd5.toFixed(1)}°C\n\n`;
+        report += `• СЕТ (&gt;10°C): ${gdd10.toFixed(1)}°C\n`;
+        report += `• СЕТ (&gt;5°C): ${gdd5.toFixed(1)}°C\n\n`;
 
         report += `💧 <b>Водний баланс:</b>\n`;
         report += `• Опади: ${totalPrecip.toFixed(1)} мм\n`;
@@ -814,9 +814,9 @@ function generateHistoricalReport(history, lang = 'uk') {
 
         report += `⚠️ <b>Стрес-аналітика:</b>\n`;
         if (frostDays > 0) report += `• Заморозки: ${frostDays} ночей 🧊\n`;
-        if (heatDays > 0) report += `• Спека (>30°C): ${heatDays} днів 🔥\n`;
-        if (tropicalNights > 0) report += `• Тропічні ночі (>20°C): ${tropicalNights} 🥵\n`;
-        if (coldStressDays > 0) report += `• Зупинка росту (<12°C): ${coldStressDays} дн. ❄️\n`;
+        if (heatDays > 0) report += `• Спека (&gt;30°C): ${heatDays} днів 🔥\n`;
+        if (tropicalNights > 0) report += `• Тропічні ночі (&gt;20°C): ${tropicalNights} 🥵\n`;
+        if (coldStressDays > 0) report += `• Зупинка росту (&lt;12°C): ${coldStressDays} дн. ❄️\n`;
         if (vpdStressDays > 0) report += `• Повітряна посуха: ${vpdStressDays} дн. 💨\n`;
         if (fungalRiskDays > 0) report += `• Ризик грибків: ${fungalRiskDays} дн. 🍄\n`;
 
@@ -832,7 +832,7 @@ function generateHistoricalReport(history, lang = 'uk') {
         report += `🌡 <b>Temperature:</b>\n`;
         report += `• Average: ${avgTemp.toFixed(1)}°C\n`;
         report += `• Range: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
-        report += `• GDD (>10°C): ${gdd10.toFixed(1)}°C\n\n`;
+        report += `• GDD (&gt;10°C): ${gdd10.toFixed(1)}°C\n\n`;
 
         report += `💧 <b>Water Balance:</b>\n`;
         report += `• Precip: ${totalPrecip.toFixed(1)} mm\n`;
@@ -841,7 +841,7 @@ function generateHistoricalReport(history, lang = 'uk') {
 
         report += `⚠️ <b>Stress Analytics:</b>\n`;
         if (frostDays > 0) report += `• Frosts: ${frostDays}\n`;
-        if (heatDays > 0) report += `• Heat (>30°C): ${heatDays}\n`;
+        if (heatDays > 0) report += `• Heat (&gt;30°C): ${heatDays}\n`;
         if (fungalRiskDays > 0) report += `• Fungal risk: ${fungalRiskDays} days\n`;
     }
 
