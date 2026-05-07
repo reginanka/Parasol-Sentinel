@@ -761,7 +761,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         }
     }
 
-    // Statistics calculation (Period-specific)
+    // Period (Specific) accumulators
     let totalPrecip = 0;
     let heatDays = 0;
     let tropicalNights = 0;
@@ -773,6 +773,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
     let vpdStressDays = 0;
     let windStressDays = 0;
     let pollinationStressDays = 0;
+    let hypoxiaDays = 0;
     let totalEvapEstimation = 0;
     let gdd10 = 0;
     let gdd5 = 0;
@@ -780,24 +781,24 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
     let absMax = -999;
     let absMin = 999;
     let rhSum = 0;
-
-    // Seasonal (Cumulative) accumulators
-    let seasonalStresses = { advective: 0, radiation: 0, ground: 0, heat: 0, wind: 0, pollination: 0, fungal: 0 };
-    let seasonalGDD5 = 0;
-    let seasonalGDD10 = 0;
-    let infectionIndex = 0;       // Накопичується за весь сезон
-    let sowingGoodDates = [];     // Шукаємо вікна за весь сезон
-    let chillHours = 0;           
-    let hardeningLossEvents = 0;  
-    let hypoxiaDays = 0;          
-    let currentGDD5 = 0;
-    let prevTempAvg = null;
-
+    let periodInfectionIndex = 0;
+    let periodSowingDates = [];
     let advectiveDates = [];
     let radiationDates = [];
     let groundDates = [];
 
-    // --- 2. ЦИКЛ АНАЛІЗУ (ПО ВСЬОМУ КОНТЕКСТУ) ---
+    // Seasonal (Cumulative Context) accumulators
+    let seasonalStresses = { advective: 0, radiation: 0, ground: 0, heat: 0, wind: 0, pollination: 0, fungal: 0, hypoxia: 0 };
+    let seasonalGDD5 = 0;
+    let seasonalGDD10 = 0;
+    let seasonalInfectionIndex = 0;
+    let seasonalSowingCount = 0;
+    let chillHours = 0;           
+    let hardeningLossEvents = 0;  
+    let currentGDD5 = 0;
+    let prevTempAvg = null;
+
+    // --- 2. ЦИКЛ АНАЛІЗУ ---
     fullContext.forEach(d => {
         let tMax = d.temp_max;
         let tMin = d.temp_min;
@@ -806,7 +807,6 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         let month = new Date(d.date).getMonth() + 1;
         const isInPeriod = (d.date >= periodStartStr && d.date <= periodEndStr);
 
-        // Накопичення СЕТ (завжди сезонне)
         let dayGDD5 = Math.max(0, tAvg - 5);
         let dayGDD10 = Math.max(0, tAvg - 10);
         seasonalGDD5 += dayGDD5;
@@ -848,17 +848,20 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
 
         if (tAvg >= 15 && tAvg <= 26 && rh > 80) {
             seasonalStresses.fungal++;
-            if (isInPeriod) fungalRiskDays++;
-            infectionIndex += 10;
+            seasonalInfectionIndex += 10;
+            if (isInPeriod) {
+                fungalRiskDays++;
+                periodInfectionIndex += 10;
+            }
         } else if ((d.clouds_avg || 100) < 30 && rh < 60) {
-            infectionIndex = Math.max(0, infectionIndex - 5);
+            seasonalInfectionIndex = Math.max(0, seasonalInfectionIndex - 5);
+            if (isInPeriod) periodInfectionIndex = Math.max(0, periodInfectionIndex - 5);
         }
 
         let svp = 0.6108 * Math.exp((17.27 * tAvg) / (tAvg + 237.3));
         let vpd = svp * (1 - rh / 100);
         if (isInPeriod && vpd > 1.2) vpdStressDays++;
 
-        // ETo (Випаровування) - тільки для періоду
         if (isInPeriod) {
             let etoBase = 0.0023 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 14; 
             etoBase *= (1 - (d.clouds_avg || 50) / 250);
@@ -878,7 +881,6 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
             }
         }
 
-        // Chill Hours (завжди сезонне)
         if (tAvg >= 0 && tAvg <= 7) chillHours += 12;
         else if (tMin >= 0 && tMin <= 7) chillHours += 6;
 
@@ -889,13 +891,17 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         prevTempAvg = tAvg;
 
         if ((d.precip || 0) > 15 && isAgroSeason) {
-            hypoxiaDays++; // Гіпоксія теж накопичувальна
+            seasonalStresses.hypoxia++;
+            if (isInPeriod) hypoxiaDays++;
         }
 
         if (month >= 3 && month <= 5) {
             let soilTempEstimate = tAvg * 0.7 + (prevTempAvg || tAvg) * 0.3;
             if (soilTempEstimate >= 8 && soilTempEstimate <= 18 && (d.precip || 0) < 5 && (d.wind_spd_max || 0) < 7) {
-                sowingGoodDates.push(new Date(d.date).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' }));
+                seasonalSowingCount++;
+                if (isInPeriod) {
+                    periodSowingDates.push(new Date(d.date).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' }));
+                }
             }
         }
     });
@@ -941,36 +947,28 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         : `📈 <b>Agro-Archive (${dateRangeStr}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
 
     if (lang === 'uk') {
-        report += `🌡 <b>Температура:</b>\n`;
-        report += `• Середня: ${avgTemp.toFixed(1)}°C\n`;
-        report += `• Розмах: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
-        report += `• Накопичено СЕТ (&gt;10°C): ${seasonalGDD10.toFixed(0)}°C\n`;
-        report += `• Накопичено СЕТ (&gt;5°C): ${seasonalGDD5.toFixed(0)}°C\n`;
+        // 1. Показники за обраний період (Статистика)
+        report += `🌡 <b>Погода за ці дні:</b>\n`;
+        report += `• Температура: ${avgTemp.toFixed(1)}°C (${absMin.toFixed(1)}° ... ${absMax.toFixed(1)}°)\n`;
+        report += `• СЕТ (&gt;5°C/&gt;10°C): ${gdd5.toFixed(0)}°C / ${gdd10.toFixed(0)}°C\n`;
+        report += `• Опади / Баланс: ${totalPrecip.toFixed(1)} мм / <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n`;
         report += `• Сонячних днів: ${sunnyDays}\n\n`;
 
-        report += `💧 <b>Водний баланс:</b>\n`;
-        report += `• Опади: ${totalPrecip.toFixed(1)} мм\n`;
-        report += `• Випаровування (ETo): ~${totalEvapEstimation.toFixed(1)} мм\n`;
-        report += `• Баланс: <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n\n`;
+        // 2. Конкретні події періоду (З датами)
+        report += `⚠️ <b>Події за ці дні:</b>\n`;
+        let eventsFound = false;
+        if (advectiveFrosts > 0) { report += `• Адвективні морози: ${advectiveFrosts} дн. (${advectiveDates.join(', ')}) 🧊\n`; eventsFound = true; }
+        if (radiationFrosts > 0) { report += `• Радіаційні заморозки: ${radiationFrosts} дн. (${radiationDates.join(', ')}) ❄️\n`; eventsFound = true; }
+        if (groundFrosts > 0) { report += `• Приморозки на ґрунті: ${groundFrosts} дн. (${groundDates.join(', ')}) 🌫\n`; eventsFound = true; }
+        if (heatDays > 0) { report += `• Хвилі спеки (&gt;30°C): ${heatDays} дн. 🔥\n`; eventsFound = true; }
+        if (periodSowingDates.length > 0) { report += `• Вікна для посадки: ${periodSowingDates.length} дн. (${periodSowingDates.join(', ')}) 🌱\n`; eventsFound = true; }
+        if (fungalRiskDays > 0) { report += `• Ризик хвороб: ${fungalRiskDays} дн. 🍄\n`; eventsFound = true; }
+        if (hypoxiaDays > 0) { report += `• Гіпоксія коренів: ${hypoxiaDays} дн. 🌊\n`; eventsFound = true; }
+        if (pollinationStressDays > 0) { report += `• Проблеми запилення: ${pollinationStressDays} дн. 🐝🚫\n`; eventsFound = true; }
+        if (!eventsFound) report += `• Значущих погодних аномалій не виявлено.\n`;
 
-        report += `⚠️ <b>Стрес-аналітика:</b>\n`;
-        if (advectiveFrosts > 0) report += `• Адвективні морози (&lt;-3°C): ${advectiveFrosts} 🧊🆘\n`;
-        if (radiationFrosts > 0) report += `• Радіаційні заморозки (0..-3°C): ${radiationFrosts} ❄️\n`;
-        if (groundFrosts > 0) report += `• Приморозки на ґрунті (ясно/штиль): ${groundFrosts} 🧊\n`;
-        if (heatDays > 0) report += `• Спека (&gt;30°C): ${heatDays} днів 🔥\n`;
-        if (tropicalNights > 0) report += `• Тропічні ночі (&gt;20°C): ${tropicalNights} 🥵\n`;
-        if (coldStressDays > 0) report += `• Зупинка росту (&lt;12°C): ${coldStressDays} дн. ❄️\n`;
-        if (vpdStressDays > 0) report += `• Повітряна посуха: ${vpdStressDays} дн. 💨\n`;
-        if (windStressDays > 0) report += `• Вітровий стрес (&gt;9м/с): ${windStressDays} дн. 🌪\n`;
-        if (pollinationStressDays > 0) report += `• Проблеми запилення: ${pollinationStressDays} дн. 🐝🚫\n`;
-        if (fungalRiskDays > 0) report += `• Ризик грибків: ${fungalRiskDays} дн. 🍄\n`;
-        if (hypoxiaDays > 0) report += `• Гіпоксія коренів (&gt;15мм/добу): ${hypoxiaDays} дн. 🌊\n`;
-        if (chillHours > 0) report += `• Години холоду (0-7°C): ${chillHours} год. 🌡️\n`;
-        if (hardeningLossEvents > 0) report += `• Небезпечні відлиги (зима): ${hardeningLossEvents} епізодів ⚠️\n`;
-        if (sowingGoodDates.length > 0) report += `• Ідеальних днів для посіву: ${sowingGoodDates.length} дн. 🌱\n`;
-        report += `• Інфекційний фон: ${Math.round(infectionIndex)} балів (кумулятивно) 🦠\n`;
-
-        // Індекс складності сезону
+        // 3. Сезонний контекст (Стабільні дані)
+        report += `\n📊 <b>Сезонний контекст (з 1 березня):</b>\n`;
         const seasonalDays = fullContext.length;
         let stressScore = (
             (seasonalStresses.advective * 12) + (seasonalStresses.radiation * 6) + (seasonalStresses.ground * 3) +
@@ -980,156 +978,93 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         let diffIndex = Math.min(10, Math.max(1, Math.round(stressScore * 1.5)));
         let diffLabel = diffIndex > 7 ? "Екстремальний" : (diffIndex > 4 ? "Помірний" : "Легкий");
 
-        report += `\n📊 <b>Індекс складності сезону: ${diffIndex}/10 (${diffLabel})</b>\n`;
+        report += `• <b>Індекс складності сезону: ${diffIndex}/10 (${diffLabel})</b>\n`;
+        report += `• Накопичено СЕТ (&gt;5°C): ${seasonalGDD5.toFixed(0)}°C\n`;
+        report += `• Інфекційний фон: ${Math.round(seasonalInfectionIndex)} балів 🦠\n`;
+        report += `• Всього заморозків за весну: ${seasonalStresses.advective + seasonalStresses.radiation + seasonalStresses.ground} епізодів.\n`;
+        if (chillHours > 0) report += `• Години холоду (Chill Hours): ${chillHours} год.\n`;
+        if (seasonalSowingCount > 0) report += `• Всього ідеальних днів для посіву: ${seasonalSowingCount}.\n`;
         report += `━━━━━━━━━━━━━━━━━━━━\n`;
 
-        // EXPERT SUMMARY SECTION (FOR ALL REPORTS LONGER THAN 3 DAYS)
+        // 4. Експертний аналіз
         if (totalDays >= 3) {
-            report += `🧐 <b>Експертний висновок:</b>\n`;
-
-            // 1. Characterization
-            let char = "Сезон (станом на зараз) характеризується як ";
-            if (avgTemp > 18) char += "інтенсивно-теплий ";
-            else if (avgTemp > 12) char += "помірно-теплий ";
-            else char += "прохолодний ";
-
-            if (waterBalance < -50) char += "з вираженим дефіцитом вологи.";
-            else if (waterBalance > 50) char += "з надмірним зволоженням.";
-            else char += "з нормальним зволоженням.";
-            report += `• ${char}\n`;
-
-            // 2. Growth & SET
+            report += `🧐 <b>Експертний аналіз:</b>\n`;
+            
+            // 4a. Сезонний огляд (Кумулятивний стан)
+            let seasonalSummary = "";
+            
+            // СЕТ та Ріст
             const warmCropsList = ['tomato', 'pepper', 'grape', 'peach', 'watermelon', 'eggplant', 'apricot'];
             const hasWarmCrops = userCrops.some(c => warmCropsList.includes(c));
+            let growthState = "Сезон характеризується як ";
+            if (avgTemp > 18) growthState += "інтенсивно-теплий. ";
+            else if (avgTemp > 12) growthState += "помірно-теплий. ";
+            else growthState += "прохолодний. ";
+
+            growthState += `Накопичено СЕТ ${seasonalGDD5.toFixed(0)}°C. `;
+            if (seasonalGDD5 > 1200 || (hasWarmCrops && seasonalGDD10 > 800)) {
+                growthState += "Умови сприяють стабільному росту. ";
+            }
+            if (hasWarmCrops && seasonalGDD10 > 1200) {
+                growthState += "Ідеально для ваших теплолюбних культур. ";
+            }
+            seasonalSummary += `• <b>Ріст та СЕТ:</b> ${growthState}\n`;
+
+            // Інфекція
+            let healthState = "";
+            if (seasonalInfectionIndex > 200) healthState = "Критичний інфекційний фон — патогени активно накопичувалися. ";
+            else if (seasonalInfectionIndex > 80) healthState = "Помірний інфекційний тиск, ситуація під контролем. ";
+            else healthState = "Чистий фон, ризики мінімальні. ";
+            seasonalSummary += `• <b>Здоров'я (сезон):</b> ${healthState}\n`;
+
+            // Зимівля (якщо є дерева)
+            const fruitTrees = ['cherry', 'apple', 'pear', 'peach', 'apricot'];
+            if (userCrops.some(c => fruitTrees.includes(c)) && chillHours > 0) {
+                let winterMsg = "";
+                if (chillHours >= 800) winterMsg = `Норма загартовування (${chillHours} год.) виконана — це гарантує стабільне цвітіння. `;
+                else if (chillHours >= 500) winterMsg = `Часткове виконання норми (${chillHours} год.) — можливе нерівномірне пробудження бруньок. `;
+                else winterMsg = `Критично мало годин холоду (${chillHours} год.) — ризик скидання плодових бруньок. `;
+                
+                if (hardeningLossEvents > 0) winterMsg += `Через ${hardeningLossEvents} відлиг взимку частина зимостійкості втрачена. `;
+                seasonalSummary += `• <b>Зимівля:</b> ${winterMsg}\n`;
+            }
+
+            report += `${seasonalSummary}\n`;
+
+            // 4b. Діагноз за вибрані дні (Конкретні дії)
+            report += `• <b>Діагноз за період (${dateRangeStr}):</b> `;
+            let periodDiagnosis = "";
             
-            let setMsg = `Накопичено СЕТ ${seasonalGDD5.toFixed(0)}°C (база 5°C для малини, дерев та ягід). `;
-            if (hasWarmCrops) {
-                setMsg += `Для ваших теплолюбних культур (база 10°C) накопичено ${seasonalGDD10.toFixed(0)}°C. `;
-            }
+            if (waterBalance < -25) periodDiagnosis += "Критичний дефіцит вологи! Терміново потрібен глибокий полив (рослини втратили на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало). ";
+            else if (waterBalance < -10) periodDiagnosis += "Помірна посуха — контролюйте вологість ґрунту. ";
             
-            let growth = `${setMsg}Приріст мав бути `;
-            if (seasonalGDD5 > 2000 || (hasWarmCrops && seasonalGDD10 > 1200)) growth += "максимальним. ";
-            else if (seasonalGDD5 > 1200 || (hasWarmCrops && seasonalGDD10 > 800)) growth += "стабільним. ";
-            else growth += "сповільненим. ";
-
-            if (userCrops.length > 0) {
-                const warmCrops = ['tomato', 'pepper', 'grape', 'peach', 'watermelon'];
-                const matchedWarm = userCrops.filter(c => warmCrops.includes(c));
-                if (matchedWarm.length > 0 && seasonalGDD10 > 1200) {
-                    growth += `Умови були ідеальними для ваших теплолюбних рослин (${matchedWarm.length}). `;
-                }
-            }
-            if (coldStressDays > totalDays * 0.25) {
-                growth += `Проте, значна кількість холодних днів у вибраному періоді (${coldStressDays}) могла гальмувати розвиток. `;
-            }
-            if (seasonalStresses.pollination > 10) {
-                growth += `Увага: за сезон зафіксовано ${seasonalStresses.pollination} днів негоди в період цвітіння, що могло вплинути на повноту зав'язі. `;
-            }
-            report += `• <b>Ріст:</b> ${growth}\n`;
-
-            // 3. Аномалії та Стреси (Спека, Вітер, Ночі)
-            let stressInfo = "";
-            if (heatDays > 0) {
-                stressInfo += `Зафіксовано ${heatDays} дн. спеки (>30°C), що вимагало посиленого поливу. `;
-            }
-            if (tropicalNights > 0) {
-                const nightWord = tropicalNights === 1 ? 'тропічну ніч' :
-                    (tropicalNights >= 2 && tropicalNights <= 4) ? 'тропічні ночі' : 'тропічних ночей';
-                stressInfo += `Через ${tropicalNights} ${nightWord} (>20°C) рослини не мали нічного відпочинку, що виснажувало їх енергію. `;
-            }
-            if (windStressDays > 2) {
-                stressInfo += `Сильні вітри (${windStressDays} дн.) спричиняли механічні стреси та критично прискорювали висушування листя. `;
-            }
-            if (vpdStressDays > 3) {
-                stressInfo += `Тривала повітряна посуха (${vpdStressDays} дн.) була основним викликом для вологолюбних культур. `;
-            }
-            if (stressInfo) report += `• <b>Аномалії:</b> ${stressInfo}\n`;
-
-            // 4. Здоров'я та Захист (Грибки, Морози)
-            let health = "";
-            if (fungalRiskDays < totalDays * 0.1) {
-                health = "Низький ризик грибків дозволив зекономити на обробках. ";
-            } else if (fungalRiskDays > totalDays * 0.3) {
-                health = `Критичний інфекційний фон (${fungalRiskDays} дн. вологи) вимагав потужного фунгіцидного захисту. `;
-            } else {
-                health = `Помірний ризик грибків (${fungalRiskDays} дн. сприятливих умов). `;
-            }
-
-            let frostMsg = "";
-            if (advectiveFrosts > 0) frostMsg += `адвективні (${advectiveDates.slice(0, 5).join(', ')}${advectiveDates.length > 5 ? '...' : ''}); `;
-            if (radiationFrosts > 0) frostMsg += `радіаційні (${radiationDates.slice(0, 5).join(', ')}${radiationDates.length > 5 ? '...' : ''}); `;
-            if (groundFrosts > 0) frostMsg += `на ґрунті (${groundDates.slice(0, 5).join(', ')}${groundDates.length > 5 ? '...' : ''}); `;
-            
-            if (frostMsg) {
-                health += `Зафіксовані заморозки: ${frostMsg}`;
+            if (advectiveFrosts > 0 || radiationFrosts > 0) {
+                periodDiagnosis += `Увага! Зафіксовані заморозки (${advectiveDates.concat(radiationDates).join(', ')}). Це могло пошкодити цвіт або молодий приріст. Перевірте точки росту. `;
             }
             
-            if (health) report += `• <b>Здоров'я:</b> ${health}\n`;
-
-            // 5. Години холоду (Chill Hours) і втрата морозостійкості
-            let winterMsg = "";
-            const chillNeeded = userCrops.includes('cherry') || userCrops.includes('apple') ||
-                userCrops.includes('pear') || userCrops.includes('peach') || userCrops.includes('apricot');
+            if (heatDays >= 3) periodDiagnosis += `Хвиля спеки тривала ${heatDays} дн. — це спричиняє температурний стрес, притініть чутливі культури та дайте антистресанти. `;
             
-            if (chillNeeded) {
-                const sourcePrefix = hasWinterMonths ? "За поточний період" : "За даними попередньої зими";
-                if (chillHours >= 800) {
-                    winterMsg += `${sourcePrefix} норма загартовування виконана (${chillHours} год.). Це гарантує рівномірне пробудження бруньок та стабільне цвітіння. `;
-                } else if (chillHours >= 500) {
-                    winterMsg += `${sourcePrefix} норма виконана частково (${chillHours} год.). Деякі пізні сорти можуть прокинутись нерівномірно, що розтягне період цвітіння. `;
-                } else {
-                    winterMsg += `${sourcePrefix} зима була занадто теплою (лише ${chillHours} год. холоду). Це критично: можливе скидання плодових бруньок або слабкий врожай. `;
-                }
-            }
-            if (hardeningLossEvents > 0) {
-                winterMsg += `Через ${hardeningLossEvents} небезпечних відлиг рослини втратили частину зимостійкості (сокорух міг початися передчасно), що підвищує ризик вимерзання при запізнілих морозах. `;
-            }
-            if (winterMsg) report += `• <b>Зимівля (загартовування):</b> ${winterMsg}\n`;
+            if (fungalRiskDays > totalDays * 0.4) periodDiagnosis += `Висока вологість (${fungalRiskDays} дн.) загрожує розвитком хвороб — профілактична обробка фунгіцидом була б доречною. `;
+            
+            if (hypoxiaDays > 2) periodDiagnosis += `Через інтенсивні опади (${hypoxiaDays} дн. гіпоксії) можливе кисневе голодування коренів — розпушіть грунт. `;
 
-            // 6. Гіпоксія та Інфекційний фон
-            let soilMsg = "";
-            if (hypoxiaDays > 2) {
-                soilMsg += `Тривале перезволоження (${hypoxiaDays} дн. > 15мм) загрожувало кисневим голодуванням коренів. `;
-            } else if (hypoxiaDays > 0) {
-                soilMsg += `${hypoxiaDays} дн. інтенсивних опадів (гіпоксія) вимагали розпушення грунту після. `;
+            if (periodSowingDates.length > 0) {
+                periodDiagnosis += `Дні ${periodSowingDates.join(', ')} були ідеальними для посадки — сподіваємось, ви скористалися цим вікном! `;
             }
-            if (infectionIndex > 200) {
-                soilMsg += `Інфекційний фон накопичувався інтенсивно (${Math.round(infectionIndex)} балів) — фунгіцидний захист був необхідний. `;
-            } else if (infectionIndex > 80) {
-                soilMsg += `Помірний інфекційний фон (${Math.round(infectionIndex)} балів) — профілактичні обробки були виправдані. `;
-            }
-            if (soilMsg) report += `• <b>Грунт та інфекція:</b> ${soilMsg}\n`;
-
-            // 7. Оцінка вікна для посіву
-            if (sowingGoodDates.length > 0) {
-                let sowMsg = "";
-                const datesList = sowingGoodDates.slice(0, 8).join(', ') + (sowingGoodDates.length > 8 ? '...' : '');
-                if (sowingGoodDates.length >= 14) {
-                    sowMsg = `Весна надала велике вікно (${sowingGoodDates.length} ідеальних днів) — найкращі: ${datesList}.`;
-                } else {
-                    sowMsg = `Ідеальні дні для посіву: ${datesList} (${sowingGoodDates.length} дн.).`;
-                }
-                report += `• <b>Вікно посіву:</b> ${sowMsg}\n`;
-            }
+            
+            if (!periodDiagnosis) periodDiagnosis = "Умови в ці дні були стабільними, жодних екстремальних втручань не потрібно.";
+            
+            report += `${periodDiagnosis}\n`;
         } else {
-            if (waterBalance < -20) {
-                report += `💡 <b>Порада:</b> Значний дефіцит вологи! Рослини випарували на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало опадів. Потрібен глибокий полив.\n`;
-            } else if (fungalRiskDays > totalDays * 0.3) {
-                report += `💡 <b>Порада:</b> Кожен третій день був вологим та теплим. Високий ризик гнилей та фітофтори! Перевірте густину посадок.\n`;
-            } else {
-                report += `✅ Умови для розвитку стабільні.`;
-            }
+            if (waterBalance < -10) report += `💡 <b>Порада:</b> Зафіксовано дефіцит вологи, полийте рослини.\n`;
+            else if (fungalRiskDays > 0) report += `💡 <b>Порада:</b> Підвищена вологість, будьте уважні до появи плям на листі.\n`;
         }
     } else {
-        // English version (simplified)
-        report += `🌡 <b>Temperature:</b>\n`;
-        report += `• Average: ${avgTemp.toFixed(1)}°C\n`;
-        report += `• GDD (>10°C): ${gdd10.toFixed(1)}°C\n\n`;
+        // English version (simplified context)
+        report += `🌡 <b>Weather:</b> Avg: ${avgTemp.toFixed(1)}°C, SET: ${gdd10.toFixed(0)}°C\n`;
         report += `💧 <b>Water Balance:</b> ${waterBalance.toFixed(1)} mm\n`;
-        report += `⚠️ <b>Stress Analytics:</b> Adv.frosts: ${advectiveFrosts}, Rad.frosts: ${radiationFrosts}, Heat: ${heatDays}, Fungal: ${fungalRiskDays} days, Chill: ${chillHours}h\n`;
-        if (totalDays >= 30) {
-            report += `\n🧐 <b>Summary:</b> The period was ${avgTemp > 18 ? 'warm' : 'cool'} with ${waterBalance < -50 ? 'water deficit' : 'normal moisture'}.`;
-        }
+        report += `📊 <b>Season Index:</b> ${diffIndex}/10 (${diffLabel})\n`;
+        report += `⚠️ <b>Events:</b> Frosts: ${advectiveFrosts + radiationFrosts}, Heat: ${heatDays}, Sowing: ${periodSowingDates.length}\n`;
     }
 
     return report;
