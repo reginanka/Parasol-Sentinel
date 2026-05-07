@@ -75,7 +75,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             : (phytophthora >= 80 
                 ? 'Критична фаза! Терміново: Рідоміл Голд (25г/10л) або Магнікур Фіно (15мл/10л). Припиніть азотні добрива — вони "розм’якшують" лист!' 
                 : 'Ризик зростає. Обробіть: Квадріс (6мл/10л) чи Фітоспорин. Підсильте імунітет калієм (Монофосфат калію 10-15г/10л).'),
-        details: `Вологість ${d.rh}%, t: ${d.temp}°C${d.precip > 0.8 ? ', очікується дощ' : ''}. Ризик +${historyPoints}% від минулих днів.`,
+        details: `Вологість ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C${d.precip > 0.8 ? ', очікується дощ' : ''}. Ризик +${historyPoints}% від минулих днів.`,
         relatedCrops: ['tomato', 'potato', 'eggplant']
     });
 
@@ -115,7 +115,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: powderyMildew >= 80
             ? 'Масове поширення! Обробіть системно: Топаз (4мл/10л, пенконазол) або Магнікур Сенсейшн (3.5мл/10л). Дайте калій по листу.'
             : 'Умови сухої спеки. Профілактика: Тіовіт Джет (40-80г/10л, колоїдна сірка). Слідкуйте за вологістю ґрунту — посуха провокує хворобу!',
-        details: `Сухо: ${d.rh}%, t: ${d.temp}°C. Ідеально для борошнистої роси.`,
+        details: `Сухо: ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C. Ідеально для борошнистої роси.`,
         relatedCrops: ['zucchini', 'rose', 'grape', 'apple', 'cucumber']
     });
 
@@ -132,7 +132,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: heatStress >= 70
             ? 'Екстремальна спека! Рослини в стагнації. Терміново: антистресанти з амінокислотами (Мегафол 25мл/10л або Амінокат). Рясний полив ТІЛЬКИ ввечері.'
             : 'Температурний стрес. Використовуйте Епін-Екстра або Циркон. Обов’язково замульчуйте ґрунт, щоб врятувати коріння від перегріву.',
-        details: `Температура ${d.temp}°C, вологість ${d.rh}%. Рослина закриває продихи.`,
+        details: `Температура ${d.temp.toFixed(1)}°C, вологість ${Math.round(d.rh)}%. Рослина закриває продихи.`,
         relatedCrops: ['tomato', 'pepper', 'cucumber', 'strawberry', 'raspberry']
     });
 
@@ -167,7 +167,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         name: '☀️ Сонячний опік / УФ-шок',
         score: Math.min(sunburn, 100),
         advice: uvAdvice,
-        details: `УФ-індекс: ${d.uv}, хмарність: ${d.clouds}%, t: ${d.temp}°C.`,
+        details: `УФ-індекс: ${d.uv.toFixed(1)}, хмарність: ${Math.round(d.clouds)}%, t: ${d.temp.toFixed(1)}°C.`,
         relatedCrops: ['tomato', 'pepper', 'cucumber', 'strawberry', 'hydrangea']
     });
 
@@ -193,7 +193,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             : (sprayScore >= 40 
                 ? `Умови ризиковані через ${sprayReasons.join(', ')}. Якщо можливо, перенесіть.` 
                 : 'Ідеальні умови для обприскування! Рекомендовано проводити рано вранці або ввечері.'),
-        details: `Вітер: ${d.wind_spd}м/с, опади: ${d.precip}мм, t: ${d.temp}°C, вологість: ${d.rh}%.`
+        details: `Вітер: ${d.wind_spd.toFixed(1)}м/с, опади: ${d.precip.toFixed(2)}мм, t: ${d.temp.toFixed(1)}°C, вологість: ${Math.round(d.rh)}%.`
     });
 
     // --- 6. ГІПОКСІЯ / ПЕРЕЗВОЛОЖЕННЯ ---
@@ -214,7 +214,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: hypoxia >= 70 
             ? 'Критичне перезволоження! Прокопайте водовідвідні канавки. Після підсихання — обов’язкове розпушування. Для захисту від гнилей: Магнікур Енерджі (пролив під корінь, пропамокарб+фосетил).' 
             : 'Ґрунт перезволожений. Утримайтеся від поливу. Розпушіть землю ("сухий полив") для доступу кисню до коренів. Небезпечно для цибулі та полуниці.',
-        details: `Випало ${d.precip}мм (всього за 5 днів: ${rainHistory.toFixed(1)}мм). Ґрунт перенасичений вологою.`,
+        details: `Випало ${d.precip.toFixed(1)}мм (всього за 5 днів: ${rainHistory.toFixed(1)}мм). Ґрунт перенасичений вологою.`,
         relatedCrops: ['cucumber', 'zucchini', 'strawberry', 'potato', 'cabbage', 'onion']
     });
 
@@ -251,7 +251,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: frost >= 80
             ? 'КРИТИЧНО! Вкрийте все агроволокном. Обробіть антистресантом (Мегафол, Епін-Екстра — вони діють як антифриз). Вечірній полив допоможе втримати тепло землі.'
             : `Ризик приморозку на ґрунті. ${stage.id === 'late_spring' ? 'Небезпечно для цвіту! Проведіть задимлення або дощування.' : 'Захистіть розсаду. Дайте калій для стійкості.'}`,
-        details: `Мін t: ${d.min_temp}°C, небо ясне (високе випромінювання тепла).`,
+        details: `Мін t: ${d.min_temp.toFixed(1)}°C, небо ясне (високе випромінювання тепла).`,
         relatedCrops: ['strawberry', 'grape', 'tomato', 'pepper', 'potato', 'apple', 'cherry', 'peach', 'rose']
     });
 
@@ -274,7 +274,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: alternaria >= 80 
             ? 'Критичний ризик! Обробіть системно: Скор (2мл/10л, дифеноконазол) або Сігнум (10г/10л). Видаліть старе листя з концентричними плямами.' 
             : 'Умови для плямистостей. Профілактика: Квадріс (6мл/10л, азоксистробін) або Ревус Топ. Слідкуйте за нижнім листям.',
-        details: `Спекотно та волого: ${d.temp}°C, ${d.rh}%. Ризик +${altHistory}% від спеки минулих днів.`,
+        details: `Спекотно та волого: ${d.temp.toFixed(1)}°C, ${Math.round(d.rh)}%. Ризик +${altHistory}% від спеки минулих днів.`,
         relatedCrops: ['tomato', 'potato', 'apple', 'sunflower']
     });
 
@@ -296,7 +296,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: anthracnose >= 80 
             ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Сігнум (10г/10л). Не поливайте по листу! Видаліть уражені плоди.' 
             : 'Умови для поширення плямистостей. Профілактика: Квадріс (6мл/10л) або Топсін-М. Підсильте імунітет фосфорно-калійним підживленням.',
-        details: `Волого та тепло: ${d.rh}%, t: ${d.temp}°C. Ризик +${antHistory}% через минулі дощі.`,
+        details: `Волого та тепло: ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C. Ризик +${antHistory}% через минулі дощі.`,
         relatedCrops: ['cucumber', 'watermelon', 'strawberry', 'grape', 'raspberry', 'apple', 'cherry']
     });
 
@@ -318,7 +318,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: botrytis >= 80
             ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Тельдор (8г/10л, фенгексамід). Видаляйте гнилі ягоди.' 
             : 'Ризик гнилі. Профілактика: Фітоспорин та Кальцієва селітра (20г/10л) — вона робить шкірку ягід міцнішою.',
-        details: `Вологість: ${d.rh}%, t: ${d.temp}°C. Ризик +${botryHistory}% від вологи минулих днів.`,
+        details: `Вологість: ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C. Ризик +${botryHistory}% від вологи минулих днів.`,
         relatedCrops: ['strawberry', 'grape', 'raspberry', 'tomato', 'pepper', 'cucumber', 'peony']
     });
 
@@ -340,7 +340,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: moniliaScore >= 80
             ? 'Масовий моніліоз! Обробіть: Хорус (3г/10л, ципродиніл) або Магнікур Сенсейшн (3.5мл/10л). Виріжте всохлі гілки на 20см нижче ураження!'
             : `Сприятливі умови. ${stage.id === 'late_spring' ? 'Ризик опіку цвіту. Використовуйте Світч (10г/10л) або Хорус + Бор для зав’язі.' : 'Огляньте плоди на гниль. Обробіть Сігнум або Скор.'}`,
-        details: `Сприятлива t: ${d.temp}°C. Ризик +${monHistory}% за минулі дощі.`,
+        details: `Сприятлива t: ${d.temp.toFixed(1)}°C. Ризик +${monHistory}% за минулі дощі.`,
         relatedCrops: ['apple', 'pear', 'peach', 'cherry', 'apricot', 'plum']
     });
 
@@ -362,7 +362,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: rust >= 80 
             ? 'Масове ураження! Обробіть: Фалькон (6мл/10л) або Магнікур Сенсейшн (3.5мл/10л). На груші іржа приходить з ялівців!'
             : 'Помаранчеві плями. Профілактика: Скор або Топаз. Дайте мікроелементи (Плантафол 20-20-20 або Хелатин) для імунітету.',
-        details: `Помірна t: ${d.temp}°C та вологість. Ризик +${rustHistory}% через сиру погоду.`,
+        details: `Помірна t: ${d.temp.toFixed(1)}°C та вологість. Ризик +${rustHistory}% через сиру погоду.`,
         relatedCrops: ['pear', 'rose', 'currant', 'conifers', 'apple', 'plum']
     });
 
@@ -384,7 +384,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: spiderMiteScore >= 80
             ? 'Масовий кліщ! Обробіть: Вертимек (10мл/10л, абамектин) або Санмайт (5г/10л, піридабен). Обов’язково кропіть нижню сторону листа!'
             : 'Суха спека — рай для кліща. Профілактика: Актофіт (60мл/10л) або Ніссоран (діє на яйця). Підвищуйте вологість (холодне дощування).',
-        details: `Екстремально сухо: ${d.rh}%, t: ${d.temp}°C. Ризик +${miteHistory}% через спеку минулих днів.`,
+        details: `Екстремально сухо: ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C. Ризик +${miteHistory}% через спеку минулих днів.`,
         relatedCrops: ['cucumber', 'rose', 'grape', 'strawberry', 'apple', 'pepper', 'eggplant']
     });
 
@@ -406,7 +406,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: aphidScore >= 80
             ? 'Високий ризик! Теппекі (2г/10л, флонікамід) — найкращий. Також Енжіо (тіаметоксам+лямбда-цигалотрин) або Актара. Знищуйте мурах!'
             : 'Комфортна t для попелиці. Перевірте верхівки пагонів. Для профілактики: Актофіт (абамектин) або калійне мило.',
-        details: `t: ${d.temp}°C, штиль. Ризик +${aphidHistory}% через стабільне тепло.`,
+        details: `t: ${d.temp.toFixed(1)}°C, штиль. Ризик +${aphidHistory}% через стабільне тепло.`,
         relatedCrops: ['rose', 'apple', 'pepper', 'currant', 'cherry', 'cabbage', 'plum', 'peach']
     });
 
@@ -428,7 +428,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         advice: cockchaferScore >= 80
             ? 'Масовий літ та активність личинок! Ґрунт прогрівся — пролийте коріння: Антихрущ (10мл/10л, імідаклоприд+біфентрин) або Актара.'
             : 'Ризик льоту хрущів. Ґрунт теплий, личинки вже біля коріння! Внесіть у землю Белем (циперметрин) або Метаризин.',
-        details: `t: ${d.temp}°C, вечірній штиль. Ризик +${cockHistory}% через прогрів ґрунту минулих днів.`,
+        details: `t: ${d.temp.toFixed(1)}°C, вечірній штиль. Ризик +${cockHistory}% через прогрів ґрунту минулих днів.`,
         relatedCrops: ['strawberry', 'lawn_grass', 'conifers', 'apple', 'cherry', 'potato']
     });
 
@@ -468,7 +468,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             name: '🐝 Ризик запилення',
             score: Math.min(pollScore, 100),
             advice: 'Несприятливі умови для бджіл та стерильність пилку. Можливе осипання зав’язі. Застосуйте препарати на основі Бору (B) для кращого зав’язування.',
-            details: `t: ${d.temp}°C, вітер: ${d.wind_spd}м/с, опади.`,
+            details: `t: ${d.temp.toFixed(1)}°C, вітер: ${d.wind_spd.toFixed(1)}м/с, опади.`,
             relatedCrops: ['tomato', 'pepper', 'cucumber', 'apple', 'pear', 'cherry', 'peach', 'strawberry', 'raspberry', 'grape']
         });
     }
@@ -480,7 +480,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             name: '🥵 Тепла ніч (Стрес дихання)',
             score: 60,
             advice: 'Рослини за ніч витрачають занадто багато енергії на дихання. Вранці бажано дати антистресанти або підживлення по листу.',
-            details: `Мін. t: ${d.min_temp}°C (занадто тепло для відпочинку).`
+            details: `Мін. t: ${d.min_temp.toFixed(1)}°C (занадто тепло для відпочинку).`
         });
     }
 
@@ -491,7 +491,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
             name: '🌊 Вимивання добрив',
             score: 70,
             advice: 'Очікується сильна злива. Не проводьте підживлення під корінь сьогодні — добрива вимиються в глибокі шари.',
-            details: `Прогноз опадів: ${d.precip} мм.`
+            details: `Прогноз опадів: ${d.precip.toFixed(1)} мм.`
         });
     }
 
@@ -653,11 +653,18 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
     return message;
 }
 
-function analyzeSprayingWindow(forecastData, lang = 'uk', userCrops = []) {
+function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrops = []) {
     if (!forecastData || !Array.isArray(forecastData)) return '';
     let report = lang === 'uk' ? '🚜 <b>Графік робіт на 5 днів:</b>\n' : '🚜 <b>5-Day Treatment Schedule:</b>\n';
 
-    forecastData.slice(0, 5).forEach(day => {
+    // Filter to start from "today" (Kyiv time)
+    const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Europe/Kyiv' }).slice(0, 10);
+    const relevantForecast = forecastData.filter(day => {
+        const d = (day.valid_date || day.datetime || '');
+        return d.startsWith(todayStr) || d > todayStr;
+    });
+
+    relevantForecast.slice(0, 5).forEach(day => {
         let dateObj = new Date(day.valid_date || day.datetime);
         let dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
         
@@ -669,8 +676,8 @@ function analyzeSprayingWindow(forecastData, lang = 'uk', userCrops = []) {
 
         let icon = sprayScore >= 70 ? '🔴' : (sprayScore >= 40 ? '🟡' : '🟢');
         
-        // Find top 3 risks for this day
-        let dailyRisks = analyzeAgroRisks(day, [], userCrops);
+        // Find top 3 risks for this day using REAL history
+        let dailyRisks = analyzeAgroRisks(day, history, userCrops);
         let topRisks = dailyRisks.slice(0, 3).map(r => `${r.name} ${Math.round(r.score)}/100`);
         let topRiskStr = topRisks.length > 0 ? `\n   ↳ ${topRisks.join(', ')}` : '';
 
@@ -724,69 +731,118 @@ function generateHistoricalReport(history, lang = 'uk') {
     let validHistory = history.filter(h => 
         (typeof h.temp_avg === 'number' && !isNaN(h.temp_avg)) || 
         (typeof h.temp_max === 'number' && !isNaN(h.temp_max))
-    );
+    ).sort((a, b) => new Date(a.date) - new Date(b.date));
     
     if (validHistory.length === 0) return lang === 'uk' ? '❌ Недостатньо даних для аналізу.' : '❌ Not enough data for analysis.';
     
     let totalDays = validHistory.length;
-    
-    // Calculate average temperature safely, handling 0 and nulls
-    let avgTemp = validHistory.reduce((sum, d) => {
-        let t = (typeof d.temp_avg === 'number') ? d.temp_avg : ((d.temp_max + d.temp_min) / 2);
-        return sum + (isNaN(t) ? 0 : t);
-    }, 0) / totalDays;
-    
-    let totalPrecip = validHistory.reduce((sum, d) => sum + (d.precip || 0), 0);
-    let heatDays = validHistory.filter(d => (d.temp_max || 0) > 30).length;
-    let frostDays = validHistory.filter(d => (d.temp_min !== undefined && d.temp_min !== null) && d.temp_min < 0).length;
-    
-    // Sunny days calculation (handling null/undefined)
-    let sunnyDays = validHistory.filter(d => {
-        if (d.clouds_avg !== undefined && d.clouds_avg !== null) return d.clouds_avg < 25;
-        if (d.uv_max !== undefined && d.uv_max !== null) return d.uv_max > 6;
-        return false;
-    }).length;
-    
-    // Find absolute min/max safely
-    let tempMaxList = validHistory.map(d => d.temp_max).filter(v => typeof v === 'number' && !isNaN(v));
-    let tempMinList = validHistory.map(d => d.temp_min).filter(v => typeof v === 'number' && !isNaN(v));
-    
-    let absMax = tempMaxList.length > 0 ? Math.max(...tempMaxList) : avgTemp;
-    let absMin = tempMinList.length > 0 ? Math.min(...tempMinList) : avgTemp;
-    
-    let avgRh = validHistory.reduce((sum, d) => sum + (d.rh_avg || 0), 0) / totalDays;
-    
-    // GDD (Growing Degree Days) calculation with Tbase = 10°C
-    let gdd = validHistory.reduce((sum, d) => {
-        let tMax = (typeof d.temp_max === 'number') ? d.temp_max : (d.temp_avg || 10);
-        let tMin = (typeof d.temp_min === 'number') ? d.temp_min : (d.temp_avg || 10);
-        let dailyGdd = ((tMax + tMin) / 2) - 10;
-        return sum + Math.max(0, isNaN(dailyGdd) ? 0 : dailyGdd);
-    }, 0);
+    const startDateStr = validHistory[0].date.split('-').reverse().join('.');
+    const endDateStr = validHistory[validHistory.length - 1].date.split('-').reverse().join('.');
+    const dateRangeStr = startDateStr === endDateStr ? startDateStr : `${startDateStr} — ${endDateStr}`;
+
+    // Statistics calculation
+    let totalPrecip = 0;
+    let heatDays = 0;   // Tmax > 30
+    let tropicalNights = 0; // Tmin > 20
+    let coldStressDays = 0; // Tmax < 12 (growth stop)
+    let frostDays = 0;  // Tmin < 0
+    let fungalRiskDays = 0; // Tavg 15-25 and RH > 80
+    let vpdStressDays = 0; // Estimation of high VPD
+    let totalEvapEstimation = 0;
+    let gdd10 = 0; // For warm crops
+    let gdd5 = 0;  // For cold crops
+
+    let tempSum = 0;
+    let absMax = -999;
+    let absMin = 999;
+    let rhSum = 0;
+
+    validHistory.forEach(d => {
+        let tMax = d.temp_max;
+        let tMin = d.temp_min;
+        let tAvg = d.temp_avg || (tMax + tMin) / 2;
+        let rh = d.rh_avg || 50;
+
+        tempSum += tAvg;
+        rhSum += rh;
+        if (tMax > absMax) absMax = tMax;
+        if (tMin < absMin) absMin = tMin;
+
+        totalPrecip += (d.precip || 0);
+        if (tMax > 30) heatDays++;
+        if (tMin > 20) tropicalNights++;
+        if (tMin < 0) frostDays++;
+        if (tMax < 12) coldStressDays++;
+
+        // Fungal risk (simplified: warm and humid)
+        if (tAvg >= 15 && tAvg <= 26 && rh > 80) fungalRiskDays++;
+
+        // VPD Estimation
+        let svp = 0.6108 * Math.exp((17.27 * tAvg) / (tAvg + 237.3));
+        let vpd = svp * (1 - rh / 100);
+        if (vpd > 1.2) vpdStressDays++;
+
+        // Simple PET estimation (Potential Evapotranspiration)
+        // PET approx = 0.0023 * RA * (Tavg + 17.8) * sqrt(Tmax - Tmin)
+        // Without RA (radiation), we'll use a simplified daily multiplier
+        let dailyEvap = 0.2 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 0.1;
+        totalEvapEstimation += dailyEvap;
+
+        gdd10 += Math.max(0, tAvg - 10);
+        gdd5 += Math.max(0, tAvg - 5);
+    });
+
+    let avgTemp = tempSum / totalDays;
+    let avgRh = rhSum / totalDays;
+    let waterBalance = totalPrecip - totalEvapEstimation;
 
     let report = lang === 'uk' 
-        ? `📈 <b>Агро-Архів за останні ${totalDays} днів:</b>\n━━━━━━━━━━━━━━━━━━━━\n`
-        : `📈 <b>Agro-Archive for last ${totalDays} days:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+        ? `📈 <b>Агро-Архів (${dateRangeStr}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`
+        : `📈 <b>Agro-Archive (${dateRangeStr}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
 
     if (lang === 'uk') {
-        report += `🌡 <b>Темп:</b> сер. ${avgTemp.toFixed(1)}°C (від ${absMin.toFixed(1)} до ${absMax.toFixed(1)})\n`;
-        report += `☀️ <b>Сонячних днів:</b> ${sunnyDays}\n`;
-        report += `🧊 <b>Заморозки:</b> ${frostDays} ночей\n`;
-        report += `🧬 <b>СЕТ (>10°C):</b> ${gdd.toFixed(1)}°C\n`;
-        report += `💧 <b>Опади:</b> ${totalPrecip.toFixed(1)} мм (вологість ~${Math.round(avgRh)}%)\n`;
-        if (heatDays > 0) report += `🔥 <b>Спека (>30°C):</b> ${heatDays} днів\n`;
-        
+        report += `🌡 <b>Температура:</b>\n`;
+        report += `• Середня: ${avgTemp.toFixed(1)}°C\n`;
+        report += `• Розмах: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
+        report += `• СЕТ (>10°C): ${gdd10.toFixed(1)}°C\n`;
+        report += `• СЕТ (>5°C): ${gdd5.toFixed(1)}°C\n\n`;
+
+        report += `💧 <b>Водний баланс:</b>\n`;
+        report += `• Опади: ${totalPrecip.toFixed(1)} мм\n`;
+        report += `• Випаровування (ETo): ~${totalEvapEstimation.toFixed(1)} мм\n`;
+        report += `• Баланс: <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n\n`;
+
+        report += `⚠️ <b>Стрес-аналітика:</b>\n`;
+        if (frostDays > 0) report += `• Заморозки: ${frostDays} ночей 🧊\n`;
+        if (heatDays > 0) report += `• Спека (>30°C): ${heatDays} днів 🔥\n`;
+        if (tropicalNights > 0) report += `• Тропічні ночі (>20°C): ${tropicalNights} 🥵\n`;
+        if (coldStressDays > 0) report += `• Зупинка росту (<12°C): ${coldStressDays} дн. ❄️\n`;
+        if (vpdStressDays > 0) report += `• Повітряна посуха: ${vpdStressDays} дн. 💨\n`;
+        if (fungalRiskDays > 0) report += `• Ризик грибків: ${fungalRiskDays} дн. 🍄\n`;
+
         report += `━━━━━━━━━━━━━━━━━━━━\n`;
-        if (totalPrecip < 5 && avgTemp > 20) {
-            report += `⚠️ <b>Порада:</b> Накопичений дефіцит вологи. Рекомендується полив.`;
+        if (waterBalance < -20) {
+            report += `💡 <b>Порада:</b> Значний дефіцит вологи! Рослини випарували на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало опадів. Потрібен глибокий полив.\n`;
+        } else if (fungalRiskDays > totalDays * 0.3) {
+            report += `💡 <b>Порада:</b> Кожен третій день був вологим та теплим. Високий ризик гнилей та фітофтори! Перевірте густину посадок.\n`;
+        } else if (totalDays >= 7) {
+            report += `✅ Умови для розвитку стабільні.`;
         }
     } else {
-        report += `🌡 <b>Temp:</b> avg ${avgTemp.toFixed(1)}°C (from ${absMin.toFixed(1)} to ${absMax.toFixed(1)})\n`;
-        report += `☀️ <b>Sunny days:</b> ${sunnyDays}\n`;
-        report += `🧊 <b>Frost nights:</b> ${frostDays}\n`;
-        report += `🧬 <b>GDD (>10°C):</b> ${gdd.toFixed(1)}°C\n`;
-        report += `💧 <b>Precip:</b> ${totalPrecip.toFixed(1)} mm (humidity ~${Math.round(avgRh)}%)\n`;
-        if (heatDays > 0) report += `🔥 <b>Heat days (>30°C):</b> ${heatDays}\n`;
+        report += `🌡 <b>Temperature:</b>\n`;
+        report += `• Average: ${avgTemp.toFixed(1)}°C\n`;
+        report += `• Range: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
+        report += `• GDD (>10°C): ${gdd10.toFixed(1)}°C\n\n`;
+
+        report += `💧 <b>Water Balance:</b>\n`;
+        report += `• Precip: ${totalPrecip.toFixed(1)} mm\n`;
+        report += `• Evap (ETo): ~${totalEvapEstimation.toFixed(1)} mm\n`;
+        report += `• Balance: ${waterBalance.toFixed(1)} mm\n\n`;
+
+        report += `⚠️ <b>Stress Analytics:</b>\n`;
+        if (frostDays > 0) report += `• Frosts: ${frostDays}\n`;
+        if (heatDays > 0) report += `• Heat (>30°C): ${heatDays}\n`;
+        if (fungalRiskDays > 0) report += `• Fungal risk: ${fungalRiskDays} days\n`;
     }
 
     return report;
