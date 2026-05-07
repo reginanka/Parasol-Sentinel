@@ -418,7 +418,7 @@ bot.on('text', async (ctx) => {
                 }).sort({ date: -1 }).lean();
 
 
-                const report = generateHistoricalReport(history, lang, user.crops || []);
+                const report = await generateHistoricalReport(history, lang, user.crops || [], cityKey);
                 
                 return ctx.reply(report, { 
                     parse_mode: 'HTML',
@@ -766,7 +766,7 @@ bot.on('callback_query', async (ctx) => {
             }
 
 
-            const report = generateHistoricalReport(history, lang, user.crops || []);
+            const report = await generateHistoricalReport(history, lang, user.crops || [], cityKey);
 
             await ctx.answerCbQuery().catch(() => {});
             // Send as a new message as requested by the user
