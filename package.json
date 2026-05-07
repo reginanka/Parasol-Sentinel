@@ -10,7 +10,8 @@
     "telegraf": "^4.15.0"
   },
   "scripts": {
-    "start": "node api/bot.js"
+    "start": "node api/bot.js",
+    "init-history": "node scripts/initial-history-load.js"
   },
   "engines": {
     "node": ">=18.x"
