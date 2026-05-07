@@ -686,23 +686,42 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
 }
 
 function getLunarPhase(inputDate) {
-    let lp = ['🌑 Молодик', '🌒 Молодий місяць', '🌓 Перша чверть', '🌔 Випуклий місяць', '🌕 Повня', '🌖 Спадаючий місяць', '🌗 Остання чверть', '🌘 Старий місяць'];
+    const lp = [
+        '🌑 Молодик (новий)', 
+        '🌒 Місяць, що зростає', 
+        '🌓 Перша чверть', 
+        '🌔 Місяць, що зростає (випуклий)', 
+        '🌕 Повня', 
+        '🌖 Місяць, що спадає (випуклий)', 
+        '🌗 Остання чверть', 
+        '🌘 Місяць, що спадає (старий)'
+    ];
     const date = (inputDate instanceof Date) ? inputDate : new Date(inputDate);
     
-    let year = date.getFullYear();
-    let month = date.getMonth() + 1;
-    let day = date.getDate();
-    let c = 0, e = 0, jd = 0, b = 0;
-    if (month < 3) { year--; month += 12; }
-    month++;
-    c = 365.25 * year;
-    e = 30.6 * month;
-    jd = c + e + day - 694039.09;
-    jd /= 29.5305882;
-    b = parseInt(jd);
-    jd -= b;
-    b = Math.round(jd * 8);
-    if (b >= 8) b = 0;
+    // More accurate Julian Date calculation
+    const jd = (date.getTime() / 86400000) - (date.getTimezoneOffset() / 1440) + 2440587.5;
+    
+    // Days since last known new moon (approx reference point)
+    const referenceNewMoon = 2451550.1; // Jan 6, 2000
+    const lunarCycle = 29.530588853;
+    const age = (jd - referenceNewMoon) % lunarCycle;
+    const normalizedAge = age < 0 ? age + lunarCycle : age;
+    
+    const phaseIndex = normalizedAge / lunarCycle;
+    
+    // Determine phase with precise thresholds
+    // Each phase is approx 1/8 of the cycle (0.125)
+    // We center the primary phases (0, 0.25, 0.5, 0.75) with a small window
+    let b = 0;
+    if (phaseIndex < 0.03 || phaseIndex > 0.97) b = 0; // New Moon
+    else if (phaseIndex < 0.22) b = 1; // Waxing Crescent
+    else if (phaseIndex < 0.28) b = 2; // First Quarter
+    else if (phaseIndex < 0.47) b = 3; // Waxing Gibbous
+    else if (phaseIndex < 0.53) b = 4; // Full Moon
+    else if (phaseIndex < 0.72) b = 5; // Waning Gibbous
+    else if (phaseIndex < 0.78) b = 6; // Last Quarter
+    else b = 7; // Waning Crescent
+
     return { index: b, name: lp[b] };
 }
 
