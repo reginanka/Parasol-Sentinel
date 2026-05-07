@@ -72,16 +72,16 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         score: Math.min(phytophthora, 100),
         advice: isEarly
             ? 'Профілактика: препарати міді (Медян Екстра, Бордоська суміш). Уникайте вологи на листі.'
-            : (phytophthora >= 80 
-                ? 'Критична фаза! Терміново: Рідоміл Голд (25г/10л) або Магнікур Фіно (15мл/10л). Припиніть азотні добрива — вони "розм’якшують" лист!' 
+            : (phytophthora >= 80
+                ? 'Критична фаза! Терміново: Рідоміл Голд (25г/10л) або Магнікур Фіно (15мл/10л). Припиніть азотні добрива — вони "розм’якшують" лист!'
                 : 'Ризик зростає. Обробіть: Квадріс (6мл/10л) чи Фітоспорин. Підсильте імунітет калієм (Монофосфат калію 10-15г/10л).'),
         details: `Вологість ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C${d.precip > 0.8 ? ', очікується дощ' : ''}. Ризик +${historyPoints}% від минулих днів.`,
         relatedCrops: ['tomato', 'potato', 'eggplant']
     });
 
     // --- 2. ПЕРОНОСПОРOZ / НЕСПРАВЖНЯ БОРОШНИСТА РОСА ---
-    let downyHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.rh_avg > 85).length * 10 
+    let downyHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.rh_avg > 85).length * 10
         : 0;
 
     let downyMildew =
@@ -95,8 +95,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'downy_mildew',
         name: '🥒 Пероноспороз (огірки/цибуля)',
         score: Math.min(downyMildew, 100),
-        advice: downyMildew >= 80 
-            ? 'Критичний ризик! Терміново: Магнікур Енерджі (25мл/10л, пропамокарб+фосетил) або Ревус (6мл/10л). Забезпечте максимальне провітрювання теплиць!' 
+        advice: downyMildew >= 80
+            ? 'Критичний ризик! Терміново: Магнікур Енерджі (25мл/10л, пропамокарб+фосетил) або Ревус (6мл/10л). Забезпечте максимальне провітрювання теплиць!'
             : 'Ризик конденсату та туману. Профілактика: Квадріс (6мл/10л, азоксистробін) або Курзат (25г/10л). Провітрюйте теплиці та не поливайте ввечері.',
         details: `Точка роси: ${d.dewpt}°C, ризик рясної роси. +${downyHistory}% за вологість минулих днів.`,
         relatedCrops: ['cucumber', 'zucchini', 'grape']
@@ -176,34 +176,34 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     let sprayReasons = [];
     if (d.wind_spd > 5) { sprayScore += 60; sprayReasons.push('сильний вітер'); }
     else if (d.wind_spd > 3) { sprayScore += 25; sprayReasons.push('помірний вітер'); }
-    
+
     if (d.precip > 0.1) { sprayScore += 70; sprayReasons.push('опади'); }
-    
+
     if (d.temp > 30) { sprayScore += 50; sprayReasons.push('екстремальна спека'); }
     else if (d.temp > 25) { sprayScore += 20; sprayReasons.push('висока t°'); }
-    
+
     if (d.rh < 40) { sprayScore += 15; sprayReasons.push('низька вологість'); }
 
     risks.push({
         id: 'spray_check',
         name: '🚜 Вікно для обробки',
         score: Math.min(sprayScore, 100),
-        advice: sprayScore >= 70 
-            ? `Скасуйте обробку: ${sprayReasons.join(', ')}. Ефективність буде нульовою.` 
-            : (sprayScore >= 40 
-                ? `Умови ризиковані через ${sprayReasons.join(', ')}. Якщо можливо, перенесіть.` 
+        advice: sprayScore >= 70
+            ? `Скасуйте обробку: ${sprayReasons.join(', ')}. Ефективність буде нульовою.`
+            : (sprayScore >= 40
+                ? `Умови ризиковані через ${sprayReasons.join(', ')}. Якщо можливо, перенесіть.`
                 : 'Ідеальні умови для обприскування! Рекомендовано проводити рано вранці або ввечері.'),
         details: `Вітер: ${d.wind_spd.toFixed(1)}м/с, опади: ${d.precip.toFixed(2)}мм, t: ${d.temp.toFixed(1)}°C, вологість: ${Math.round(d.rh)}%.`
     });
 
     // --- 6. ГІПОКСІЯ / ПЕРЕЗВОЛОЖЕННЯ ---
-    let rainHistory = (history && history.length > 0) 
-        ? history.slice(0, 5).reduce((sum, h) => sum + (h.precip || 0), 0) 
+    let rainHistory = (history && history.length > 0)
+        ? history.slice(0, 5).reduce((sum, h) => sum + (h.precip || 0), 0)
         : 0;
 
     let hypoxia =
         score(d.precip > 20, 40) +
-        score(rainHistory > 40, 40) + 
+        score(rainHistory > 40, 40) +
         score(d.clouds > 80 && d.rh > 80, 20) +
         score(d.temp < 15, 10);
 
@@ -211,16 +211,16 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'hypoxia',
         name: '🌊 Задихання коренів',
         score: Math.min(hypoxia, 100),
-        advice: hypoxia >= 70 
-            ? 'Критичне перезволоження! Прокопайте водовідвідні канавки. Після підсихання — обов’язкове розпушування. Для захисту від гнилей: Магнікур Енерджі (пролив під корінь, пропамокарб+фосетил).' 
+        advice: hypoxia >= 70
+            ? 'Критичне перезволоження! Прокопайте водовідвідні канавки. Після підсихання — обов’язкове розпушування. Для захисту від гнилей: Магнікур Енерджі (пролив під корінь, пропамокарб+фосетил).'
             : 'Ґрунт перезволожений. Утримайтеся від поливу. Розпушіть землю ("сухий полив") для доступу кисню до коренів. Небезпечно для цибулі та полуниці.',
         details: `Випало ${d.precip.toFixed(1)}мм (всього за 5 днів: ${rainHistory.toFixed(1)}мм). Ґрунт перенасичений вологою.`,
         relatedCrops: ['cucumber', 'zucchini', 'strawberry', 'potato', 'cabbage', 'onion']
     });
 
     // --- 7. ПАРША (Venturia) ---
-    let scabHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.precip > 0.5).length * 15 
+    let scabHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.precip > 0.5).length * 15
         : 0;
 
     let scab =
@@ -232,8 +232,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'scab',
         name: '🍎 Парша плодових',
         score: Math.min(scab, 100),
-        advice: scab >= 80 
-            ? 'Критичний ризик! Терміново: Скор (2мл/10л, дифеноконазол) або Магнікур Сенсейшн (3.5мл/10л, флуопірам+трифлоксістробін). Уникайте надлишку азоту, він провокує хворобу!' 
+        advice: scab >= 80
+            ? 'Критичний ризик! Терміново: Скор (2мл/10л, дифеноконазол) або Магнікур Сенсейшн (3.5мл/10л, флуопірам+трифлоксістробін). Уникайте надлишку азоту, він провокує хворобу!'
             : 'Сприятливі умови для парші. Використовуйте Хорус (3г/10л, ципродиніл). Восени обов’язково обробіть опале листя Карбамідом (5-7%) для знищення інфекції.',
         details: `Вологий лист. Ризик +${scabHistory}% через опади в минулі дні.`,
         relatedCrops: ['apple', 'pear']
@@ -256,8 +256,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 10. АЛЬТЕРНАРІОЗ (суха плямистість) ---
-    let altHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.temp_avg > 25).length * 10 
+    let altHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.temp_avg > 25).length * 10
         : 0;
 
     let alternaria =
@@ -271,16 +271,16 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'alternaria',
         name: '🍂 Альтернаріоз',
         score: Math.min(alternaria, 100),
-        advice: alternaria >= 80 
-            ? 'Критичний ризик! Обробіть системно: Скор (2мл/10л, дифеноконазол) або Сігнум (10г/10л). Видаліть старе листя з концентричними плямами.' 
+        advice: alternaria >= 80
+            ? 'Критичний ризик! Обробіть системно: Скор (2мл/10л, дифеноконазол) або Сігнум (10г/10л). Видаліть старе листя з концентричними плямами.'
             : 'Умови для плямистостей. Профілактика: Квадріс (6мл/10л, азоксистробін) або Ревус Топ. Слідкуйте за нижнім листям.',
         details: `Спекотно та волого: ${d.temp.toFixed(1)}°C, ${Math.round(d.rh)}%. Ризик +${altHistory}% від спеки минулих днів.`,
         relatedCrops: ['tomato', 'potato', 'apple', 'sunflower']
     });
 
     // --- 11. АНТРАКНОЗ ---
-    let antHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.precip > 0).length * 15 
+    let antHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.precip > 0).length * 15
         : 0;
 
     let anthracnose =
@@ -293,16 +293,16 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'anthracnose',
         name: '🥀 Антракноз',
         score: Math.min(anthracnose, 100),
-        advice: anthracnose >= 80 
-            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Сігнум (10г/10л). Не поливайте по листу! Видаліть уражені плоди.' 
+        advice: anthracnose >= 80
+            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Сігнум (10г/10л). Не поливайте по листу! Видаліть уражені плоди.'
             : 'Умови для поширення плямистостей. Профілактика: Квадріс (6мл/10л) або Топсін-М. Підсильте імунітет фосфорно-калійним підживленням.',
         details: `Волого та тепло: ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C. Ризик +${antHistory}% через минулі дощі.`,
         relatedCrops: ['cucumber', 'watermelon', 'strawberry', 'grape', 'raspberry', 'apple', 'cherry']
     });
 
     // --- 12. СІРА ГНИЛЬ (Botrytis) ---
-    let botryHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.rh_avg > 80).length * 15 
+    let botryHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.rh_avg > 80).length * 15
         : 0;
 
     let botrytis =
@@ -316,15 +316,15 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         name: '🍓 Сіра гниль',
         score: Math.min(botrytis, 100),
         advice: botrytis >= 80
-            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Тельдор (8г/10л, фенгексамід). Видаляйте гнилі ягоди.' 
+            ? 'Критичний ризик! Світч (10г/10л, ципродиніл+флудіоксоніл) або Тельдор (8г/10л, фенгексамід). Видаляйте гнилі ягоди.'
             : 'Ризик гнилі. Профілактика: Фітоспорин та Кальцієва селітра (20г/10л) — вона робить шкірку ягід міцнішою.',
         details: `Вологість: ${Math.round(d.rh)}%, t: ${d.temp.toFixed(1)}°C. Ризик +${botryHistory}% від вологи минулих днів.`,
         relatedCrops: ['strawberry', 'grape', 'raspberry', 'tomato', 'pepper', 'cucumber', 'peony']
     });
 
     // --- 13. МОНІЛІОЗ (Monilinia) ---
-    let monHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.precip > 0.1).length * 15 
+    let monHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.precip > 0.1).length * 15
         : 0;
 
     let moniliaScore =
@@ -345,8 +345,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 14. ІРЖА (Rust) ---
-    let rustHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.rh_avg > 80).length * 15 
+    let rustHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.rh_avg > 80).length * 15
         : 0;
 
     let rust =
@@ -359,7 +359,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         id: 'rust',
         name: '🍂 Іржа (плямистість)',
         score: Math.min(rust, 100),
-        advice: rust >= 80 
+        advice: rust >= 80
             ? 'Масове ураження! Обробіть: Фалькон (6мл/10л) або Магнікур Сенсейшн (3.5мл/10л). На груші іржа приходить з ялівців!'
             : 'Помаранчеві плями. Профілактика: Скор або Топаз. Дайте мікроелементи (Плантафол 20-20-20 або Хелатин) для імунітету.',
         details: `Помірна t: ${d.temp.toFixed(1)}°C та вологість. Ризик +${rustHistory}% через сиру погоду.`,
@@ -367,8 +367,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 15. ПАВУТИННИЙ КЛІЩ (Spider Mite) ---
-    let miteHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.temp_avg > 28 && h.rh_avg < 50).length * 15 
+    let miteHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.temp_avg > 28 && h.rh_avg < 50).length * 15
         : 0;
 
     let spiderMiteScore =
@@ -389,8 +389,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 16. ПОПЕЛИЦЯ (Aphids) ---
-    let aphidHistory = (history && history.length > 0) 
-        ? history.slice(0, 3).filter(h => h.temp_avg >= 20 && h.temp_avg <= 28).length * 15 
+    let aphidHistory = (history && history.length > 0)
+        ? history.slice(0, 3).filter(h => h.temp_avg >= 20 && h.temp_avg <= 28).length * 15
         : 0;
 
     let aphidScore =
@@ -411,8 +411,8 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     });
 
     // --- 17. ХРУЩ (Травневий жук) ---
-    let cockHistory = (history && history.length > 0) 
-        ? history.slice(0, 5).filter(h => h.temp_avg > 10).length * 10 
+    let cockHistory = (history && history.length > 0)
+        ? history.slice(0, 5).filter(h => h.temp_avg > 10).length * 10
         : 0;
 
     let cockchaferScore =
@@ -548,7 +548,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     return risks
         .filter(r => {
             if (!r || typeof r.score !== 'number' || isNaN(r.score)) return false;
-            if (r.id === 'spray_check') return true; 
+            if (r.id === 'spray_check') return true;
             if (r.score < 40) return false;
             if (!userCrops || userCrops.length === 0) return true;
             if (!r.relatedCrops || !Array.isArray(r.relatedCrops) || r.relatedCrops.length === 0) return true;
@@ -567,25 +567,25 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
 
 function getGrowthStage() {
     let month = new Date().getMonth() + 1;
-    if (month >= 3 && month <= 4) return { 
-        id: 'early_spring', 
-        name: 'Рання весна (стадія бруньки)', 
-        fertilizer: 'Високий Азот (N) для росту зелені (напр. NPK 30-10-10 або Селітра). Дозування: 20-30г на 10л.' 
+    if (month >= 3 && month <= 4) return {
+        id: 'early_spring',
+        name: 'Рання весна (стадія бруньки)',
+        fertilizer: 'Високий Азот (N) для росту зелені (напр. NPK 30-10-10 або Селітра). Дозування: 20-30г на 10л.'
     };
-    if (month === 5) return { 
-        id: 'late_spring', 
-        name: 'Пізня весна (цвітіння)', 
-        fertilizer: 'Збалансоване живлення (NPK 20-20-20) + Бор (B) для зав’язі. Дозування: 20г на 10л.' 
+    if (month === 5) return {
+        id: 'late_spring',
+        name: 'Пізня весна (цвітіння)',
+        fertilizer: 'Збалансоване живлення (NPK 20-20-20) + Бор (B) для зав’язі. Дозування: 20г на 10л.'
     };
-    if (month >= 6 && month <= 8) return { 
-        id: 'summer', 
-        name: 'Літо (плодоношення)', 
-        fertilizer: 'Високий Калій (K) для смаку та ваги (напр. NPK 10-11-33 або 5-15-45). Дозування: 25г на 10л.' 
+    if (month >= 6 && month <= 8) return {
+        id: 'summer',
+        name: 'Літо (плодоношення)',
+        fertilizer: 'Високий Калій (K) для смаку та ваги (напр. NPK 10-11-33 або 5-15-45). Дозування: 25г на 10л.'
     };
-    if (month >= 9 && month <= 10) return { 
-        id: 'autumn', 
-        name: 'Осінь (підготовка до зими)', 
-        fertilizer: 'Без Азоту! Тільки Фосфор та Калій (NPK 0-25-50) для зміцнення кори. Дозування: 20г на 10л.' 
+    if (month >= 9 && month <= 10) return {
+        id: 'autumn',
+        name: 'Осінь (підготовка до зими)',
+        fertilizer: 'Без Азоту! Тільки Фосфор та Калій (NPK 0-25-50) для зміцнення кори. Дозування: 20г на 10л.'
     };
     return { id: 'winter', name: 'Зима (спокій)', fertilizer: 'Підживлення не потрібне.' };
 }
@@ -618,7 +618,7 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
 
         message += `${esc(r.name)}: ${level} (${Math.round(r.score)}/100)\n`;
         message += `  ↳ <i>${esc(r.details || '')}</i>\n`;
-        
+
         let cropMention = '';
         if (r.userMatchedCrops && r.userMatchedCrops.length > 0) {
             const cropNames = r.userMatchedCrops.map(id => {
@@ -627,13 +627,13 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
                 }
                 return id;
             });
-            cropMention = lang === 'uk' 
+            cropMention = lang === 'uk'
                 ? `\n  📍 <b>Ваші культури під загрозою:</b> ${cropNames.join(', ')}.`
                 : `\n  📍 <b>Your crops at risk:</b> ${cropNames.join(', ')}.`;
         }
 
-        message += lang === 'uk' 
-            ? `  👉 <b>Порада:</b> ${esc(r.advice || '')}${cropMention}\n\n` 
+        message += lang === 'uk'
+            ? `  👉 <b>Порада:</b> ${esc(r.advice || '')}${cropMention}\n\n`
             : `  👉 <b>Advice:</b> ${esc(r.advice || '')}${cropMention}\n\n`;
     });
 
@@ -666,20 +666,20 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
     relevantForecast.slice(0, 5).forEach(day => {
         let dateObj = new Date(day.valid_date || day.datetime);
         let dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
-        
+
         let dailyRisks = analyzeAgroRisks(day, history, userCrops);
         let sprayRisk = dailyRisks.find(r => r.id === 'spray_check');
         let sprayScore = sprayRisk ? sprayRisk.score : 0;
 
         let icon = sprayScore >= 70 ? '🔴' : (sprayScore >= 40 ? '🟡' : '🟢');
-        
+
         let topRisks = dailyRisks.filter(r => r.id !== 'spray_check').slice(0, 3).map(r => `${r.name} ${Math.round(r.score)}/100`);
         let topRiskStr = topRisks.length > 0 ? `\n   ↳ ${topRisks.join(', ')}` : '';
 
-        let status = sprayScore >= 70 ? (lang === 'uk' ? 'Ризиковано' : 'Risky') : 
-                     (sprayScore >= 40 ? (lang === 'uk' ? 'Помірний ризик' : 'Moderate risk') : 
-                     (lang === 'uk' ? 'Сприятливо' : 'Favorable'));
-        
+        let status = sprayScore >= 70 ? (lang === 'uk' ? 'Ризиковано' : 'Risky') :
+            (sprayScore >= 40 ? (lang === 'uk' ? 'Помірний ризик' : 'Moderate risk') :
+                (lang === 'uk' ? 'Сприятливо' : 'Favorable'));
+
         report += `${icon} <b>${dayStr}</b>: ${status}${topRiskStr}\n`;
     });
     return report;
@@ -723,15 +723,15 @@ function analyzeLunarImpact(d, lang = 'uk') {
 function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
     const { CROPS_DATA } = require('./crops');
     if (!history || !Array.isArray(history) || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
-    
+
     // Filter out records that don't have essential temperature data
-    let validHistory = history.filter(h => 
-        (typeof h.temp_avg === 'number' && !isNaN(h.temp_avg)) || 
+    let validHistory = history.filter(h =>
+        (typeof h.temp_avg === 'number' && !isNaN(h.temp_avg)) ||
         (typeof h.temp_max === 'number' && !isNaN(h.temp_max))
     ).sort((a, b) => new Date(a.date) - new Date(b.date));
-    
+
     if (validHistory.length === 0) return lang === 'uk' ? '❌ Недостатньо даних для аналізу.' : '❌ Not enough data for analysis.';
-    
+
     let totalDays = validHistory.length;
     const startDateStr = validHistory[0].date.split('-').reverse().join('.');
     const endDateStr = validHistory[validHistory.length - 1].date.split('-').reverse().join('.');
@@ -742,12 +742,17 @@ function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
     let heatDays = 0;
     let tropicalNights = 0;
     let coldStressDays = 0;
-    let frostDays = 0;
+    let groundFrosts = 0;      // +2...0, ясно, штиль
+    let radiationFrosts = 0;   // 0...-3
+    let advectiveFrosts = 0;   // < -3
     let fungalRiskDays = 0;
     let vpdStressDays = 0;
+    let windStressDays = 0;
+    let pollinationStressDays = 0;
     let totalEvapEstimation = 0;
     let gdd10 = 0;
     let gdd5 = 0;
+    let currentGDD5 = 0;
 
     let tempSum = 0;
     let absMax = -999;
@@ -768,15 +773,46 @@ function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
         totalPrecip += (d.precip || 0);
         if (tMax > 30) heatDays++;
         if (tMin > 20) tropicalNights++;
-        if (tMin < 0) frostDays++;
-        if (tMax < 12) coldStressDays++;
+
+        // СЕТ для поточного моменту (щоб розуміти, чи прокинулися рослини)
+        currentGDD5 += Math.max(0, tAvg - 5);
+        let month = new Date(d.date).getMonth() + 1;
+        let isAgroSeason = (currentGDD5 > 40) || (month >= 3 && month <= 10);
+
+        if (isAgroSeason) {
+            if (tMin < -3) {
+                advectiveFrosts++;
+            } else if (tMin <= 0) {
+                radiationFrosts++;
+            } else if (tMin <= 2 && (d.clouds_avg || 100) < 30) {
+                groundFrosts++;
+            }
+            if (tMax < 12) coldStressDays++;
+        }
 
         if (tAvg >= 15 && tAvg <= 26 && rh > 80) fungalRiskDays++;
         let svp = 0.6108 * Math.exp((17.27 * tAvg) / (tAvg + 237.3));
         let vpd = svp * (1 - rh / 100);
         if (vpd > 1.2) vpdStressDays++;
-        let dailyEvap = 0.2 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 0.1;
-        totalEvapEstimation += dailyEvap;
+
+        // --- НОВІ ПРОФЕСІЙНІ МЕТРИКИ ---
+        
+        // 1. Уточнене випаровування (ETo) з урахуванням вітру та сонця
+        let etoBase = 0.0023 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 14; 
+        etoBase *= (1 - (d.clouds_avg || 50) / 250); // Хмари зменшують радіацію
+        etoBase *= (1 + (d.wind_spd_max || 3) / 15); // Вітер підсилює випаровування
+        totalEvapEstimation += etoBase;
+
+        // 2. Вітровий стрес (>9 м/с - ризик механічних пошкоджень)
+        if ((d.wind_spd_max || 0) > 9) windStressDays++;
+
+        // 3. Стрес запилення (у місяці цвітіння 4-6)
+        if (month >= 4 && month <= 6) {
+            if (tMax > 31 || tMax < 13 || (d.precip || 0) > 1 || (d.wind_spd_max || 0) > 8) {
+                pollinationStressDays++;
+            }
+        }
+
         gdd10 += Math.max(0, tAvg - 10);
         gdd5 += Math.max(0, tAvg - 5);
     });
@@ -785,7 +821,7 @@ function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
     let waterBalance = totalPrecip - totalEvapEstimation;
     let sunnyDays = validHistory.filter(d => (d.clouds_avg || 100) < 25 || (d.uv_max || 0) > 6).length;
 
-    let report = lang === 'uk' 
+    let report = lang === 'uk'
         ? `📈 <b>Агро-Архів (${dateRangeStr}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`
         : `📈 <b>Agro-Archive (${dateRangeStr}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
 
@@ -799,57 +835,86 @@ function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
 
         report += `💧 <b>Водний баланс:</b>\n`;
         report += `• Опади: ${totalPrecip.toFixed(1)} мм\n`;
-        report += `• Випаровування: ~${totalEvapEstimation.toFixed(1)} мм\n`;
+        report += `• Випаровування (ETo): ~${totalEvapEstimation.toFixed(1)} мм\n`;
         report += `• Баланс: <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n\n`;
 
         report += `⚠️ <b>Стрес-аналітика:</b>\n`;
-        if (frostDays > 0) report += `• Заморозки: ${frostDays} ночей 🧊\n`;
+        if (advectiveFrosts > 0) report += `• Адвективні морози (&lt;-3°C): ${advectiveFrosts} 🧊🆘\n`;
+        if (radiationFrosts > 0) report += `• Радіаційні заморозки (0..-3°C): ${radiationFrosts} ❄️\n`;
+        if (groundFrosts > 0) report += `• Приморозки на ґрунті (ясно/штиль): ${groundFrosts} 🧊\n`;
         if (heatDays > 0) report += `• Спека (&gt;30°C): ${heatDays} днів 🔥\n`;
         if (tropicalNights > 0) report += `• Тропічні ночі (&gt;20°C): ${tropicalNights} 🥵\n`;
         if (coldStressDays > 0) report += `• Зупинка росту (&lt;12°C): ${coldStressDays} дн. ❄️\n`;
         if (vpdStressDays > 0) report += `• Повітряна посуха: ${vpdStressDays} дн. 💨\n`;
+        if (windStressDays > 0) report += `• Вітровий стрес (&gt;9м/с): ${windStressDays} дн. 🌪\n`;
+        if (pollinationStressDays > 0) report += `• Проблеми запилення: ${pollinationStressDays} дн. 🐝🚫\n`;
         if (fungalRiskDays > 0) report += `• Ризик грибків: ${fungalRiskDays} дн. 🍄\n`;
 
+        // Індекс складності сезону
+        let stressScore = (
+            (advectiveFrosts * 12) + (radiationFrosts * 6) + (groundFrosts * 3) +
+            (heatDays * 5) + (windStressDays * 4) + (pollinationStressDays * 4) +
+            (fungalRiskDays * 3)
+        ) / totalDays;
+        let diffIndex = Math.min(10, Math.max(1, Math.round(stressScore * 1.5)));
+        let diffLabel = diffIndex > 7 ? "Екстремальний" : (diffIndex > 4 ? "Помірний" : "Легкий");
+
+        report += `\n📊 <b>Індекс складності: ${diffIndex}/10 (${diffLabel})</b>\n`;
         report += `━━━━━━━━━━━━━━━━━━━━\n`;
 
         // EXPERT SUMMARY SECTION (FOR LONG PERIODS)
         if (totalDays >= 30) {
             report += `🧐 <b>Експертний висновок:</b>\n`;
-            
+
             // 1. Characterization
             let char = "Рік (період) характеризується як ";
             if (avgTemp > 18) char += "інтенсивно-теплий ";
             else if (avgTemp > 12) char += "помірно-теплий ";
             else char += "прохолодний ";
-            
+
             if (waterBalance < -50) char += "з вираженим дефіцитом вологи.";
             else if (waterBalance > 50) char += "з надмірним зволоженням.";
             else char += "з нормальним зволоженням.";
             report += `• ${char}\n`;
 
-            // 2. Growth
-            let growth = `Завдяки СЕТ ${gdd10.toFixed(0)}°C, приріст культур мав бути `;
-            if (gdd10 > 1500) growth += "максимальним. ";
-            else if (gdd10 > 1000) growth += "стабільним. ";
-            else growth += "сповільненим. ";
+            // 2. Growth & SET
+            const warmCropsList = ['tomato', 'pepper', 'grape', 'peach', 'watermelon', 'eggplant', 'apricot'];
+            const hasWarmCrops = userCrops.some(c => warmCropsList.includes(c));
             
+            let setMsg = `Накопичено СЕТ ${gdd5.toFixed(0)}°C (база 5°C для малини, дерев та ягід). `;
+            if (hasWarmCrops) {
+                setMsg += `Для ваших теплолюбних культур (база 10°C) накопичено ${gdd10.toFixed(0)}°C. `;
+            }
+            
+            let growth = `${setMsg}Приріст мав бути `;
+            if (gdd5 > 2000 || (hasWarmCrops && gdd10 > 1200)) growth += "максимальним. ";
+            else if (gdd5 > 1200 || (hasWarmCrops && gdd10 > 800)) growth += "стабільним. ";
+            else growth += "сповільненим. ";
+
             if (userCrops.length > 0) {
                 const warmCrops = ['tomato', 'pepper', 'grape', 'peach', 'watermelon'];
                 const matchedWarm = userCrops.filter(c => warmCrops.includes(c));
                 if (matchedWarm.length > 0 && gdd10 > 1200) {
-                    growth += `Умови були ідеальними для ваших теплолюбних рослин (${matchedWarm.length}).`;
+                    growth += `Умови були ідеальними для ваших теплолюбних рослин (${matchedWarm.length}). `;
                 }
+            }
+            if (coldStressDays > totalDays * 0.25) {
+                growth += `Проте, велика кількість холодних днів (${coldStressDays}) суттєво гальмувала розвиток. `;
+            }
+            if (pollinationStressDays > 10) {
+                growth += `Увага: через ${pollinationStressDays} днів негоди в період цвітіння, зав'язь може бути неповною. `;
             }
             report += `• <b>Ріст:</b> ${growth}\n`;
 
             // 3. Risks
+            let risksInfo = "";
             if (vpdStressDays > 15) {
-                let riskText = `Головною проблемою була повітряна посуха (${vpdStressDays} дн.). `;
-                if (userCrops.includes('conifers') || userCrops.includes('hydrangea') || userCrops.includes('cucumber')) {
-                    riskText += "Це могло призвести до підсихання листя або хвої у ваших вологолюбних культур, якщо не було дощування.";
-                }
-                report += `• <b>Ризики:</b> ${riskText}\n`;
+                risksInfo += `Головною проблемою була повітряна посуха. `;
             }
+            if (windStressDays > 7) {
+                risksInfo += `Часті сильні вітри (${windStressDays} дн.) посилювали випаровування та могли травмувати листя. `;
+            }
+            if (risksInfo) report += `• <b>Ризики:</b> ${risksInfo}\n`;
 
             // 4. Health & Frost
             let health = "";
@@ -858,11 +923,15 @@ function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
             } else {
                 health = `Високий інфекційний фон (${fungalRiskDays} дн. вологи) вимагав посиленого фунгіцидного захисту. `;
             }
-            
-            if (frostDays > 20) {
-                health += `Велика кількість заморозки (${frostDays}) вимагала ретельного укриття чутливих рослин навесні.`;
+
+            if (advectiveFrosts > 0) {
+                health += `Адвективні морози (${advectiveFrosts} дн.) були критичними — ризик пошкодження навіть багаторічних пагонів. `;
+            } else if (radiationFrosts > 0) {
+                health += `Радіаційні заморозки (${radiationFrosts} дн.) загрожували переважно цвіту та молодій завязі. `;
+            } else if (groundFrosts > 0) {
+                health += `Приморозки на ґрунті (${groundFrosts} дн.) вимагали захисту полуниці та низьких овочевих культур. `;
             }
-            report += `• <b>Здоров'я:</b> ${health}\n`;
+            if (health) report += `• <b>Здоров'я:</b> ${health}\n`;
         } else {
             if (waterBalance < -20) {
                 report += `💡 <b>Порада:</b> Значний дефіцит вологи! Рослини випарували на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало опадів. Потрібен глибокий полив.\n`;
@@ -896,12 +965,12 @@ async function fetchMissingHistory(cityDoc, days = 30) {
     if (!cityDoc || !cityDoc.lat || !cityDoc.lon) return;
 
     const externalId = cityDoc.externalId || `${cityDoc.lat.toFixed(2)},${cityDoc.lon.toFixed(2)}`;
-    
+
     // 1. Визначаємо часовий проміжок
     const today = new Date();
     const startDate = new Date(today);
     startDate.setDate(today.getDate() - days);
-    
+
     const startDateStr = startDate.toISOString().split('T')[0];
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
@@ -912,7 +981,7 @@ async function fetchMissingHistory(cityDoc, days = 30) {
         externalId,
         date: { $gte: startDateStr, $lte: endDateStr }
     }, { date: 1 }).lean();
-    
+
     const existingDates = new Set(existingRecords.map(r => r.date));
 
     // 3. Генеруємо список усіх дат у проміжку
@@ -930,7 +999,7 @@ async function fetchMissingHistory(cityDoc, days = 30) {
 
     // 4. Знаходимо пропущені дати
     const missingDates = allDates.filter(d => !existingDates.has(d));
-    
+
     if (missingDates.length === 0) return;
 
     console.log(`[Agro] Missing ${missingDates.length} days for ${cityDoc.name}. Fetching...`);
@@ -938,7 +1007,7 @@ async function fetchMissingHistory(cityDoc, days = 30) {
     try {
         // Отримуємо дані з Open-Meteo Archive API за весь період (так простіше і швидше за 1 запит)
         const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${cityDoc.lat}&longitude=${cityDoc.lon}&start_date=${startDateStr}&end_date=${endDateStr}&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,relative_humidity_2m_mean,wind_speed_10m_max,cloud_cover_mean&timezone=auto`;
-        
+
         const response = await axios.get(url);
         const daily = response.data.daily;
 
@@ -947,7 +1016,7 @@ async function fetchMissingHistory(cityDoc, days = 30) {
         const bulkOps = [];
         for (let i = 0; i < daily.time.length; i++) {
             const date = daily.time[i];
-            
+
             // ДОДАЄМО ТІЛЬКИ ЯКЩО ДАТИ НЕМАЄ В БАЗІ (як просив користувач)
             if (missingDates.includes(date)) {
                 bulkOps.push({
@@ -979,12 +1048,12 @@ async function fetchMissingHistory(cityDoc, days = 30) {
     }
 }
 
-module.exports = { 
-    analyzeAgroRisks, 
-    formatAgroReport, 
-    analyzeSprayingWindow, 
-    generateHistoricalReport, 
-    getLunarPhase, 
+module.exports = {
+    analyzeAgroRisks,
+    formatAgroReport,
+    analyzeSprayingWindow,
+    generateHistoricalReport,
+    getLunarPhase,
     getGrowthStage,
-    fetchMissingHistory 
+    fetchMissingHistory
 };
