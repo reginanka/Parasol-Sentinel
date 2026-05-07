@@ -47,7 +47,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     }
 
 
-    let stage = getGrowthStage();
+    let stage = getGrowthStage(history);
     let isEarly = stage.id === 'early_spring';
 
     // --- 1. ФІТОФТОРОЗ (Phytophthora infestans) ---
@@ -545,6 +545,82 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         }
     }
 
+    // --- 25. М'ЯКА ПІДТРИМКА ТА ІМУНІТЕТ (Soft Advice Engine) ---
+    
+    // 1. Модель стану ґрунту
+    let totalRain7 = history.slice(0, 7).reduce((sum, h) => sum + (h.precip || 0), 0);
+    let soilTemp = d.temp * 0.7 + (history.length > 0 ? (history[0].temp_avg || d.temp) * 0.3 : d.temp);
+    let soilMoistureIndex = Math.max(0, (totalRain7 + d.precip) - (history.length * 2)); 
+    
+    if (soilTemp > 10 && soilTemp < 22 && soilMoistureIndex > 10 && soilMoistureIndex < 50) {
+        risks.push({
+            id: 'soil_perfect',
+            name: '🌱 Ідеальний ґрунт',
+            score: 40,
+            advice: 'Температура та вологість ґрунту ідеальні для висадки. Не проґавте вікно!',
+            details: `t ґрунту: ~${soilTemp.toFixed(1)}°C, вологи достатньо.`
+        });
+    }
+
+    // 2. Кумулятивний УФ-стрес
+    let heavyUVCount = history.filter(h => (h.uv_max || h.uv || 0) > 7).length;
+    if (heavyUVCount >= 2 && d.uv > 7) {
+        risks.push({
+            id: 'cumulative_uv',
+            name: '☀️ УФ-виснаження',
+            score: 65,
+            advice: 'Це вже декілька днів агресивне сонце. Рослини втратили захисний віск. Потрібне затінення.',
+            details: `Серія з ${heavyUVCount + 1} днів високого УФ.`
+        });
+    }
+
+    // 3. Реабілітація після стресу
+    let recentStress = history.slice(0, 3).some(h => (h.temp_min < 1) || (h.wind_spd_max > 12));
+    if (recentStress && d.temp > 10) {
+        risks.push({
+            id: 'recovery_mode',
+            name: '🏥 Режим відновлення',
+            score: 90,
+            advice: 'Рослини після стресу! Тільки антистресанти (Мегафол, Амінокат). Жодних добрив під корінь!',
+            details: 'Метаболізм відновлюється після морозу/вітру.'
+        });
+    }
+
+    // 4. Біо-захист через росу
+    if (d.temp - d.dewpt < 2) {
+        risks.push({
+            id: 'bio_protection',
+            name: '🦠 Біо-бар\'єр (Роса)',
+            score: 45,
+            advice: 'Очікується сильна роса. Використайте Фітоспорин ввечері — він створить живий щит.',
+            details: 'Умови ідеальні для активації корисних бактерій.'
+        });
+    }
+
+    // 5. Зміцнення стінок (Кальцій/Кремній)
+    if (d.rh > 80 && d.temp > 18) {
+        risks.push({
+            id: 'calcium_support',
+            name: '🧪 Зміцнення імунітету',
+            score: 55,
+            advice: 'Сира погода. Підкорміть Кальцієвою селітрою, щоб зміцнити лист до атак грибка.',
+            details: 'Підготовка "броні" для клітин.',
+            relatedCrops: ['tomato', 'pepper', 'cucumber', 'apple']
+        });
+    }
+
+    // 6. Запилення та Бор
+    if (stage.id === 'late_spring' && (d.wind_spd > 5 || d.precip > 0.5)) {
+        risks.push({
+            id: 'boron_support',
+            name: '🐝 Підтримка зав\'язі',
+            score: 60,
+            advice: 'Складні умови для комах. Додайте Бор (Бороплюс) для кращого запилення.',
+            details: 'Стимуляція запилення.',
+            relatedCrops: ['tomato', 'strawberry', 'apple', 'cherry', 'grape']
+        });
+    }
+
     return risks
         .filter(r => {
             if (!r || typeof r.score !== 'number' || isNaN(r.score)) return false;
@@ -565,29 +641,23 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         });
 }
 
-function getGrowthStage() {
-    let month = new Date().getMonth() + 1;
-    if (month >= 3 && month <= 4) return {
-        id: 'early_spring',
-        name: 'Рання весна (стадія бруньки)',
-        fertilizer: 'Високий Азот (N) для росту зелені (напр. NPK 30-10-10 або Селітра). Дозування: 20-30г на 10л.'
-    };
-    if (month === 5) return {
-        id: 'late_spring',
-        name: 'Пізня весна (цвітіння)',
-        fertilizer: 'Збалансоване живлення (NPK 20-20-20) + Бор (B) для зав’язі. Дозування: 20г на 10л.'
-    };
-    if (month >= 6 && month <= 8) return {
-        id: 'summer',
-        name: 'Літо (плодоношення)',
-        fertilizer: 'Високий Калій (K) для смаку та ваги (напр. NPK 10-11-33 або 5-15-45). Дозування: 25г на 10л.'
-    };
-    if (month >= 9 && month <= 10) return {
-        id: 'autumn',
-        name: 'Осінь (підготовка до зими)',
-        fertilizer: 'Без Азоту! Тільки Фосфор та Калій (NPK 0-25-50) для зміцнення кори. Дозування: 20г на 10л.'
-    };
-    return { id: 'winter', name: 'Зима (спокій)', fertilizer: 'Підживлення не потрібне.' };
+function getGrowthStage(history = []) {
+    // Розрахунок СЕТ (Сума Ефективних Температур > 5°C)
+    // Якщо історії немає, використовуємо поточну дату як fallback
+    if (!history || history.length < 5) {
+        let month = new Date().getMonth() + 1;
+        if (month >= 3 && month <= 4) return { id: 'early_spring', name: 'Рання весна (стадія бруньки)', gdd: 0 };
+        if (month === 5) return { id: 'late_spring', name: 'Пізня весна (цвітіння)', gdd: 300 };
+        if (month >= 6 && month <= 8) return { id: 'summer', name: 'Літо (плодоношення)', gdd: 800 };
+        return { id: 'autumn', name: 'Осінь', gdd: 1500 };
+    }
+
+    let gdd5 = history.reduce((sum, h) => sum + Math.max(0, (h.temp_avg || h.temp || 0) - 5), 0);
+    
+    if (gdd5 < 150) return { id: 'early_spring', name: 'Рання весна (брунька)', gdd: gdd5, fertilizer: 'Азот (Селітра 20г/10л)' };
+    if (gdd5 < 400) return { id: 'late_spring', name: 'Пізня весна (цвітіння)', gdd: gdd5, fertilizer: 'Бор + NPK 20-20-20' };
+    if (gdd5 < 1200) return { id: 'summer', name: 'Літо (плодоношення)', gdd: gdd5, fertilizer: 'Калій (Монофосфат калію 20г/10л)' };
+    return { id: 'autumn', name: 'Осінь (підготовка)', gdd: gdd5, fertilizer: 'Фосфор-Калій (0-25-50)' };
 }
 
 function formatAgroReport(city, risks, lang = 'uk', date = null) {
@@ -661,60 +731,130 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
 
 function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrops = []) {
     if (!forecastData || !Array.isArray(forecastData)) return '';
-    let report = lang === 'uk' ? '🚜 <b>Графік робіт на 5 днів:</b>\n' : '🚜 <b>5-Day Treatment Schedule:</b>\n';
 
+    // 1. ПЕРВИННИЙ ЗБІР ДАНИХ (Аналізуємо всі 5 днів)
     const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Europe/Kyiv' }).slice(0, 10);
     const relevantForecast = forecastData.filter(day => {
         const d = (day.valid_date || day.datetime || '');
         return d.startsWith(todayStr) || d > todayStr;
+    }).slice(0, 5);
+
+    let dailyResults = relevantForecast.map(day => {
+        return {
+            day: day,
+            risks: analyzeAgroRisks(day, history, userCrops),
+            date: new Date(day.valid_date || day.datetime)
+        };
     });
 
-    relevantForecast.slice(0, 5).forEach(day => {
-        let dateObj = new Date(day.valid_date || day.datetime);
-        let dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
+    // 2. ЕКСПЕРТНИЙ АНАЛІЗ ПЕРІОДУ
+    let expertSummary = '';
+    if (lang === 'uk') {
+        expertSummary = `🚜 **РОЗУМНИЙ АГРО-ПЛАН (5 ДНІВ)**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **ЕКСПЕРТНИЙ ВИСНОВОК:**\n`;
+        
+        // а) Розрахунок тренду інфекції
+        let infScore = 0;
+        let maxInf = 0;
+        relevantForecast.forEach(d => {
+            if (d.temp >= 15 && d.temp <= 26 && d.rh > 80) infScore += 10;
+            else if (d.clouds < 30 && d.rh < 60) infScore = Math.max(0, infScore - 5);
+            if (infScore > maxInf) maxInf = infScore;
+        });
+        
+        // б) Порівняння шкідників (Ідея 6)
+        let pestStats = {};
+        const pestIds = ['aphids', 'spider_mite', 'cockchafer', 'codling_moth'];
+        dailyResults.forEach(res => {
+            res.risks.forEach(r => {
+                if (pestIds.includes(r.id)) {
+                    if (!pestStats[r.id]) pestStats[r.id] = { name: r.name, scores: [] };
+                    pestStats[r.id].scores.push(r.score);
+                }
+            });
+        });
 
-        let dailyRisks = analyzeAgroRisks(day, history, userCrops);
-        let sprayRisk = dailyRisks.find(r => r.id === 'spray_check');
+        // Формуємо вердикт по шкідниках
+        let pestAdvice = '';
+        Object.keys(pestStats).forEach(id => {
+            let maxS = Math.max(...pestStats[id].scores);
+            if (maxS >= 70) pestAdvice += `• 🪲 **${pestStats[id].name}:** Активно плодиться (${Math.round(maxS)}/100). Обробіть уже зараз!\n`;
+            else if (maxS < 30 && maxS > 0) pestAdvice += `• 🪲 **${pestStats[id].name}:** Ризик низький (${Math.round(maxS)}/100). Ще зарано, не витрачайте ліки.\n`;
+        });
+        if (pestAdvice) expertSummary += pestAdvice;
+
+        // в) Інфекція та Живлення
+        if (maxInf > 30) {
+            expertSummary += `• 🦠 **Інфекція:** Фон грибків зросте (+${maxInf}). **Дія:** Підкорміть Кальцієм або Калієм сьогодні, щоб зміцнити імунітет.\n`;
+        } else {
+            expertSummary += `• 🦠 **Інфекція:** Фон чистий. Рослини в безпеці.\n`;
+        }
+
+        // г) Порада щодо реабілітації
+        let isRecovery = dailyResults.some(r => r.risks.some(risk => risk.id === 'recovery_mode'));
+        if (isRecovery) {
+            expertSummary += `• 🏥 **Реабілітація:** Був стрес. Тільки антистресанти, жодних добрив під корінь!\n`;
+        }
+    } else {
+        expertSummary = `🚜 **SMART AGRO-PLAN (5 DAYS)**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **EXPERT SUMMARY:**\n• Analysis of pests and infection trends included below.\n`;
+    }
+
+    expertSummary += `\n📅 **ПОКРОКОВИЙ ПЛАН:**\n`;
+
+    // 3. ФОРМУВАННЯ ГРАФІКА
+    dailyResults.forEach(res => {
+        let day = res.day;
+        let dayStr = res.date.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
+
+        let sprayRisk = res.risks.find(r => r.id === 'spray_check');
         let sprayScore = sprayRisk ? sprayRisk.score : 0;
-
         let icon = sprayScore >= 70 ? '🔴' : (sprayScore >= 40 ? '🟡' : '🟢');
-
-        let topRisks = dailyRisks.filter(r => r.id !== 'spray_check').slice(0, 3).map(r => `${r.name} ${Math.round(r.score)}/100`);
-        let topRiskStr = topRisks.length > 0 ? `\n   ↳ ${topRisks.join(', ')}` : '';
 
         let status = sprayScore >= 70 ? (lang === 'uk' ? 'Ризиковано' : 'Risky') :
             (sprayScore >= 40 ? (lang === 'uk' ? 'Помірний ризик' : 'Moderate risk') :
                 (lang === 'uk' ? 'Сприятливо' : 'Favorable'));
 
-        report += `${icon} <b>${dayStr}</b>: ${status}${topRiskStr}\n`;
+        expertSummary += `${icon} <b>${dayStr}</b>: ${status} (t:${day.temp.toFixed(0)}°, ${day.wind_spd.toFixed(1)}м/с)\n`;
+
+        // Додаємо конкретні дії (найважливіші)
+        let primaryRisk = res.risks.filter(r => r.id !== 'spray_check')[0];
+        if (primaryRisk) {
+            let actionIcon = '🛡️';
+            if (['aphids', 'spider_mite', 'cockchafer'].includes(primaryRisk.id)) actionIcon = '🪲';
+            else if (['heat_stress', 'frost', 'hypoxia', 'sunburn', 'recovery_mode'].includes(primaryRisk.id)) actionIcon = '⚠️';
+            else if (primaryRisk.id.includes('support') || primaryRisk.id.includes('soil')) actionIcon = '🧪';
+
+            expertSummary += `   ↳ ${actionIcon} <b>${primaryRisk.name}:</b> ${primaryRisk.advice.split('.')[0]}.\n`;
+        }
     });
-    return report;
+
+    expertSummary += `━━━━━━━━━━━━━━━━━━━━\n`;
+    return expertSummary;
 }
 
 function getLunarPhase(inputDate) {
     const lp = [
-        '🌑 Молодик (новий)', 
-        '🌒 Місяць, що зростає', 
-        '🌓 Перша чверть', 
-        '🌔 Місяць, що зростає (випуклий)', 
-        '🌕 Повня', 
-        '🌖 Місяць, що спадає (випуклий)', 
-        '🌗 Остання чверть', 
+        '🌑 Молодик (новий)',
+        '🌒 Місяць, що зростає',
+        '🌓 Перша чверть',
+        '🌔 Місяць, що зростає (випуклий)',
+        '🌕 Повня',
+        '🌖 Місяць, що спадає (випуклий)',
+        '🌗 Остання чверть',
         '🌘 Місяць, що спадає (старий)'
     ];
     const date = (inputDate instanceof Date) ? inputDate : new Date(inputDate);
-    
+
     // More accurate Julian Date calculation
     const jd = (date.getTime() / 86400000) - (date.getTimezoneOffset() / 1440) + 2440587.5;
-    
+
     // Days since last known new moon (approx reference point)
     const referenceNewMoon = 2451550.1; // Jan 6, 2000
     const lunarCycle = 29.530588853;
     const age = (jd - referenceNewMoon) % lunarCycle;
     const normalizedAge = age < 0 ? age + lunarCycle : age;
-    
+
     const phaseIndex = normalizedAge / lunarCycle;
-    
+
     // Determine phase with precise thresholds
     // Each phase is approx 1/8 of the cycle (0.125)
     // We center the primary phases (0, 0.25, 0.5, 0.75) with a small window
@@ -777,8 +917,8 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
                 externalId,
                 date: { $gte: seasonStartStr, $lt: periodStartStr }
             }).sort({ date: 1 }).lean();
-            
-            const validExtra = extra.filter(h => 
+
+            const validExtra = extra.filter(h =>
                 (typeof h.temp_avg === 'number' && !isNaN(h.temp_avg)) ||
                 (typeof h.temp_max === 'number' && !isNaN(h.temp_max))
             );
@@ -793,9 +933,9 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
     let heatDays = 0;
     let tropicalNights = 0;
     let coldStressDays = 0;
-    let groundFrosts = 0;      
-    let radiationFrosts = 0;   
-    let advectiveFrosts = 0;   
+    let groundFrosts = 0;
+    let radiationFrosts = 0;
+    let advectiveFrosts = 0;
     let fungalRiskDays = 0;
     let vpdStressDays = 0;
     let windStressDays = 0;
@@ -820,8 +960,8 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
     let seasonalGDD10 = 0;
     let seasonalInfectionIndex = 0;
     let seasonalSowingCount = 0;
-    let chillHours = 0;           
-    let hardeningLossEvents = 0;  
+    let chillHours = 0;
+    let hardeningLossEvents = 0;
     let currentGDD5 = 0;
     let prevTempAvg = null;
 
@@ -890,7 +1030,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         if (isInPeriod && vpd > 1.2) vpdStressDays++;
 
         if (isInPeriod) {
-            let etoBase = 0.0023 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 14; 
+            let etoBase = 0.0023 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 14;
             etoBase *= (1 - (d.clouds_avg || 50) / 250);
             etoBase *= (1 + (d.wind_spd_max || 3) / 15);
             totalEvapEstimation += etoBase;
@@ -1017,7 +1157,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         // 4. Експертний аналіз
         if (totalDays >= 3) {
             report += `🧐 <b>Експертний аналіз:</b>\n`;
-            
+
             // 4a. Загальний стан за індексом
             let indexSummary = "• <b>Загальний стан:</b> ";
             if (diffIndex >= 8) indexSummary += `Екстремально важкий сезон (${diffIndex}/10). Рослини виживають на межі можливостей, високий ризик втрат. `;
@@ -1029,7 +1169,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
 
             // 4b. Сезонний огляд (Кумулятивний стан)
             let seasonalSummary = "";
-            
+
             // СЕТ та Ріст
             const warmCropsList = ['tomato', 'pepper', 'grape', 'peach', 'watermelon', 'eggplant', 'apricot'];
             const hasWarmCrops = userCrops.some(c => warmCropsList.includes(c));
@@ -1061,7 +1201,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
                 if (chillHours >= 800) winterMsg = `Норма загартовування (${chillHours} год.) виконана — це гарантує стабільне цвітіння. `;
                 else if (chillHours >= 500) winterMsg = `Часткове виконання норми (${chillHours} год.) — можливе нерівномірне пробудження бруньок. `;
                 else winterMsg = `Критично мало годин холоду (${chillHours} год.) — ризик скидання плодових бруньок. `;
-                
+
                 if (hardeningLossEvents > 0) winterMsg += `Через ${hardeningLossEvents} відлиг взимку частина зимостійкості втрачена. `;
                 seasonalSummary += `• <b>Зимівля:</b> ${winterMsg}\n`;
             }
@@ -1071,26 +1211,26 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
             // 4b. Діагноз за вибрані дні (Конкретні дії)
             report += `• <b>Діагноз за період (${dateRangeStr}):</b> `;
             let periodDiagnosis = "";
-            
+
             if (waterBalance < -25) periodDiagnosis += `Критичний дефіцит вологи! Терміново потрібен глибокий полив (рослини втратили на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало). `;
             else if (waterBalance < -10) periodDiagnosis += "Помірна посуха — контролюйте вологість ґрунту. ";
-            
+
             if (advectiveFrosts > 0 || radiationFrosts > 0) {
                 periodDiagnosis += `Увага! Зафіксовані заморозки (${advectiveDates.concat(radiationDates).join(', ')}). Це могло пошкодити цвіт або молодий приріст. Перевірте точки росту. `;
             }
-            
+
             if (heatDays >= 3) periodDiagnosis += `Хвиля спеки тривала ${heatDays} дн. — це спричиняє температурний стрес, притініть чутливі культури та дайте антистресанти. `;
-            
+
             if (fungalRiskDays > totalDays * 0.4) periodDiagnosis += `Висока вологість (${fungalRiskDays} дн.) загрожує розвитком хвороб — профілактична обробка фунгіцидом була б доречною. `;
-            
+
             if (hypoxiaDays > 2) periodDiagnosis += `Через інтенсивні опади (${hypoxiaDays} дн. гіпоксії) можливе кисневе голодування коренів — розпушіть грунт. `;
 
             if (periodSowingDates.length > 0) {
                 periodDiagnosis += `Дні ${periodSowingDates.join(', ')} були ідеальними для посадки — сподіваємось, ви скористалися цим вікном! `;
             }
-            
+
             if (!periodDiagnosis) periodDiagnosis = "Умови в ці дні були стабільними, жодних екстремальних втручань не потрібно.";
-            
+
             report += `${periodDiagnosis}\n`;
         } else {
             if (waterBalance < -10) report += `💡 <b>Порада:</b> Зафіксовано дефіцит вологи, полийте рослини.\n`;
@@ -1204,7 +1344,7 @@ async function fetchMissingHistory(cityDoc, days = 30) {
  */
 async function generateAgroForecastReport(forecast, lang = 'uk', userCrops = [], externalId = null) {
     if (!forecast || !Array.isArray(forecast)) return '';
-    
+
     // Перетворюємо формат прогнозу Weatherbit у формат, який розуміє двигун аналізу
     const normalizedData = forecast.map(f => ({
         date: f.valid_date || f.datetime,
@@ -1224,12 +1364,12 @@ async function generateAgroForecastReport(forecast, lang = 'uk', userCrops = [],
     // Замінюємо заголовки архіву на заголовок прогнозу
     const startDate = normalizedData[0].date.split('-').reverse().join('.');
     const endDate = normalizedData[normalizedData.length - 1].date.split('-').reverse().join('.');
-    
+
     const oldHeader = lang === 'uk' ? /📈 <b>Агро-Архів \(.*?\):<\/b>/ : /📈 <b>Agro-Archive \(.*?\):<\/b>/;
-    const newHeader = lang === 'uk' 
-        ? `🔮 <b>Агро-Прогноз (${startDate} — ${endDate}):</b>` 
+    const newHeader = lang === 'uk'
+        ? `🔮 <b>Агро-Прогноз (${startDate} — ${endDate}):</b>`
         : `🔮 <b>Agro-Forecast (${startDate} — ${endDate}):</b>`;
-    
+
     return report.replace(oldHeader, newHeader);
 }
 
