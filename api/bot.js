@@ -660,25 +660,37 @@ bot.on('callback_query', async (ctx) => {
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user || !user.lat) {
+                return ctx.answerCbQuery(lang === 'uk' ? '❌ Спочатку встановіть місто' : '❌ Please set city first');
+            }
+
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
             const cityDoc = await City.findOne({ externalId: cityKey });
 
             // --- ON-DEMAND FETCH ---
             // Load missing data for the requested period
-            if (cityDoc) await fetchMissingHistory(cityDoc, days);
+            if (cityDoc) {
+                try {
+                    await fetchMissingHistory(cityDoc, days);
+                } catch (fetchErr) {
+                    console.error('[Bot] fetchMissingHistory failed:', fetchErr.message);
+                }
+            }
 
             const history = await History.find({ externalId: cityKey })
                 .sort({ date: -1 })
-                .limit(days);
+                .limit(days).lean();
 
             const { generateHistoricalReport } = require('../utils/agro');
-            const report = await generateHistoricalReport(history, lang);
+            const report = generateHistoricalReport(history, lang);
 
-            await ctx.answerCbQuery();
+            await ctx.answerCbQuery().catch(() => {});
             await ctx.editMessageText(report, { parse_mode: 'HTML' });
         } catch (error) {
-            console.error('Archive error:', error.message);
-            await ctx.answerCbQuery('❌ Помилка');
+            console.error('Archive error:', error);
+            await ctx.answerCbQuery('❌ Помилка').catch(() => {});
+            // Send detailed error for debugging
+            await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => {});
         }
     }
 });
