@@ -13,6 +13,7 @@ const {
     formatAgroReport, 
     analyzeSprayingWindow, 
     generateHistoricalReport, 
+    generateAgroForecastReport,
     fetchMissingHistory 
 } = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
@@ -69,8 +70,11 @@ const dict = {
         cropsSelectCat: "📂 Оберіть категорію рослин:",
         cropsSelectItem: "✅ Відмітьте, що ви вирощуєте у категорії {cat}:",
         backBtn: "⬅️ Назад",
+        agroForecastBtn: "🔮 Агро-Прогноз",
+        agroArchiveBtn: "📈 Архів",
+        agroRecBtn: "📝 Рекомендації на {date}",
         agroScheduleBtn: "🚜 Графік обробок",
-        agroArchiveBtn: "📈 Архів"
+        agroFiveDayBtn: "📅 Прогноз на 5 днів"
     },
     en: {
 
@@ -119,8 +123,11 @@ const dict = {
         cropsSelectCat: "📂 Choose a plant category:",
         cropsSelectItem: "✅ Mark what you grow in the {cat} category:",
         backBtn: "⬅️ Back",
-        agroScheduleBtn: "🚜 Schedule",
-        agroArchiveBtn: "📈 Archive"
+        agroForecastBtn: "🔮 Agro-Forecast",
+        agroArchiveBtn: "📈 Archive",
+        agroRecBtn: "📝 Recommendations for {date}",
+        agroScheduleBtn: "🚜 Treatment Schedule",
+        agroFiveDayBtn: "📅 5-Day Forecast"
     }
 };
 
@@ -219,6 +226,22 @@ function buildArchiveKeyboard(lang) {
     };
 }
 
+// Build Agro-Forecast sub-menu keyboard
+function buildAgroForecastKeyboard(lang, lastUpdateDate) {
+    const d = dict[lang];
+    const dateFormatted = lastUpdateDate 
+        ? new Date(lastUpdateDate).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { day: '2-digit', month: '2-digit' })
+        : '...';
+        
+    return {
+        inline_keyboard: [
+            [{ text: d.agroRecBtn.replace('{date}', dateFormatted), callback_data: 'agro_tomorrow' }],
+            [{ text: d.agroScheduleBtn, callback_data: 'agro_schedule_only' }],
+            [{ text: d.agroFiveDayBtn, callback_data: 'agro_5day' }]
+        ]
+    };
+}
+
 const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language_code === 'ru') ? 'uk' : 'en';
 
 
@@ -265,7 +288,7 @@ bot.start(async (ctx) => {
         keyboard: [
             [{ text: dict[lang].settingsBtn }, { text: dict[lang].helpBtn }],
             [{ text: dict[lang].cropsBtn }],
-            [{ text: dict[lang].agroScheduleBtn }, { text: dict[lang].agroArchiveBtn }]
+            [{ text: dict[lang].agroForecastBtn }, { text: dict[lang].agroArchiveBtn }]
         ],
         resize_keyboard: true,
 
@@ -362,7 +385,20 @@ bot.on('text', async (ctx) => {
         });
     }
 
+    if (query === dict.uk.agroForecastBtn || query === dict.en.agroForecastBtn) {
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+
+        const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+        const cityData = await City.findOne({ externalId: cityKey });
+
+        return ctx.reply(lang === 'uk' ? '🔮 Оберіть тип прогнозу:' : '🔮 Select forecast type:', {
+            reply_markup: buildAgroForecastKeyboard(lang, cityData?.eveningState?.updatedAt)
+        });
+    }
+
     if (query === dict.uk.agroScheduleBtn || query === dict.en.agroScheduleBtn) {
+        // Keeping this for backward compatibility or if called directly
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
 
@@ -373,13 +409,7 @@ bot.on('text', async (ctx) => {
             return ctx.reply(lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.');
         }
 
-        // Fetch history for accurate risk assessment (last 7 days)
-        const history = await History.find({ externalId: cityKey })
-            .sort({ date: -1 })
-            .limit(7)
-            .lean();
-
-
+        const history = await History.find({ externalId: cityKey }).sort({ date: -1 }).limit(7).lean();
         const report = analyzeSprayingWindow(cityData.eveningState.forecast, history, lang, user.crops || []);
         return ctx.reply(report, { parse_mode: 'HTML' });
     }
@@ -643,6 +673,48 @@ bot.on('callback_query', async (ctx) => {
             );
         } catch (error) {
             await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
+    // --- Agro schedule only callback ---
+    else if (data[0] === 'agro_schedule_only') {
+        try {
+            await ctx.answerCbQuery();
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            const cityData = await City.findOne({ externalId: cityKey });
+
+            if (!cityData || !cityData.eveningState?.forecast) {
+                return ctx.reply(lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.');
+            }
+
+            const history = await History.find({ externalId: cityKey }).sort({ date: -1 }).limit(7).lean();
+            const report = analyzeSprayingWindow(cityData.eveningState.forecast, history, lang, user.crops || []);
+            await ctx.reply(report, { parse_mode: 'HTML' });
+        } catch (e) {
+            console.error('Agro schedule error:', e);
+        }
+    }
+
+    // --- Agro 5-day forecast callback ---
+    else if (data[0] === 'agro_5day') {
+        try {
+            await ctx.answerCbQuery();
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            const cityData = await City.findOne({ externalId: cityKey });
+
+            if (!cityData || !cityData.eveningState?.forecast) {
+                return ctx.reply(lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.');
+            }
+
+            const report = await generateAgroForecastReport(cityData.eveningState.forecast.slice(0, 7), lang, user.crops || [], cityKey);
+            await ctx.reply(report, { parse_mode: 'HTML' });
+        } catch (e) {
+            console.error('Agro 5-day error:', e);
+            await ctx.reply(`❌ Error: ${e.message}`);
         }
     }
 
