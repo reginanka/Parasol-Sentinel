@@ -255,7 +255,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         relatedCrops: ['strawberry', 'grape', 'tomato', 'pepper', 'potato', 'apple', 'cherry', 'peach', 'rose']
     });
 
-    // --- 9. АЛЬТЕРНАРІОЗ (суха плямистість) ---
+    // --- 10. АЛЬТЕРНАРІОЗ (суха плямистість) ---
     let altHistory = (history && history.length > 0) 
         ? history.slice(0, 3).filter(h => h.temp_avg > 25).length * 10 
         : 0;
@@ -506,7 +506,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         });
     }
 
-    // --- 10. СУХОВІЙ ---
+    // --- 23. СУХОВІЙ ---
     let drought =
         score(['E', 'SE'].includes(d.wind_cdir), 40) +
         score(d.rh < 30, 40) +
@@ -520,7 +520,7 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
         relatedCrops: ['conifers', 'lawn_grass', 'strawberry', 'cucumber']
     });
 
-    // --- 11. НАКОПИЧЕНИЙ СТРЕС (ІСТОРІЯ) ---
+    // --- 24. НАКОПИЧЕНИЙ СТРЕС (ІСТОРІЯ) ---
     if (history && history.length > 0) {
         let heatDays = history.filter(h => h.temp_max > 30).length;
         if (heatDays >= 3) {
@@ -643,7 +643,7 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
         message += `🧪 <b>Живлення:</b> ${esc(stage.fertilizer)}\n\n`;
     }
 
-    let moon = getLunarPhase(new Date());
+    let moon = getLunarPhase(date || new Date());
     message += `━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🌙 ${esc(moon.name)}\n`;
     message += `<i>`;
@@ -657,7 +657,6 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
     if (!forecastData || !Array.isArray(forecastData)) return '';
     let report = lang === 'uk' ? '🚜 <b>Графік робіт на 5 днів:</b>\n' : '🚜 <b>5-Day Treatment Schedule:</b>\n';
 
-    // Filter to start from "today" (Kyiv time)
     const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Europe/Kyiv' }).slice(0, 10);
     const relevantForecast = forecastData.filter(day => {
         const d = (day.valid_date || day.datetime || '');
@@ -668,23 +667,20 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
         let dateObj = new Date(day.valid_date || day.datetime);
         let dayStr = dateObj.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { weekday: 'short', day: 'numeric' });
         
-        let sprayScore = 0;
-        let weatherReasons = [];
-        if (day.wind_spd > 5) { sprayScore += 40; weatherReasons.push(lang === 'uk' ? 'вітер' : 'wind'); }
-        if (day.precip > 1) { sprayScore += 50; weatherReasons.push(lang === 'uk' ? 'дощ' : 'rain'); }
-        if (day.max_temp > 28) { sprayScore += 20; weatherReasons.push(lang === 'uk' ? 'спека' : 'heat'); }
+        let dailyRisks = analyzeAgroRisks(day, history, userCrops);
+        let sprayRisk = dailyRisks.find(r => r.id === 'spray_check');
+        let sprayScore = sprayRisk ? sprayRisk.score : 0;
 
         let icon = sprayScore >= 70 ? '🔴' : (sprayScore >= 40 ? '🟡' : '🟢');
         
-        // Find top 3 risks for this day using REAL history
-        let dailyRisks = analyzeAgroRisks(day, history, userCrops);
-        let topRisks = dailyRisks.slice(0, 3).map(r => `${r.name} ${Math.round(r.score)}/100`);
+        let topRisks = dailyRisks.filter(r => r.id !== 'spray_check').slice(0, 3).map(r => `${r.name} ${Math.round(r.score)}/100`);
         let topRiskStr = topRisks.length > 0 ? `\n   ↳ ${topRisks.join(', ')}` : '';
 
-        let reasonStr = weatherReasons.length > 0 ? ` (${weatherReasons.join(', ')})` : '';
-        let status = icon === '🟢' ? (lang === 'uk' ? 'Сприятливо' : 'Favorable') : (lang === 'uk' ? 'Ризик' : 'Risk');
+        let status = sprayScore >= 70 ? (lang === 'uk' ? 'Ризиковано' : 'Risky') : 
+                     (sprayScore >= 40 ? (lang === 'uk' ? 'Помірний ризик' : 'Moderate risk') : 
+                     (lang === 'uk' ? 'Сприятливо' : 'Favorable'));
         
-        report += `${icon} <b>${dayStr}</b>: ${status}${reasonStr}${topRiskStr}\n`;
+        report += `${icon} <b>${dayStr}</b>: ${status}${topRiskStr}\n`;
     });
     return report;
 }
@@ -724,7 +720,8 @@ function analyzeLunarImpact(d, lang = 'uk') {
     return risks;
 }
 
-function generateHistoricalReport(history, lang = 'uk') {
+function generateHistoricalReport(history, lang = 'uk', userCrops = []) {
+    const { CROPS_DATA } = require('./crops');
     if (!history || !Array.isArray(history) || history.length === 0) return lang === 'uk' ? '❌ Даних за цей період ще немає.' : '❌ No data for this period.';
     
     // Filter out records that don't have essential temperature data
@@ -742,15 +739,15 @@ function generateHistoricalReport(history, lang = 'uk') {
 
     // Statistics calculation
     let totalPrecip = 0;
-    let heatDays = 0;   // Tmax > 30
-    let tropicalNights = 0; // Tmin > 20
-    let coldStressDays = 0; // Tmax < 12 (growth stop)
-    let frostDays = 0;  // Tmin < 0
-    let fungalRiskDays = 0; // Tavg 15-25 and RH > 80
-    let vpdStressDays = 0; // Estimation of high VPD
+    let heatDays = 0;
+    let tropicalNights = 0;
+    let coldStressDays = 0;
+    let frostDays = 0;
+    let fungalRiskDays = 0;
+    let vpdStressDays = 0;
     let totalEvapEstimation = 0;
-    let gdd10 = 0; // For warm crops
-    let gdd5 = 0;  // For cold crops
+    let gdd10 = 0;
+    let gdd5 = 0;
 
     let tempSum = 0;
     let absMax = -999;
@@ -774,27 +771,19 @@ function generateHistoricalReport(history, lang = 'uk') {
         if (tMin < 0) frostDays++;
         if (tMax < 12) coldStressDays++;
 
-        // Fungal risk (simplified: warm and humid)
         if (tAvg >= 15 && tAvg <= 26 && rh > 80) fungalRiskDays++;
-
-        // VPD Estimation
         let svp = 0.6108 * Math.exp((17.27 * tAvg) / (tAvg + 237.3));
         let vpd = svp * (1 - rh / 100);
         if (vpd > 1.2) vpdStressDays++;
-
-        // Simple PET estimation (Potential Evapotranspiration)
-        // PET approx = 0.0023 * RA * (Tavg + 17.8) * sqrt(Tmax - Tmin)
-        // Without RA (radiation), we'll use a simplified daily multiplier
         let dailyEvap = 0.2 * (tAvg + 17.8) * Math.sqrt(Math.max(0.1, tMax - tMin)) * 0.1;
         totalEvapEstimation += dailyEvap;
-
         gdd10 += Math.max(0, tAvg - 10);
         gdd5 += Math.max(0, tAvg - 5);
     });
 
     let avgTemp = tempSum / totalDays;
-    let avgRh = rhSum / totalDays;
     let waterBalance = totalPrecip - totalEvapEstimation;
+    let sunnyDays = validHistory.filter(d => (d.clouds_avg || 100) < 25 || (d.uv_max || 0) > 6).length;
 
     let report = lang === 'uk' 
         ? `📈 <b>Агро-Архів (${dateRangeStr}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`
@@ -805,11 +794,12 @@ function generateHistoricalReport(history, lang = 'uk') {
         report += `• Середня: ${avgTemp.toFixed(1)}°C\n`;
         report += `• Розмах: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
         report += `• СЕТ (&gt;10°C): ${gdd10.toFixed(1)}°C\n`;
-        report += `• СЕТ (&gt;5°C): ${gdd5.toFixed(1)}°C\n\n`;
+        report += `• СЕТ (&gt;5°C): ${gdd5.toFixed(1)}°C\n`;
+        report += `• Сонячних днів: ${sunnyDays}\n\n`;
 
         report += `💧 <b>Водний баланс:</b>\n`;
         report += `• Опади: ${totalPrecip.toFixed(1)} мм\n`;
-        report += `• Випаровування (ETo): ~${totalEvapEstimation.toFixed(1)} мм\n`;
+        report += `• Випаровування: ~${totalEvapEstimation.toFixed(1)} мм\n`;
         report += `• Баланс: <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n\n`;
 
         report += `⚠️ <b>Стрес-аналітика:</b>\n`;
@@ -821,28 +811,77 @@ function generateHistoricalReport(history, lang = 'uk') {
         if (fungalRiskDays > 0) report += `• Ризик грибків: ${fungalRiskDays} дн. 🍄\n`;
 
         report += `━━━━━━━━━━━━━━━━━━━━\n`;
-        if (waterBalance < -20) {
-            report += `💡 <b>Порада:</b> Значний дефіцит вологи! Рослини випарували на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало опадів. Потрібен глибокий полив.\n`;
-        } else if (fungalRiskDays > totalDays * 0.3) {
-            report += `💡 <b>Порада:</b> Кожен третій день був вологим та теплим. Високий ризик гнилей та фітофтори! Перевірте густину посадок.\n`;
-        } else if (totalDays >= 7) {
-            report += `✅ Умови для розвитку стабільні.`;
+
+        // EXPERT SUMMARY SECTION (FOR LONG PERIODS)
+        if (totalDays >= 30) {
+            report += `🧐 <b>Експертний висновок:</b>\n`;
+            
+            // 1. Characterization
+            let char = "Рік (період) характеризується як ";
+            if (avgTemp > 18) char += "інтенсивно-теплий ";
+            else if (avgTemp > 12) char += "помірно-теплий ";
+            else char += "прохолодний ";
+            
+            if (waterBalance < -50) char += "з вираженим дефіцитом вологи.";
+            else if (waterBalance > 50) char += "з надмірним зволоженням.";
+            else char += "з нормальним зволоженням.";
+            report += `• ${char}\n`;
+
+            // 2. Growth
+            let growth = `Завдяки СЕТ ${gdd10.toFixed(0)}°C, приріст культур мав бути `;
+            if (gdd10 > 1500) growth += "максимальним. ";
+            else if (gdd10 > 1000) growth += "стабільним. ";
+            else growth += "сповільненим. ";
+            
+            if (userCrops.length > 0) {
+                const warmCrops = ['tomato', 'pepper', 'grape', 'peach', 'watermelon'];
+                const matchedWarm = userCrops.filter(c => warmCrops.includes(c));
+                if (matchedWarm.length > 0 && gdd10 > 1200) {
+                    growth += `Умови були ідеальними для ваших теплолюбних рослин (${matchedWarm.length}).`;
+                }
+            }
+            report += `• <b>Ріст:</b> ${growth}\n`;
+
+            // 3. Risks
+            if (vpdStressDays > 15) {
+                let riskText = `Головною проблемою була повітряна посуха (${vpdStressDays} дн.). `;
+                if (userCrops.includes('conifers') || userCrops.includes('hydrangea') || userCrops.includes('cucumber')) {
+                    riskText += "Це могло призвести до підсихання листя або хвої у ваших вологолюбних культур, якщо не було дощування.";
+                }
+                report += `• <b>Ризики:</b> ${riskText}\n`;
+            }
+
+            // 4. Health & Frost
+            let health = "";
+            if (fungalRiskDays < totalDays * 0.1) {
+                health = "Низький ризик грибків дозволив зекономити на обробках. ";
+            } else {
+                health = `Високий інфекційний фон (${fungalRiskDays} дн. вологи) вимагав посиленого фунгіцидного захисту. `;
+            }
+            
+            if (frostDays > 20) {
+                health += `Велика кількість заморозки (${frostDays}) вимагала ретельного укриття чутливих рослин навесні.`;
+            }
+            report += `• <b>Здоров'я:</b> ${health}\n`;
+        } else {
+            if (waterBalance < -20) {
+                report += `💡 <b>Порада:</b> Значний дефіцит вологи! Рослини випарували на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало опадів. Потрібен глибокий полив.\n`;
+            } else if (fungalRiskDays > totalDays * 0.3) {
+                report += `💡 <b>Порада:</b> Кожен третій день був вологим та теплим. Високий ризик гнилей та фітофтори! Перевірте густину посадок.\n`;
+            } else {
+                report += `✅ Умови для розвитку стабільні.`;
+            }
         }
     } else {
+        // English version (simplified)
         report += `🌡 <b>Temperature:</b>\n`;
         report += `• Average: ${avgTemp.toFixed(1)}°C\n`;
-        report += `• Range: ${absMin.toFixed(1)}°C ... ${absMax.toFixed(1)}°C\n`;
-        report += `• GDD (&gt;10°C): ${gdd10.toFixed(1)}°C\n\n`;
-
-        report += `💧 <b>Water Balance:</b>\n`;
-        report += `• Precip: ${totalPrecip.toFixed(1)} mm\n`;
-        report += `• Evap (ETo): ~${totalEvapEstimation.toFixed(1)} mm\n`;
-        report += `• Balance: ${waterBalance.toFixed(1)} mm\n\n`;
-
-        report += `⚠️ <b>Stress Analytics:</b>\n`;
-        if (frostDays > 0) report += `• Frosts: ${frostDays}\n`;
-        if (heatDays > 0) report += `• Heat (&gt;30°C): ${heatDays}\n`;
-        if (fungalRiskDays > 0) report += `• Fungal risk: ${fungalRiskDays} days\n`;
+        report += `• GDD (>10°C): ${gdd10.toFixed(1)}°C\n\n`;
+        report += `💧 <b>Water Balance:</b> ${waterBalance.toFixed(1)} mm\n`;
+        report += `⚠️ <b>Stress Analytics:</b> Frosts: ${frostDays}, Heat: ${heatDays}, Fungal: ${fungalRiskDays} days\n`;
+        if (totalDays >= 30) {
+            report += `\n🧐 <b>Summary:</b> The period was ${avgTemp > 18 ? 'warm' : 'cool'} with ${waterBalance < -50 ? 'water deficit' : 'normal moisture'}.`;
+        }
     }
 
     return report;
