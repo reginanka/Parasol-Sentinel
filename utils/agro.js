@@ -991,7 +991,16 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         if (totalDays >= 3) {
             report += `🧐 <b>Експертний аналіз:</b>\n`;
             
-            // 4a. Сезонний огляд (Кумулятивний стан)
+            // 4a. Загальний стан за індексом
+            let indexSummary = "• <b>Загальний стан:</b> ";
+            if (diffIndex >= 8) indexSummary += `Екстремально важкий сезон (${diffIndex}/10). Рослини виживають на межі можливостей, високий ризик втрат. `;
+            else if (diffIndex >= 6) indexSummary += `Складні умови (${diffIndex}/10). Потрібен постійний захист та антистресова підтримка. `;
+            else if (diffIndex >= 4) indexSummary += `Помірний пресинг (${diffIndex}/10). Регулярні стреси вимагають вашої уваги та контролю. `;
+            else if (diffIndex >= 2) indexSummary += `Відносно легкий сезон (${diffIndex}/10). Рослини розвиваються стабільно, догляд плановий. `;
+            else indexSummary += `Ідеальні умови (${diffIndex}/10). Сад у зоні повного комфорту. `;
+            report += `${indexSummary}\n`;
+
+            // 4b. Сезонний огляд (Кумулятивний стан)
             let seasonalSummary = "";
             
             // СЕТ та Ріст
@@ -1163,11 +1172,46 @@ async function fetchMissingHistory(cityDoc, days = 30) {
     }
 }
 
+/**
+ * Генерація прогнозу на основі прогнозних даних
+ */
+async function generateAgroForecastReport(forecast, lang = 'uk', userCrops = [], externalId = null) {
+    if (!forecast || !Array.isArray(forecast)) return '';
+    
+    // Перетворюємо формат прогнозу Weatherbit у формат, який розуміє двигун аналізу
+    const normalizedData = forecast.map(f => ({
+        date: f.valid_date || f.datetime,
+        temp_max: f.max_temp,
+        temp_min: f.min_temp,
+        temp_avg: f.temp,
+        rh_avg: f.rh,
+        precip: f.precip,
+        clouds_avg: f.clouds,
+        wind_spd_max: f.wind_spd,
+        uv_max: f.uv
+    }));
+
+    // Викликаємо основний двигун звітності
+    let report = await generateHistoricalReport(normalizedData, lang, userCrops, externalId);
+
+    // Замінюємо заголовки архіву на заголовок прогнозу
+    const startDate = normalizedData[0].date.split('-').reverse().join('.');
+    const endDate = normalizedData[normalizedData.length - 1].date.split('-').reverse().join('.');
+    
+    const oldHeader = lang === 'uk' ? /📈 <b>Агро-Архів \(.*?\):<\/b>/ : /📈 <b>Agro-Archive \(.*?\):<\/b>/;
+    const newHeader = lang === 'uk' 
+        ? `🔮 <b>Агро-Прогноз (${startDate} — ${endDate}):</b>` 
+        : `🔮 <b>Agro-Forecast (${startDate} — ${endDate}):</b>`;
+    
+    return report.replace(oldHeader, newHeader);
+}
+
 module.exports = {
     analyzeAgroRisks,
     formatAgroReport,
     analyzeSprayingWindow,
     generateHistoricalReport,
+    generateAgroForecastReport,
     getLunarPhase,
     getGrowthStage,
     fetchMissingHistory
