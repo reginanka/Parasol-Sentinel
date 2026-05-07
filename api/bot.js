@@ -32,8 +32,8 @@ const dict = {
         citySet: "Місто {city} успішно встановлено!",
         citySetFull: "✅ **Місто встановлено:** {city}\n🌐 Координати: {lat}, {lon}\n🌡️ Поточна температура: {temp}°C\n💧 Точка роси: {dewpt}°C",
         dashboard: "📊 Мій Дашборд",
-        settingsBtn: "⚙️ Налаштування",
-        helpBtn: "❓ Допомога",
+        settingsBtn: "Налаштування",
+        helpBtn: "Допомога",
         helpSelect: "🔍 Оберіть тему, яка вас цікавить:",
         help_uv: "☀️ Що таке УФ-індекс?",
         help_wind: "🌬️ Напрямки вітру",
@@ -70,8 +70,8 @@ const dict = {
         cropsSelectCat: "📂 Оберіть категорію рослин:",
         cropsSelectItem: "✅ Відмітьте, що ви вирощуєте у категорії {cat}:",
         backBtn: "⬅️ Назад",
-        agroForecastBtn: "🔮 Агро-Прогноз",
-        agroArchiveBtn: "📈 Архів",
+        agroForecastBtn: "Агро-Прогноз",
+        agroArchiveBtn: "Архів",
         agroRecBtn: "📝 Рекомендації на {date}",
         agroScheduleBtn: "🚜 Графік обробок",
         agroFiveDayBtn: "📅 Прогноз на 5 днів"
@@ -85,8 +85,8 @@ const dict = {
         citySet: "City {city} is set!",
         citySetFull: "✅ **City set:** {city}\n🌐 Coordinates: {lat}, {lon}\n🌡️ Current temperature: {temp}°C\n💧 Dew Point: {dewpt}°C",
         dashboard: "📊 My Dashboard",
-        settingsBtn: "⚙️ Settings",
-        helpBtn: "❓ Help",
+        settingsBtn: "Settings",
+        helpBtn: "Help",
         helpSelect: "🔍 Choose a topic you are interested in:",
         help_uv: "☀️ What is UV index?",
         help_wind: "🌬️ Wind directions",
@@ -123,8 +123,8 @@ const dict = {
         cropsSelectCat: "📂 Choose a plant category:",
         cropsSelectItem: "✅ Mark what you grow in the {cat} category:",
         backBtn: "⬅️ Back",
-        agroForecastBtn: "🔮 Agro-Forecast",
-        agroArchiveBtn: "📈 Archive",
+        agroForecastBtn: "Agro-Forecast",
+        agroArchiveBtn: "Archive",
         agroRecBtn: "📝 Recommendations for {date}",
         agroScheduleBtn: "🚜 Treatment Schedule",
         agroFiveDayBtn: "📅 5-Day Forecast"
@@ -286,9 +286,8 @@ bot.start(async (ctx) => {
 
     const keyboard = {
         keyboard: [
-            [{ text: dict[lang].settingsBtn }, { text: dict[lang].helpBtn }],
-            [{ text: dict[lang].cropsBtn }],
-            [{ text: dict[lang].agroForecastBtn }, { text: dict[lang].agroArchiveBtn }]
+            [{ text: dict[lang].settingsBtn }, { text: dict[lang].cropsBtn }],
+            [{ text: dict[lang].agroForecastBtn }, { text: dict[lang].agroArchiveBtn }, { text: dict[lang].helpBtn }]
         ],
         resize_keyboard: true,
 
@@ -589,25 +588,25 @@ bot.on('callback_query', async (ctx) => {
             await ctx.answerCbQuery().catch(() => { });
             await connectDB();
 
-            const user = await User.findOne({ telegramId: ctx.from.id }).lean();
+            const user = await User.findOne({ telegramId: ctx.from.id });
             if (!user || !user.lat || !user.lon) {
                 return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
 
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
-            const cityData = await City.findOne({ externalId: cityKey }).lean();
+            const cityDoc = await City.findOne({ externalId: cityKey });
 
-            if (!cityData || !cityData.eveningState?.forecast?.[1]) {
+            if (!cityDoc || !cityDoc.eveningState?.forecast?.[1]) {
                 return ctx.reply(lang === 'uk'
-                    ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу.'
-                    : '⚠️ Data not yet updated. Wait for the evening forecast.');
+                    ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу (зазвичай після 18:00).'
+                    : '⚠️ Data not yet updated. Wait for the evening forecast (usually after 18:00).');
             }
 
-            const tomorrowForecast = cityData.eveningState.forecast[1];
+            const tomorrowForecast = cityDoc.eveningState.forecast[1];
 
             // --- ON-DEMAND FETCH ---
             // Check if we have at least 7 days of history for risks calculation
-            await fetchMissingHistory(cityData, 7);
+            await fetchMissingHistory(cityDoc, 7);
 
             // Fetch last 7 days of history for this city
             const history = await History.find({
@@ -620,8 +619,7 @@ bot.on('callback_query', async (ctx) => {
             await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (error) {
             console.error('Agro report error:', error);
-            // Send detailed error to chat for debugging
-            await ctx.reply(`❌ <b>DEBUG ERROR:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
+            await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }
 
