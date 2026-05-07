@@ -192,6 +192,27 @@ function buildCropsItemsKeyboard(lang, categoryKey, userCrops = []) {
     return { inline_keyboard: buttons };
 }
 
+// Build archive selection keyboard
+function buildArchiveKeyboard(lang) {
+    const isUk = lang === 'uk';
+    return {
+        inline_keyboard: [
+            [
+                { text: isUk ? '7 днів' : '7 Days', callback_data: 'archive|7' },
+                { text: isUk ? '30 днів' : '30 Days', callback_data: 'archive|30' }
+            ],
+            [
+                { text: isUk ? '6 міс.' : '6 Months', callback_data: 'archive|180' },
+                { text: isUk ? 'Рік' : 'Year', callback_data: 'archive|365' }
+            ],
+            [
+                { text: isUk ? '🗓 Своя дата' : '🗓 Custom Date', callback_data: 'archive|custom' },
+                { text: isUk ? '⬅️ Мин. рік' : '⬅️ Last Year', callback_data: 'archive|last_year' }
+            ]
+        ]
+    };
+}
+
 const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language_code === 'ru') ? 'uk' : 'en';
 
 
@@ -339,7 +360,6 @@ bot.on('text', async (ctx) => {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
 
-        const { analyzeSprayingWindow } = require('../utils/agro');
         const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
         const cityData = await City.findOne({ externalId: cityKey });
 
@@ -347,7 +367,14 @@ bot.on('text', async (ctx) => {
             return ctx.reply(lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.');
         }
 
-        const report = analyzeSprayingWindow(cityData.eveningState.forecast, lang, user.crops || []);
+        // Fetch history for accurate risk assessment (last 7 days)
+        const history = await History.find({ externalId: cityKey })
+            .sort({ date: -1 })
+            .limit(7)
+            .lean();
+
+        const { analyzeSprayingWindow } = require('../utils/agro');
+        const report = analyzeSprayingWindow(cityData.eveningState.forecast, history, lang, user.crops || []);
         return ctx.reply(report, { parse_mode: 'HTML' });
     }
 
@@ -355,18 +382,47 @@ bot.on('text', async (ctx) => {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
 
-        // Show inline keyboard to select period
-        const archiveKeyboard = {
-            inline_keyboard: [
-                [{ text: lang === 'uk' ? 'Тиждень' : 'Week', callback_data: 'archive|7' }],
-                [{ text: lang === 'uk' ? 'Місяць' : 'Month', callback_data: 'archive|30' }],
-                [{ text: lang === 'uk' ? 'Пів року' : '6 Months', callback_data: 'archive|180' }]
-            ]
-        };
-
         return ctx.reply(lang === 'uk' ? '📊 Оберіть період для аналізу:' : '📊 Select period for analysis:', {
-            reply_markup: archiveKeyboard
+            reply_markup: buildArchiveKeyboard(lang)
         });
+    }
+
+    // Handle Custom Date Input (DD.MM.YYYY or DD.MM.YYYY-DD.MM.YYYY)
+    const dateRegex = /(\d{2}\.\d{2}\.\d{4})(?:\s*-\s*(\d{2}\.\d{2}\.\d{4}))?/;
+    const dateMatch = query.match(dateRegex);
+    if (dateMatch) {
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (user && user.lat) {
+            const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            const cityDoc = await City.findOne({ externalId: cityKey });
+            
+            let start = dateMatch[1].split('.').reverse().join('-');
+            let end = dateMatch[2] ? dateMatch[2].split('.').reverse().join('-') : start;
+
+            try {
+                // Determine how many days back we need to fetch
+                const dayDiff = Math.ceil((new Date() - new Date(start)) / (1000 * 60 * 60 * 24));
+                if (cityDoc && dayDiff > 0) {
+                    await fetchMissingHistory(cityDoc, Math.min(dayDiff + 1, 1095));
+                }
+
+                const history = await History.find({ 
+                    externalId: cityKey,
+                    date: { $gte: start, $lte: end }
+                }).sort({ date: -1 }).lean();
+
+                const { generateHistoricalReport } = require('../utils/agro');
+                const report = generateHistoricalReport(history, lang);
+                
+                return ctx.reply(report, { 
+                    parse_mode: 'HTML',
+                    reply_markup: buildArchiveKeyboard(lang)
+                });
+            } catch (err) {
+                console.error('Date range error:', err);
+                return ctx.reply(lang === 'uk' ? '❌ Помилка обробки дат.' : '❌ Date processing error.');
+            }
+        }
     }
 
 
@@ -656,7 +712,7 @@ bot.on('callback_query', async (ctx) => {
 
     // --- Archive selection callback ---
     else if (data[0] === 'archive') {
-        const days = parseInt(data[1]);
+        const mode = data[1];
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
@@ -664,32 +720,57 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.answerCbQuery(lang === 'uk' ? '❌ Спочатку встановіть місто' : '❌ Please set city first');
             }
 
+            if (mode === 'custom') {
+                await ctx.answerCbQuery().catch(() => {});
+                return ctx.reply(lang === 'uk' 
+                    ? '🗓 Введіть дату або період у форматі:\n`01.05.2024` або `01.05.2024-10.05.2024`'
+                    : '🗓 Enter date or period in format:\n`01.05.2024` or `01.05.2024-10.05.2024`', { parse_mode: 'Markdown' });
+            }
+
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
             const cityDoc = await City.findOne({ externalId: cityKey });
 
+            let historyQuery = { externalId: cityKey };
+            let fetchDays = 30;
+
+            if (mode === 'last_year') {
+                const today = new Date();
+                const lastYearStart = new Date(today.getFullYear() - 1, 0, 1).toISOString().split('T')[0];
+                const lastYearEnd = new Date(today.getFullYear() - 1, 11, 31).toISOString().split('T')[0];
+                historyQuery.date = { $gte: lastYearStart, $lte: lastYearEnd };
+                fetchDays = 365 + Math.ceil((today - new Date(lastYearStart)) / (1000 * 60 * 60 * 24));
+            } else {
+                fetchDays = parseInt(mode);
+            }
+
             // --- ON-DEMAND FETCH ---
-            // Load missing data for the requested period
             if (cityDoc) {
                 try {
-                    await fetchMissingHistory(cityDoc, days);
+                    await fetchMissingHistory(cityDoc, fetchDays);
                 } catch (fetchErr) {
                     console.error('[Bot] fetchMissingHistory failed:', fetchErr.message);
                 }
             }
 
-            const history = await History.find({ externalId: cityKey })
-                .sort({ date: -1 })
-                .limit(days).lean();
+            let history;
+            if (mode === 'last_year') {
+                history = await History.find(historyQuery).sort({ date: -1 }).lean();
+            } else {
+                history = await History.find(historyQuery).sort({ date: -1 }).limit(fetchDays).lean();
+            }
 
             const { generateHistoricalReport } = require('../utils/agro');
             const report = generateHistoricalReport(history, lang);
 
             await ctx.answerCbQuery().catch(() => {});
-            await ctx.editMessageText(report, { parse_mode: 'HTML' });
+            // Send as a new message as requested by the user
+            await ctx.reply(report, { 
+                parse_mode: 'HTML',
+                reply_markup: buildArchiveKeyboard(lang)
+            });
         } catch (error) {
             console.error('Archive error:', error);
             await ctx.answerCbQuery('❌ Помилка').catch(() => {});
-            // Send detailed error for debugging
             await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => {});
         }
     }
