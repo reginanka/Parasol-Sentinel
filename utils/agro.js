@@ -685,8 +685,10 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
     return report;
 }
 
-function getLunarPhase(date) {
+function getLunarPhase(inputDate) {
     let lp = ['🌑 Молодик', '🌒 Молодий місяць', '🌓 Перша чверть', '🌔 Випуклий місяць', '🌕 Повня', '🌖 Спадаючий місяць', '🌗 Остання чверть', '🌘 Старий місяць'];
+    const date = (inputDate instanceof Date) ? inputDate : new Date(inputDate);
+    
     let year = date.getFullYear();
     let month = date.getMonth() + 1;
     let day = date.getDate();
