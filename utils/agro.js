@@ -546,12 +546,12 @@ function analyzeAgroRisks(rawD, history = [], userCrops = []) {
     }
 
     // --- 25. М'ЯКА ПІДТРИМКА ТА ІМУНІТЕТ (Soft Advice Engine) ---
-    
+
     // 1. Модель стану ґрунту
     let totalRain7 = history.slice(0, 7).reduce((sum, h) => sum + (h.precip || 0), 0);
     let soilTemp = d.temp * 0.7 + (history.length > 0 ? (history[0].temp_avg || d.temp) * 0.3 : d.temp);
-    let soilMoistureIndex = Math.max(0, (totalRain7 + d.precip) - (history.length * 2)); 
-    
+    let soilMoistureIndex = Math.max(0, (totalRain7 + d.precip) - (history.length * 2));
+
     if (soilTemp > 10 && soilTemp < 22 && soilMoistureIndex > 10 && soilMoistureIndex < 50) {
         risks.push({
             id: 'soil_perfect',
@@ -653,7 +653,7 @@ function getGrowthStage(history = []) {
     }
 
     let gdd5 = history.reduce((sum, h) => sum + Math.max(0, (h.temp_avg || h.temp || 0) - 5), 0);
-    
+
     if (gdd5 < 150) return { id: 'early_spring', name: 'Рання весна (брунька)', gdd: gdd5, fertilizer: 'Азот (Селітра 20г/10л)' };
     if (gdd5 < 400) return { id: 'late_spring', name: 'Пізня весна (цвітіння)', gdd: gdd5, fertilizer: 'Бор + NPK 20-20-20' };
     if (gdd5 < 1200) return { id: 'summer', name: 'Літо (плодоношення)', gdd: gdd5, fertilizer: 'Калій (Монофосфат калію 20г/10л)' };
@@ -747,54 +747,73 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
         };
     });
 
-    // 2. ЕКСПЕРТНИЙ АНАЛІЗ ПЕРІОДУ
+    // 2. ЕКСПЕРТНИЙ АНАЛІЗ ПЕРІОДУ (Цифровий Агроном)
     let expertSummary = '';
+    let stage = getGrowthStage(history);
+
     if (lang === 'uk') {
-        expertSummary = `🚜 **РОЗУМНИЙ АГРО-ПЛАН (5 ДНІВ)**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **ЕКСПЕРТНИЙ ВИСНОВОК:**\n`;
+        const startD = dailyResults[0].date.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' });
+        const endD = dailyResults[dailyResults.length - 1].date.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' });
         
-        // а) Розрахунок тренду інфекції
-        let infScore = 0;
-        let maxInf = 0;
-        relevantForecast.forEach(d => {
-            if (d.temp >= 15 && d.temp <= 26 && d.rh > 80) infScore += 10;
-            else if (d.clouds < 30 && d.rh < 60) infScore = Math.max(0, infScore - 5);
-            if (infScore > maxInf) maxInf = infScore;
-        });
+        expertSummary = `🚜 **РОЗУМНИЙ АГРО-ПЛАН (5 ДНІВ: ${startD} — ${endD})**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **ЕКСПЕРТНИЙ ВИСНОВОК:**\n`;
         
-        // б) Порівняння шкідників (Ідея 6)
+        // а) Аналіз шкідників (Тренди)
         let pestStats = {};
         const pestIds = ['aphids', 'spider_mite', 'cockchafer', 'codling_moth'];
-        dailyResults.forEach(res => {
+        dailyResults.forEach((res, idx) => {
             res.risks.forEach(r => {
                 if (pestIds.includes(r.id)) {
-                    if (!pestStats[r.id]) pestStats[r.id] = { name: r.name, scores: [] };
+                    if (!pestStats[r.id]) pestStats[r.id] = { name: r.name, scores: [], firstScore: r.score };
                     pestStats[r.id].scores.push(r.score);
                 }
             });
         });
 
-        // Формуємо вердикт по шкідниках
         let pestAdvice = '';
         Object.keys(pestStats).forEach(id => {
             let maxS = Math.max(...pestStats[id].scores);
-            // Очищуємо назву від емодзі для висновку
-            let cleanName = pestStats[id].name.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
-            if (maxS >= 70) pestAdvice += `• 🪲 **${cleanName}:** Активно плодиться (${Math.round(maxS)}/100). Обробіть уже зараз!\n`;
-            else if (maxS < 30 && maxS > 0) pestAdvice += `• 🪲 **${cleanName}:** Ризик низький (${Math.round(maxS)}/100). Ще зарано.\n`;
+            let lastS = pestStats[id].scores[pestStats[id].scores.length - 1];
+            let cleanName = pestStats[id].name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim();
+            
+            if (maxS >= 80) {
+                if (lastS >= maxS) {
+                    pestAdvice += `• 🪲 **${cleanName}:** Прогресує! Досягне максимуму (${Math.round(maxS)}/100) до кінця тижня. **Обробка обов'язкова.**\n`;
+                } else {
+                    pestAdvice += `• 🪲 **${cleanName}:** На піку активності (${Math.round(maxS)}/100). Не зволікайте з захистом.\n`;
+                }
+            } else if (maxS >= 50) {
+                pestAdvice += `• 🪲 **${cleanName}:** Популяція зростає (${Math.round(maxS)}/100). Готуйте засоби захисту.\n`;
+            }
         });
         if (pestAdvice) expertSummary += pestAdvice;
 
-        // в) Інфекція та Живлення
-        if (maxInf > 30) {
-            expertSummary += `• 🦠 **Інфекція:** Фон грибків зросте (+${maxInf}). **Дія:** Підкорміть Кальцієм або Калієм сьогодні, щоб зміцнити імунітет.\n`;
+        // б) Аналіз інфекційного фону та імунітету (з урахуванням стадії)
+        let infScore = 0;
+        let maxInf = 0;
+        relevantForecast.forEach(d => {
+            if (d.temp >= 15 && d.temp <= 26 && d.rh > 80) infScore += 12;
+            else if (d.clouds < 30 && d.rh < 60) infScore = Math.max(0, infScore - 6);
+            if (infScore > maxInf) maxInf = infScore;
+        });
+
+        if (maxInf >= 70) {
+            expertSummary += `• 🦠 **Інфекція:** Критичний поріг (${maxInf}/100). Грибки атакують! Потрібні сильні системні фунгіциди.\n`;
+        } else if (maxInf >= 30) {
+            let logicAdvice = "Підкорміть Кальцієм або Кремнієм для зміцнення стінок листя (науково доведено: Са та Si створюють механічний бар'єр).";
+            if (stage.id === 'late_spring') logicAdvice = "Стадія цвітіння: додайте Бор та Кальцій — це зміцнить зав'язь та імунітет проти патогенів.";
+            else if (stage.id === 'summer') logicAdvice = "Плодоношення: дайте Калій та Кремній для щільності шкірки та захисту від гнилей.";
+            
+            expertSummary += `• 🦠 **Інфекція:** Грибки набирають обертів (${maxInf}/100). **Дія:** ${logicAdvice}\n`;
         } else {
             expertSummary += `• 🦠 **Інфекція:** Фон чистий. Рослини в безпеці.\n`;
         }
 
-        // г) Порада щодо реабілітації
+        // в) Реабілітація та фаза
         let isRecovery = dailyResults.some(r => r.risks.some(risk => risk.id === 'recovery_mode'));
         if (isRecovery) {
-            expertSummary += `• 🏥 **Реабілітація:** Був стрес. Тільки антистресанти, жодних добрив під корінь!\n`;
+            expertSummary += `• 🏥 **Реабілітація:** Рослини в стресі. Тільки амінокислоти, ніяких добрив під корінь!\n`;
+        } else {
+            expertSummary += `• 🌱 **Фаза розвитку:** ${stage.name}. ${stage.fertilizer.includes('Азот') ? 'Зараз активний ріст зеленої маси.' : 'Рослина переходить до формування врожаю.'}\n`;
         }
     } else {
         expertSummary = `🚜 **SMART AGRO-PLAN (5 DAYS)**\n━━━━━━━━━━━━━━━━━━━━\n🧐 **EXPERT SUMMARY:**\n• Analysis of pests and infection trends included below.\n`;
@@ -815,21 +834,35 @@ function analyzeSprayingWindow(forecastData, history = [], lang = 'uk', userCrop
             (sprayScore >= 40 ? (lang === 'uk' ? 'Помірний ризик' : 'Moderate risk') :
                 (lang === 'uk' ? 'Сприятливо' : 'Favorable'));
 
-        expertSummary += `${icon} <b>${dayStr}</b>: ${status} (t:${day.temp.toFixed(0)}°, ${day.wind_spd.toFixed(1)}м/с)\n`;
+        let precipInfo = day.precip > 0.1 ? `, 🌧${day.precip.toFixed(1)}мм` : '';
+        expertSummary += `${icon} <b>${dayStr}</b>: ${status} (t:${day.temp.toFixed(0)}°, ${day.wind_spd.toFixed(1)}м/с${precipInfo})\n`;
 
-        // Додаємо конкретні дії (найважливіші)
-        let primaryRisk = res.risks.filter(r => r.id !== 'spray_check')[0];
-        if (primaryRisk) {
-            let actionIcon = '🛡️';
-            if (['aphids', 'spider_mite', 'cockchafer'].includes(primaryRisk.id)) actionIcon = '🪲';
-            else if (['heat_stress', 'frost', 'hypoxia', 'sunburn', 'recovery_mode'].includes(primaryRisk.id)) actionIcon = '⚠️';
-            else if (primaryRisk.id.includes('support') || primaryRisk.id.includes('soil')) actionIcon = '🧪';
+        if (sprayScore >= 70) {
+            // Визначаємо причину ризику
+            let reason = 'несприятливі умови';
+            if (day.precip > 0.1) reason = 'через очікувані опади';
+            else if (day.wind_spd > 5) reason = 'через сильний вітер';
+            else if (day.temp > 30) reason = 'через екстремальну спеку';
 
-            // Очищуємо назву від вбудованого емодзі, щоб не було дублів
-            let cleanName = primaryRisk.name.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
-            let shortAdvice = primaryRisk.advice.split('.')[0]; // Тільки перше речення
-            
-            expertSummary += `   ↳ ${actionIcon} <b>${cleanName}:</b> ${shortAdvice}.\n`;
+            expertSummary += `   ↳ ❌ <b>Не рекомендується:</b> Сьогодні ${reason} краще нічого не робити. Відпочиньте!\n`;
+        } else {
+            // Показуємо декілька головних ризиків з балами
+            let otherRisks = res.risks.filter(r => r.id !== 'spray_check' && r.score >= 40).slice(0, 2);
+            if (otherRisks.length > 0) {
+                let riskItems = otherRisks.map(r => {
+                    let cleanN = r.name.replace(/\p{Emoji_Presentation}/gu, '').replace(/\p{Emoji}/gu, '').trim();
+                    return `${cleanN} (${Math.round(r.score)})`;
+                }).join(', ');
+
+                let actionIcon = '🛡️';
+                if (otherRisks[0].id === 'cockchafer') actionIcon = '🪲';
+                else if (otherRisks[0].id.includes('stress') || otherRisks[0].id === 'frost') actionIcon = '⚠️';
+
+                let shortAdvice = otherRisks[0].advice.split(/[.!?]/).filter(s => s.trim().length > 0)[0].trim();
+                expertSummary += `   ↳ ${actionIcon} <b>${riskItems}:</b> ${shortAdvice}.\n`;
+            } else {
+                expertSummary += `   ↳ ✅ <b>Все спокійно:</b> Оптимальний час для планових робіт та догляду.\n`;
+            }
         }
     });
 
