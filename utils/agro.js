@@ -951,7 +951,8 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
         report += `🌡 <b>Погода за ці дні:</b>\n`;
         report += `• Температура: ${avgTemp.toFixed(1)}°C (${absMin.toFixed(1)}° ... ${absMax.toFixed(1)}°)\n`;
         report += `• СЕТ (&gt;5°C/&gt;10°C): ${gdd5.toFixed(0)}°C / ${gdd10.toFixed(0)}°C\n`;
-        report += `• Опади / Баланс: ${totalPrecip.toFixed(1)} мм / <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n`;
+        report += `• Опади / Випаровування: ${totalPrecip.toFixed(1)} мм / ~${totalEvapEstimation.toFixed(1)} мм\n`;
+        report += `• Водний баланс: <b>${waterBalance > 0 ? '+' : ''}${waterBalance.toFixed(1)} мм</b>\n`;
         report += `• Сонячних днів: ${sunnyDays}\n\n`;
 
         // 2. Конкретні події періоду (З датами)
@@ -1035,7 +1036,7 @@ async function generateHistoricalReport(history, lang = 'uk', userCrops = [], ex
             report += `• <b>Діагноз за період (${dateRangeStr}):</b> `;
             let periodDiagnosis = "";
             
-            if (waterBalance < -25) periodDiagnosis += "Критичний дефіцит вологи! Терміново потрібен глибокий полив (рослини втратили на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало). ";
+            if (waterBalance < -25) periodDiagnosis += `Критичний дефіцит вологи! Терміново потрібен глибокий полив (рослини втратили на ${Math.abs(waterBalance).toFixed(0)}мм більше, ніж випало). `;
             else if (waterBalance < -10) periodDiagnosis += "Помірна посуха — контролюйте вологість ґрунту. ";
             
             if (advectiveFrosts > 0 || radiationFrosts > 0) {
