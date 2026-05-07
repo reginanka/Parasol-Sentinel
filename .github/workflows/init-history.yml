@@ -21,5 +21,5 @@ jobs:
 
       - name: Run Initial History Load
         env:
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
         run: npm run init-history
