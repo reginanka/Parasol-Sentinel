@@ -8,7 +8,7 @@ const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { formatUrl, generateSignature } = require('../utils/helpers');
-const { analyzeAgroRisks, formatAgroReport } = require('../utils/agro');
+const { analyzeAgroRisks, formatAgroReport, fetchMissingHistory } = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
 
 /**
@@ -513,6 +513,10 @@ bot.on('callback_query', async (ctx) => {
 
             const tomorrowForecast = cityData.eveningState.forecast[1];
 
+            // --- ON-DEMAND FETCH ---
+            // Check if we have at least 7 days of history for risks calculation
+            await fetchMissingHistory(cityData, 7);
+
             // Fetch last 7 days of history for this city
             const history = await History.find({
                 externalId: cityKey
@@ -657,6 +661,11 @@ bot.on('callback_query', async (ctx) => {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            const cityDoc = await City.findOne({ externalId: cityKey });
+
+            // --- ON-DEMAND FETCH ---
+            // Load missing data for the requested period
+            if (cityDoc) await fetchMissingHistory(cityDoc, days);
 
             const history = await History.find({ externalId: cityKey })
                 .sort({ date: -1 })
