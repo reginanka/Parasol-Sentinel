@@ -831,10 +831,27 @@ bot.on('callback_query', async (ctx) => {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user) return ctx.answerCbQuery('❌ Error');
         await ctx.answerCbQuery();
-        await ctx.editMessageText(dict[lang].forecastSettingsTitle, {
-            parse_mode: 'Markdown',
-            reply_markup: buildForecastSettingsKeyboard(lang, user.forecastSettings)
-        });
+
+        const text = dict[lang].forecastSettingsTitle;
+        const markup = buildForecastSettingsKeyboard(lang, user.forecastSettings);
+
+        // If the button was clicked from a forecast message (identified by the icon), 
+        // we send a NEW message so the forecast remains visible.
+        // Otherwise (from settings menu), we edit the current message.
+        const isFromForecast = ctx.callbackQuery.message?.text?.includes('🌆');
+
+        if (isFromForecast) {
+            await ctx.replyWithMarkdown(text, { reply_markup: markup });
+        } else {
+            try {
+                await ctx.editMessageText(text, {
+                    parse_mode: 'Markdown',
+                    reply_markup: markup
+                });
+            } catch (e) {
+                await ctx.replyWithMarkdown(text, { reply_markup: markup });
+            }
+        }
     }
 
     // --- Forecast days/metrics toggle callback ---
