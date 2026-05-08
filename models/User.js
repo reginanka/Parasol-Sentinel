@@ -21,6 +21,13 @@ const UserSchema = new mongoose.Schema({
         temp: { type: String, default: 'c' }         // 'c' = Цельсій, 'f' = Фаренгейт
     },
     crops: [String], // IDs of selected plants (e.g., 'tomato', 'cucumber')
+    forecastSettings: {
+        daysCount: { type: Number, default: 3 },
+        enabledMetrics: { 
+            type: [String], 
+            default: ['condition', 'temp', 'precip', 'wind', 'pressure'] 
+        }
+    },
     createdAt: { type: Date, default: Date.now }
 
 });
