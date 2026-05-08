@@ -661,7 +661,7 @@ function getGrowthStage(history = []) {
     return { id: 'autumn', name: 'Осінь (підготовка)', gdd: gdd5, fertilizer: 'Фосфор-Калій (0-25-50)' };
 }
 
-function formatAgroReport(city, risks, lang = 'uk', date = null) {
+function formatAgroReport(city, risks, lang = 'uk', date = null, extraMetrics = null) {
     const { CROPS_DATA } = require('./crops');
     let esc = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let cityEsc = esc(city);
@@ -718,6 +718,50 @@ function formatAgroReport(city, risks, lang = 'uk', date = null) {
     if (lang === 'uk') {
         message += `📅 <b>Сезонна стратегія: ${esc(stage.name)}</b>\n`;
         message += `🧪 <b>Живлення:</b> ${esc(stage.fertilizer)}\n\n`;
+    }
+
+    if (extraMetrics) {
+        message += `📊 <b>Екологічний фон:</b>\n`;
+        if (extraMetrics.aqi !== undefined) {
+            let quality = lang === 'uk' ? 'Добре' : 'Good';
+            if (extraMetrics.aqi > 100) quality = lang === 'uk' ? 'Шкідливо' : 'Unhealthy';
+            else if (extraMetrics.aqi > 50) quality = lang === 'uk' ? 'Помірно' : 'Moderate';
+            message += `🍃 Повітря (AQI): ${Math.round(extraMetrics.aqi)} (${quality})\n`;
+            
+            // Додаткові деталі (гази та частки)
+            if (extraMetrics.pm2_5 !== undefined) {
+                if (lang === 'uk') {
+                    message += `  ↳ PM2.5: ${Math.round(extraMetrics.pm2_5)}, Озон: ${Math.round(extraMetrics.o3)}, NO2: ${Math.round(extraMetrics.no2)}\n`;
+                } else {
+                    message += `  ↳ PM2.5: ${Math.round(extraMetrics.pm2_5)}, O3: ${Math.round(extraMetrics.o3)}, NO2: ${Math.round(extraMetrics.no2)}\n`;
+                }
+            }
+            if (extraMetrics.ozone_strat) {
+                message += lang === 'uk' 
+                    ? `  ↳ Озон (стратосф.): ${Math.round(extraMetrics.ozone_strat)} DU\n`
+                    : `  ↳ Ozone (strat.): ${Math.round(extraMetrics.ozone_strat)} DU\n`;
+            }
+            if (extraMetrics.solar_max) {
+                message += lang === 'uk'
+                    ? `  ↳ Сонячна енергія (пік): ${Math.round(extraMetrics.solar_max)} Вт/м²\n`
+                    : `  ↳ Solar Energy (peak): ${Math.round(extraMetrics.solar_max)} W/m²\n`;
+            }
+        }
+        if (extraMetrics.pollen_tree !== undefined) {
+            const pTree = extraMetrics.pollen_tree || 0;
+            const pGrass = extraMetrics.pollen_grass || 0;
+            const pWeed = extraMetrics.pollen_weed || 0;
+            let level = 0;
+            if (pTree > 100 || pGrass > 50 || pWeed > 500) level = 4;
+            else if (pTree > 50 || pGrass > 20 || pWeed > 50) level = 3;
+            else if (pTree > 10 || pGrass > 5 || pWeed > 10) level = 2;
+            else if (pTree > 1 || pGrass > 1 || pWeed > 1) level = 1;
+            
+            const pLabels = lang === 'uk' ? ['Низький', 'Помірний', 'Високий', 'Дуже високий'] : ['Low', 'Moderate', 'High', 'Very High'];
+            const pStr = level === 0 ? (lang === 'uk' ? 'Відсутній' : 'None') : pLabels[level - 1] || pLabels[0];
+            message += `🌸 Пилок: ${pStr}\n`;
+        }
+        message += `\n`;
     }
 
     let moon = getLunarPhase(date || new Date());
