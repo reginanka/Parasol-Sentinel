@@ -48,11 +48,7 @@ module.exports = async (req, res) => {
                 uv: "☀️ **УФ-індекс:**",
                 vis: "👁 **Видимість:**",
                 moon: "🌙 **Місяць:**",
-                aqi: "🍃 **Повітря (AQI):**",
-                pollen: "🌸 **Пилок:**",
                 sun: "🌅 **Сонце:**",
-                solar: "☀️ **Сонячна енергія:**",
-                ozone: "🛡 **Озон (стратосф.):**",
                 pressLow: "низький",
                 pressNorm: "норма",
                 pressHigh: "високий",
@@ -74,11 +70,7 @@ module.exports = async (req, res) => {
                 uv: "☀️ **UV Index:**",
                 vis: "👁 **Visibility:**",
                 moon: "🌙 **Moon:**",
-                aqi: "🍃 **Air Quality (AQI):**",
-                pollen: "🌸 **Pollen:**",
                 sun: "🌅 **Sun:**",
-                solar: "☀️ **Solar Energy:**",
-                ozone: "🛡 **Ozone (strat.):**",
                 pressLow: "low",
                 pressNorm: "normal",
                 pressHigh: "high",
@@ -166,40 +158,7 @@ module.exports = async (req, res) => {
                 const apiCityName = response.data.city_name || cityInfo.name;
                 const todayData = fullResponse[0];
 
-                // Check if any user in this city needs AQI or Pollen
-                const needsExtra = cityInfo.users.some(u =>
-                    u.forecastSettings?.enabledMetrics?.includes('aqi') ||
-                    u.forecastSettings?.enabledMetrics?.includes('pollen') ||
-                    u.forecastSettings?.enabledMetrics?.includes('solar') ||
-                    u.forecastSettings?.enabledMetrics?.includes('ozone')
-                );
-
                 let aqiData = null;
-                if (needsExtra) {
-                    try {
-                        const [aqiRes, weatherRes] = await Promise.all([
-                            axios.get(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=us_aqi,pm10,pm2_5,nitrogen_dioxide,ozone,birch_pollen,grass_pollen,ragweed_pollen&timezone=auto`),
-                            axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=shortwave_radiation,total_column_ozone&timezone=auto`)
-                        ]);
-                        
-                        const hAqi = aqiRes.data.hourly;
-                        const hW = weatherRes.data.hourly;
-                        
-                        // Transform into daily-indexable hourly array
-                        aqiData = hAqi.time.map((time, i) => ({
-                            timestamp_local: time,
-                            aqi: hAqi.us_aqi[i],
-                            pm2_5: hAqi.pm2_5[i],
-                            no2: hAqi.nitrogen_dioxide[i],
-                            o3: hAqi.ozone[i],
-                            pollen_tree: hAqi.birch_pollen[i],
-                            pollen_grass: hAqi.grass_pollen[i],
-                            pollen_weed: hAqi.ragweed_pollen[i],
-                            solar: hW.shortwave_radiation[i],
-                            ozone_strat: hW.total_column_ozone[i]
-                        }));
-                    } catch (e) { console.error('Open-Meteo AQI fetch error:', e.message); }
-                }
 
                 // --- SYNC HISTORY ---
                 await History.findOneAndUpdate(
@@ -272,17 +231,6 @@ module.exports = async (req, res) => {
                         if (metrics.includes('uv')) {
                             message += `${fDict[lang].uv} ${formatUV(day.uv)}\n`;
                         }
-                        if (metrics.includes('solar')) {
-                            let solarVal = day.solar_rad || 0;
-                            // If we have hourly extra data, find max solar for the day
-                            if (aqiData) {
-                                const dayHours = aqiData.filter(d => d.timestamp_local.startsWith(day.valid_date));
-                                if (dayHours.length > 0) {
-                                    solarVal = Math.max(...dayHours.map(h => h.solar || 0));
-                                }
-                            }
-                            message += `${fDict[lang].solar} ${Math.round(solarVal)} Вт/м²\n`;
-                        }
                         if (metrics.includes('visibility')) {
                             message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
                         }
@@ -293,57 +241,6 @@ module.exports = async (req, res) => {
                             const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
-                        }
-                        if (metrics.includes('ozone')) {
-                            const dayData = aqiData?.find(d => d.timestamp_local.startsWith(day.valid_date));
-                            if (dayData && dayData.ozone_strat) {
-                                message += `${fDict[lang].ozone} ${Math.round(dayData.ozone_strat)} DU\n`;
-                            }
-                        }
-                        if (metrics.includes('aqi') && aqiData) {
-                            // Find AQI for this day - use noon or first available hour of that day
-                            const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
-                            if (dayAqi) {
-                                let quality = '';
-                                if (dayAqi.aqi <= 50) quality = lang === 'uk' ? 'Добре' : 'Good';
-                                else if (dayAqi.aqi <= 100) quality = lang === 'uk' ? 'Помірно' : 'Moderate';
-                                else quality = lang === 'uk' ? 'Шкідливо' : 'Unhealthy';
-                                message += `${fDict[lang].aqi} ${Math.round(dayAqi.aqi)} (${quality})\n`;
-                                
-                                // Додаткові деталі (гази та частки)
-                                if (lang === 'uk') {
-                                    message += `  ↳ PM2.5: ${Math.round(dayAqi.pm2_5)}, Озон: ${Math.round(dayAqi.o3)}, NO2: ${Math.round(dayAqi.no2)}\n`;
-                                } else {
-                                    message += `  ↳ PM2.5: ${Math.round(dayAqi.pm2_5)}, O3: ${Math.round(dayAqi.o3)}, NO2: ${Math.round(dayAqi.no2)}\n`;
-                                }
-                                
-                                // Стратосферний озон
-                                if (dayAqi.ozone_strat) {
-                                    message += lang === 'uk' 
-                                        ? `  ↳ Озон (стратосф.): ${Math.round(dayAqi.ozone_strat)} DU\n`
-                                        : `  ↳ Ozone (strat.): ${Math.round(dayAqi.ozone_strat)} DU\n`;
-                                }
-                            }
-                        }
-                        if (metrics.includes('pollen') && aqiData) {
-                            const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
-                            if (dayAqi) {
-                                // Thresholds for pollen (approximate grains/m3)
-                                const pTree = dayAqi.pollen_tree || 0;
-                                const pGrass = dayAqi.pollen_grass || 0;
-                                const pWeed = dayAqi.pollen_weed || 0;
-                                
-                                let level = 0; // 0 = None, 1 = Low, 2 = Moderate, 3 = High, 4 = Very High
-                                
-                                if (pTree > 100 || pGrass > 50 || pWeed > 500) level = 4;
-                                else if (pTree > 50 || pGrass > 20 || pWeed > 50) level = 3;
-                                else if (pTree > 10 || pGrass > 5 || pWeed > 10) level = 2;
-                                else if (pTree > 1 || pGrass > 1 || pWeed > 1) level = 1;
-
-                                const pLabels = lang === 'uk' ? ['Низький', 'Помірний', 'Високий', 'Дуже високий'] : ['Low', 'Moderate', 'High', 'Very High'];
-                                const pStr = level === 0 ? (lang === 'uk' ? 'Відсутній' : 'None') : pLabels[level - 1] || pLabels[0];
-                                message += `${fDict[lang].pollen} ${pStr}\n`;
-                            }
                         }
 
                         message += '\n';

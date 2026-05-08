@@ -88,11 +88,7 @@ const dict = {
         metric_uv: "УФ-індекс",
         metric_visibility: "Видимість",
         metric_moon: "Місяць",
-        metric_aqi: "Повітря (AQI)",
-        metric_pollen: "Пилок",
         metric_sun: "Схід/Захід сонця",
-        metric_solar: "Сонячна енергія (Вт/м²)",
-        metric_ozone: "Озон (стратосф.)",
         agroAnalyticsBtn: "📉 Агро-аналітика"
     },
     en: {
@@ -160,11 +156,7 @@ const dict = {
         metric_uv: "UV Index",
         metric_visibility: "Visibility",
         metric_moon: "Moon",
-        metric_aqi: "Air Quality (AQI)",
-        metric_pollen: "Pollen",
         metric_sun: "Sunrise/Sunset",
-        metric_solar: "Solar Energy (W/m²)",
-        metric_ozone: "Ozone (stratosphere)",
         agroAnalyticsBtn: "📉 Agro-Analytics"
     }
 };
@@ -217,9 +209,7 @@ function buildForecastSettingsKeyboard(lang, settings = {}) {
         ['precip', 'wind'],
         ['pressure', 'dew'],
         ['uv', 'visibility'],
-        ['moon', 'sun'],
-        ['aqi', 'pollen'],
-        ['solar', 'ozone']
+        ['moon', 'sun']
     ];
 
     const metricButtons = metricItems.map(row =>
@@ -726,37 +716,7 @@ bot.on('callback_query', async (ctx) => {
             // Check if we have at least 7 days of history for risks calculation
             await fetchMissingHistory(cityDoc, 7);
 
-            // Fetch AQI/Pollen from Open-Meteo if enabled
-            let extraMetrics = null;
-            if (user.forecastSettings?.enabledMetrics?.includes('aqi') || user.forecastSettings?.enabledMetrics?.includes('pollen') || user.forecastSettings?.enabledMetrics?.includes('solar') || user.forecastSettings?.enabledMetrics?.includes('ozone')) {
-                try {
-                    const [aqiRes, weatherRes] = await Promise.all([
-                        axios.get(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}&hourly=us_aqi,pm10,pm2_5,nitrogen_dioxide,ozone,birch_pollen,grass_pollen,ragweed_pollen&timezone=auto`),
-                        axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=shortwave_radiation,total_column_ozone&timezone=auto`)
-                    ]);
-                    const hAqi = aqiRes.data.hourly;
-                    const hW = weatherRes.data.hourly;
-                    const dateStr = tomorrowForecast.valid_date || tomorrowForecast.datetime;
-                    const idx = hAqi.time.findIndex(t => t.startsWith(dateStr));
-                    if (idx !== -1) {
-                        // For solar, find max in that day
-                        const dayHours = hW.shortwave_radiation.slice(idx, idx + 24);
-                        const maxSolar = Math.max(...dayHours);
-
-                        extraMetrics = {
-                            aqi: hAqi.us_aqi[idx],
-                            pm2_5: hAqi.pm2_5[idx],
-                            o3: hAqi.ozone[idx],
-                            no2: hAqi.nitrogen_dioxide[idx],
-                            pollen_tree: hAqi.birch_pollen[idx],
-                            pollen_grass: hAqi.grass_pollen[idx],
-                            pollen_weed: hAqi.ragweed_pollen[idx],
-                            solar_max: maxSolar,
-                            ozone_strat: hW.total_column_ozone[idx]
-                        };
-                    }
-                } catch (e) { console.error('On-demand AQI fetch error:', e.message); }
-            }
+        let extraMetrics = null;
 
             // Fetch last 7 days of history for this city
             const history = await History.find({
