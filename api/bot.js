@@ -368,11 +368,9 @@ bot.start(async (ctx) => {
 
     const keyboard = {
         keyboard: [
-            [{ text: dict[lang].settingsBtn }, { text: dict[lang].cropsBtn }],
-            [{ text: dict[lang].agroForecastBtn }, { text: dict[lang].agroArchiveBtn }, { text: dict[lang].helpBtn }]
+            [{ text: dict[lang].settingsBtn }, { text: dict[lang].agroAnalyticsBtn }]
         ],
         resize_keyboard: true,
-
         is_persistent: true
     };
 
