@@ -51,6 +51,8 @@ module.exports = async (req, res) => {
                 aqi: "🍃 **Повітря (AQI):**",
                 pollen: "🌸 **Пилок:**",
                 sun: "🌅 **Сонце:**",
+                solar: "☀️ **Сонячна енергія:**",
+                ozone: "🛡 **Озон (стратосф.):**",
                 pressLow: "низький",
                 pressNorm: "норма",
                 pressHigh: "високий",
@@ -75,6 +77,8 @@ module.exports = async (req, res) => {
                 aqi: "🍃 **Air Quality (AQI):**",
                 pollen: "🌸 **Pollen:**",
                 sun: "🌅 **Sun:**",
+                solar: "☀️ **Solar Energy:**",
+                ozone: "🛡 **Ozone (strat.):**",
                 pressLow: "low",
                 pressNorm: "normal",
                 pressHigh: "high",
@@ -159,12 +163,15 @@ module.exports = async (req, res) => {
                 // Fetch daily forecast (includes most metrics)
                 const response = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=7`);
                 const fullResponse = response.data.data;
+                const apiCityName = response.data.city_name || cityInfo.name;
                 const todayData = fullResponse[0];
 
                 // Check if any user in this city needs AQI or Pollen
                 const needsExtra = cityInfo.users.some(u =>
                     u.forecastSettings?.enabledMetrics?.includes('aqi') ||
-                    u.forecastSettings?.enabledMetrics?.includes('pollen')
+                    u.forecastSettings?.enabledMetrics?.includes('pollen') ||
+                    u.forecastSettings?.enabledMetrics?.includes('solar') ||
+                    u.forecastSettings?.enabledMetrics?.includes('ozone')
                 );
 
                 let aqiData = null;
@@ -232,7 +239,8 @@ module.exports = async (req, res) => {
                     const settings = user.forecastSettings || { daysCount: 3, enabledMetrics: ['condition', 'temp', 'precip', 'wind', 'pressure'] };
                     const metrics = settings.enabledMetrics;
 
-                    let message = `${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', user.city)}\n\n`;
+                    const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
+                    let message = `${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity)}\n\n`;
 
                     const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 
@@ -285,6 +293,12 @@ module.exports = async (req, res) => {
                             const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
+                        }
+                        if (metrics.includes('ozone')) {
+                            const dayData = aqiData?.find(d => d.timestamp_local.startsWith(day.valid_date));
+                            if (dayData && dayData.ozone_strat) {
+                                message += `${fDict[lang].ozone} ${Math.round(dayData.ozone_strat)} DU\n`;
+                            }
                         }
                         if (metrics.includes('aqi') && aqiData) {
                             // Find AQI for this day - use noon or first available hour of that day
