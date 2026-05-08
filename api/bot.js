@@ -175,9 +175,6 @@ function buildSettingsKeyboard(lang, units = {}) {
     const d = dict[lang];
     const wind = units.wind || 'ms';
     const pressure = units.pressure || 'mmhg';
-    const d = dict[lang];
-    const wind = units.wind || 'ms';
-    const pressure = units.pressure || 'mmhg';
     return {
         inline_keyboard: [
             [
