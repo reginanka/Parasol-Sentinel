@@ -74,7 +74,22 @@ const dict = {
         agroArchiveBtn: "Архів",
         agroRecBtn: "📝 Рекомендації на {date}",
         agroScheduleBtn: "🚜 Графік обробок",
-        agroFiveDayBtn: "📅 Прогноз на 5 днів"
+        agroFiveDayBtn: "📅 Прогноз на 5 днів",
+        settingsForecastBtn: "⚙️ Налаштувати прогноз",
+        forecastSettingsTitle: "🛠 **Налаштування прогнозу**\n\nОберіть кількість днів та показники, які ви хочете бачити у щоденному звіті:",
+        daysCount: "📅 Кількість днів:",
+        metricsTitle: "📊 Показники:",
+        metric_condition: "Стан неба",
+        metric_temp: "Температура",
+        metric_precip: "Опади",
+        metric_wind: "Вітер",
+        metric_pressure: "Тиск",
+        metric_dew: "Точка роси",
+        metric_uv: "УФ-індекс",
+        metric_visibility: "Видимість",
+        metric_moon: "Місяць",
+        metric_aqi: "Повітря (AQI)",
+        metric_pollen: "Пилок"
     },
     en: {
 
@@ -127,7 +142,22 @@ const dict = {
         agroArchiveBtn: "Archive",
         agroRecBtn: "📝 Recommendations for {date}",
         agroScheduleBtn: "🚜 Treatment Schedule",
-        agroFiveDayBtn: "📅 5-Day Forecast"
+        agroFiveDayBtn: "📅 5-Day Forecast",
+        settingsForecastBtn: "⚙️ Configure Forecast",
+        forecastSettingsTitle: "🛠 **Forecast Settings**\n\nChoose the number of days and metrics you want to see in your daily report:",
+        daysCount: "📅 Number of days:",
+        metricsTitle: "📊 Metrics:",
+        metric_condition: "Sky condition",
+        metric_temp: "Temperature",
+        metric_precip: "Precipitation",
+        metric_wind: "Wind",
+        metric_pressure: "Pressure",
+        metric_dew: "Dew Point",
+        metric_uv: "UV Index",
+        metric_visibility: "Visibility",
+        metric_moon: "Moon",
+        metric_aqi: "Air Quality (AQI)",
+        metric_pollen: "Pollen"
     }
 };
 
@@ -152,8 +182,49 @@ function buildSettingsKeyboard(lang, units = {}) {
                 { text: `${units.temp === 'f' ? '✅' : ''} ${d.unitF}`, callback_data: 'unit|temp|f' }
             ],
             [
+                { text: d.settingsForecastBtn, callback_data: 'forecast_menu' }
+            ],
+            [
                 { text: d.settingsCity, callback_data: 'change_city' }
             ]
+        ]
+    };
+}
+
+// Build Forecast configuration keyboard
+function buildForecastSettingsKeyboard(lang, settings = {}) {
+    const d = dict[lang];
+    const daysCount = settings.daysCount || 3;
+    const metrics = settings.enabledMetrics || [];
+
+    const daysRow = [1, 2, 3, 4, 5, 6].map(n => ({
+        text: `${daysCount === n ? '✅ ' : ''}${n}`,
+        callback_data: `forecast|days|${n}`
+    }));
+
+    const metricItems = [
+        ['condition', 'temp'],
+        ['precip', 'wind'],
+        ['pressure', 'dew'],
+        ['uv', 'visibility'],
+        ['moon', 'aqi'],
+        ['pollen']
+    ];
+
+    const metricButtons = metricItems.map(row => 
+        row.map(m => ({
+            text: `${metrics.includes(m) ? '✅ ' : '⬜️ '}${d['metric_' + m]}`,
+            callback_data: `forecast|toggle|${m}`
+        }))
+    );
+
+    return {
+        inline_keyboard: [
+            [{ text: d.daysCount, callback_data: 'noop' }],
+            daysRow,
+            [{ text: d.metricsTitle, callback_data: 'noop' }],
+            ...metricButtons,
+            [{ text: d.backBtn, callback_data: 'open_settings' }]
         ]
     };
 }
@@ -750,15 +821,64 @@ bot.on('callback_query', async (ctx) => {
         }
     }
 
+    // --- Forecast settings menu callback ---
+    else if (data[0] === 'forecast_menu') {
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user) return ctx.answerCbQuery('❌ Error');
+        await ctx.answerCbQuery();
+        await ctx.editMessageText(dict[lang].forecastSettingsTitle, {
+            parse_mode: 'Markdown',
+            reply_markup: buildForecastSettingsKeyboard(lang, user.forecastSettings)
+        });
+    }
+
+    // --- Forecast days/metrics toggle callback ---
+    else if (data[0] === 'forecast') {
+        const [_, subType, value] = data;
+        try {
+            await connectDB();
+            let update;
+            if (subType === 'days') {
+                update = { $set: { 'forecastSettings.daysCount': parseInt(value) } };
+            } else if (subType === 'toggle') {
+                const user = await User.findOne({ telegramId: ctx.from.id });
+                const currentMetrics = user.forecastSettings?.enabledMetrics || [];
+                const newMetrics = currentMetrics.includes(value)
+                    ? currentMetrics.filter(m => m !== value)
+                    : [...currentMetrics, value];
+                update = { $set: { 'forecastSettings.enabledMetrics': newMetrics } };
+            }
+
+            const updatedUser = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                update,
+                { new: true }
+            );
+
+            await ctx.answerCbQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup(
+                buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings)
+            );
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
     // --- Open Settings manual callback ---
     else if (data[0] === 'open_settings') {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user) return ctx.answerCbQuery('❌ Error');
         await ctx.answerCbQuery();
-        await ctx.replyWithMarkdown(
-            dict[lang].settings,
-            { reply_markup: buildSettingsKeyboard(lang, user.units) }
-        );
+        
+        // Use editMessageText if coming from another menu, or reply if new
+        const text = dict[lang].settings;
+        const markup = buildSettingsKeyboard(lang, user.units);
+        
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: markup });
+        } catch (e) {
+            await ctx.replyWithMarkdown(text, { reply_markup: markup });
+        }
     }
 
     // --- Units change callback (wind or pressure) ---

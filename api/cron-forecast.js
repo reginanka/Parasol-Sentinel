@@ -39,12 +39,18 @@ module.exports = async (req, res) => {
 
         const fDict = {
             uk: {
-                title: "🌆 **Прогноз на 3 дні для {city}**",
+                title: "🌆 **Прогноз на {days} дн. для {city}**",
                 temp: "🌡 **Темп:**",
                 precip: "💧 **Вірог. опадів:**",
                 dew: "🌡 **Точка роси:**",
                 wind: "💨 **Вітер:**",
                 press: "🧭 **Тиск:**",
+                uv: "☀️ **УФ-індекс:**",
+                vis: "👁 **Видимість:**",
+                moon: "🌙 **Місяць:**",
+                aqi: "🍃 **Повітря (AQI):**",
+                pollen: "🌸 **Пилок:**",
+                sun: "🌅 **Сонце:**",
                 pressLow: "низький",
                 pressNorm: "норма",
                 pressHigh: "високий",
@@ -57,12 +63,18 @@ module.exports = async (req, res) => {
                 loc: 'uk-UA'
             },
             en: {
-                title: "🌆 **3-day forecast for {city}**",
+                title: "🌆 **{days}-day forecast for {city}**",
                 temp: "🌡 **Temp:**",
                 precip: "💧 **Precip:**",
                 dew: "🌡 **Dew Point:**",
                 wind: "💨 **Wind:**",
                 press: "🧭 **Pressure:**",
+                uv: "☀️ **UV Index:**",
+                vis: "👁 **Visibility:**",
+                moon: "🌙 **Moon:**",
+                aqi: "🍃 **Air Quality (AQI):**",
+                pollen: "🌸 **Pollen:**",
+                sun: "🌅 **Sun:**",
                 pressLow: "low",
                 pressNorm: "normal",
                 pressHigh: "high",
@@ -100,18 +112,12 @@ module.exports = async (req, res) => {
             return baseWind;
         };
 
-        // pres = actual surface pressure (mb), slp = sea-level pressure (mb)
-        // slp is used to classify low/normal/high regardless of city altitude
         const formatPress = (pres_mb, slp_mb, unit, lang) => {
-            const convert = (mb) => unit === 'mmhg'
-                ? Math.round(mb * 0.75006)
-                : Math.round(mb);
+            const convert = (mb) => unit === 'mmhg' ? Math.round(mb * 0.75006) : Math.round(mb);
             const unitStr = unit === 'mmhg' ? fDict[lang].unitMmhg : fDict[lang].unitHpa;
-
             const presVal = convert(pres_mb);
             const slpVal  = convert(slp_mb);
 
-            // Classify based on slp in mb (universal across altitudes)
             let indicator;
             if (slp_mb < 1007)       indicator = `🟢(${fDict[lang].pressLow})`;
             else if (slp_mb <= 1018) indicator = `🟡(${fDict[lang].pressNorm})`;
@@ -120,18 +126,49 @@ module.exports = async (req, res) => {
             return `${presVal} (slp: ${slpVal}) ${unitStr} ${indicator}`;
         };
 
+        const formatUV = (uv) => {
+            let desc = '';
+            if (uv <= 2) desc = '🟢';
+            else if (uv <= 5) desc = '🟡';
+            else if (uv <= 7) desc = '🟠';
+            else if (uv <= 10) desc = '🔴';
+            else desc = '🟣';
+            return `${Math.round(uv)} ${desc}`;
+        };
+
+        const formatMoon = (phase) => {
+            if (phase === 0 || phase === 1) return '🌑';
+            if (phase < 0.25) return '🌒';
+            if (phase === 0.25) return '🌓';
+            if (phase < 0.5) return '🌔';
+            if (phase === 0.5) return '🌕';
+            if (phase < 0.75) return '🌖';
+            if (phase === 0.75) return '🌗';
+            return '🌘';
+        };
+
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
-                // Fetch forecast data once for this unique location
-                const response = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=6`);
+                // Fetch daily forecast (includes most metrics)
+                const response = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=7`);
                 const fullResponse = response.data.data;
-                const forecastData = fullResponse.slice(1, 4); // tom, day after tom, +1
-
                 const todayData = fullResponse[0];
 
-                // --- SYNC HISTORY with supplementary data (precip, rh, clouds, uv, wind) ---
-                // $min/$max protect temp_min/temp_max that cron-check already set from actual readings.
-                // $set fills fields that cron-check does NOT track.
+                // Check if any user in this city needs AQI or Pollen
+                const needsExtra = cityInfo.users.some(u => 
+                    u.forecastSettings?.enabledMetrics?.includes('aqi') || 
+                    u.forecastSettings?.enabledMetrics?.includes('pollen')
+                );
+
+                let aqiData = null;
+                if (needsExtra) {
+                    try {
+                        const aqiRes = await axios.get(`https://api.weatherbit.io/v2.0/forecast/airquality?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`);
+                        aqiData = aqiRes.data.data; // Array of hourly AQI
+                    } catch (e) { console.error('AQI fetch error:', e.message); }
+                }
+
+                // --- SYNC HISTORY ---
                 await History.findOneAndUpdate(
                     { externalId: key, date: todayData.valid_date },
                     {
@@ -149,7 +186,6 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 ).catch(e => console.error('History sync error:', e.message));
 
-                // --- SAVE EVENING SNAPSHOT to City collection for the morning check ---
                 await City.findOneAndUpdate(
                     { externalId: key },
                     {
@@ -157,36 +193,74 @@ module.exports = async (req, res) => {
                             temp: todayData.temp,
                             weatherCode: todayData.weather.code,
                             updatedAt: new Date(),
-                            forecast: fullResponse // full 4 days for reference
+                            forecast: fullResponse
                         }
                     },
                     { upsert: true }
                 );
 
-
                 for (const user of cityInfo.users) {
                     await sleep(40);
                     const lang = user.language || 'uk';
                     const tempUnit = user.units?.temp || 'c';
+                    const settings = user.forecastSettings || { daysCount: 3, enabledMetrics: ['condition', 'temp', 'precip', 'wind', 'pressure'] };
+                    const metrics = settings.enabledMetrics;
 
-                    let message = `${fDict[lang].title.replace('{city}', user.city)}\n\n`;
+                    let message = `${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', user.city)}\n\n`;
 
-                    forecastData.forEach(day => {
+                    const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
+
+                    userForecast.forEach((day, idx) => {
                         const dateObj = new Date(day.valid_date || day.datetime);
                         const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, { weekday: 'short', day: 'numeric', month: 'short' });
                         const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
-                        const desc = getWeatherDesc(day.weather.code, lang);
+                        
+                        message += `📅 **${capDay}**\n`;
+                        
+                        if (metrics.includes('condition')) {
+                            message += `${getWeatherDesc(day.weather.code, lang)}\n`;
+                        }
+                        if (metrics.includes('temp')) {
+                            message += `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n`;
+                        }
+                        if (metrics.includes('precip')) {
+                            message += `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n`;
+                        }
+                        if (metrics.includes('wind')) {
+                            message += `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n`;
+                        }
+                        if (metrics.includes('pressure')) {
+                            message += `${fDict[lang].press} ${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}\n`;
+                        }
+                        if (metrics.includes('dew')) {
+                            message += `${fDict[lang].dew} ${formatTemp(day.dewpt, tempUnit)}\n`;
+                        }
+                        if (metrics.includes('uv')) {
+                            message += `${fDict[lang].uv} ${formatUV(day.uv)}\n`;
+                        }
+                        if (metrics.includes('visibility')) {
+                            message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
+                        }
+                        if (metrics.includes('moon')) {
+                            message += `${fDict[lang].moon} ${formatMoon(day.moon_phase)}\n`;
+                        }
+                        if (metrics.includes('aqi') && aqiData) {
+                            // Find AQI for this day (index idx+1 because aqiData starts from today)
+                            const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
+                            if (dayAqi) message += `${fDict[lang].aqi} ${dayAqi.aqi}\n`;
+                        }
+                        if (metrics.includes('pollen') && aqiData) {
+                            const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
+                            if (dayAqi) {
+                                const p = dayAqi.pollen_level_tree || 0;
+                                const pStr = p === 0 ? '0' : p === 1 ? 'Low' : p === 2 ? 'Mod' : 'High';
+                                message += `${fDict[lang].pollen} ${pStr}\n`;
+                            }
+                        }
 
-                        message += `📅 **${capDay}**\n` +
-                            `${desc}\n` +
-                            `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n` +
-                            `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n` +
-                            `${fDict[lang].dew} ${formatTemp(day.dewpt, tempUnit)}\n` +
-                            `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n` +
-                            `${fDict[lang].press} ${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}\n\n`;
+                        message += '\n';
                     });
 
-                    //const sig = generateSignature(user.telegramId, process.env.CRON_SECRET);
                     await bot.telegram.sendMessage(user.telegramId, message, {
                         parse_mode: 'Markdown',
                         disable_web_page_preview: true,
