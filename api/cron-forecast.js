@@ -116,12 +116,12 @@ module.exports = async (req, res) => {
             const convert = (mb) => unit === 'mmhg' ? Math.round(mb * 0.75006) : Math.round(mb);
             const unitStr = unit === 'mmhg' ? fDict[lang].unitMmhg : fDict[lang].unitHpa;
             const presVal = convert(pres_mb);
-            const slpVal  = convert(slp_mb);
+            const slpVal = convert(slp_mb);
 
             let indicator;
-            if (slp_mb < 1007)       indicator = `🟢(${fDict[lang].pressLow})`;
+            if (slp_mb < 1007) indicator = `🟢(${fDict[lang].pressLow})`;
             else if (slp_mb <= 1018) indicator = `🟡(${fDict[lang].pressNorm})`;
-            else                     indicator = `🔴(${fDict[lang].pressHigh})`;
+            else indicator = `🔴(${fDict[lang].pressHigh})`;
 
             return `${presVal} (slp: ${slpVal}) ${unitStr} ${indicator}`;
         };
@@ -140,7 +140,7 @@ module.exports = async (req, res) => {
             const isUk = lang === 'uk';
             let name = '';
             let icon = '';
-            
+
             if (phase === 0 || phase === 1) { name = isUk ? 'Новий місяць' : 'New Moon'; icon = '🌑'; }
             else if (phase < 0.25) { name = isUk ? 'Молодик' : 'Waxing Crescent'; icon = '🌒'; }
             else if (phase === 0.25) { name = isUk ? 'Перша чверть' : 'First Quarter'; icon = '🌓'; }
@@ -162,17 +162,36 @@ module.exports = async (req, res) => {
                 const todayData = fullResponse[0];
 
                 // Check if any user in this city needs AQI or Pollen
-                const needsExtra = cityInfo.users.some(u => 
-                    u.forecastSettings?.enabledMetrics?.includes('aqi') || 
+                const needsExtra = cityInfo.users.some(u =>
+                    u.forecastSettings?.enabledMetrics?.includes('aqi') ||
                     u.forecastSettings?.enabledMetrics?.includes('pollen')
                 );
 
                 let aqiData = null;
                 if (needsExtra) {
                     try {
-                        const aqiRes = await axios.get(`https://api.weatherbit.io/v2.0/forecast/airquality?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`);
-                        aqiData = aqiRes.data.data; // Array of hourly AQI
-                    } catch (e) { console.error('AQI fetch error:', e.message); }
+                        const [aqiRes, weatherRes] = await Promise.all([
+                            axios.get(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=us_aqi,pm10,pm2_5,nitrogen_dioxide,ozone,birch_pollen,grass_pollen,ragweed_pollen&timezone=auto`),
+                            axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=shortwave_radiation,total_column_ozone&timezone=auto`)
+                        ]);
+                        
+                        const hAqi = aqiRes.data.hourly;
+                        const hW = weatherRes.data.hourly;
+                        
+                        // Transform into daily-indexable hourly array
+                        aqiData = hAqi.time.map((time, i) => ({
+                            timestamp_local: time,
+                            aqi: hAqi.us_aqi[i],
+                            pm2_5: hAqi.pm2_5[i],
+                            no2: hAqi.nitrogen_dioxide[i],
+                            o3: hAqi.ozone[i],
+                            pollen_tree: hAqi.birch_pollen[i],
+                            pollen_grass: hAqi.grass_pollen[i],
+                            pollen_weed: hAqi.ragweed_pollen[i],
+                            solar: hW.shortwave_radiation[i],
+                            ozone_strat: hW.total_column_ozone[i]
+                        }));
+                    } catch (e) { console.error('Open-Meteo AQI fetch error:', e.message); }
                 }
 
                 // --- SYNC HISTORY ---
@@ -221,9 +240,9 @@ module.exports = async (req, res) => {
                         const dateObj = new Date(day.valid_date || day.datetime);
                         const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, { weekday: 'short', day: 'numeric', month: 'short' });
                         const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
-                        
+
                         message += `📅 **${capDay}**\n`;
-                        
+
                         if (metrics.includes('condition')) {
                             message += `${getWeatherDesc(day.weather.code, lang)}\n`;
                         }
@@ -245,6 +264,17 @@ module.exports = async (req, res) => {
                         if (metrics.includes('uv')) {
                             message += `${fDict[lang].uv} ${formatUV(day.uv)}\n`;
                         }
+                        if (metrics.includes('solar')) {
+                            let solarVal = day.solar_rad || 0;
+                            // If we have hourly extra data, find max solar for the day
+                            if (aqiData) {
+                                const dayHours = aqiData.filter(d => d.timestamp_local.startsWith(day.valid_date));
+                                if (dayHours.length > 0) {
+                                    solarVal = Math.max(...dayHours.map(h => h.solar || 0));
+                                }
+                            }
+                            message += `${fDict[lang].solar} ${Math.round(solarVal)} Вт/м²\n`;
+                        }
                         if (metrics.includes('visibility')) {
                             message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
                         }
@@ -256,10 +286,6 @@ module.exports = async (req, res) => {
                             const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
                         }
-                        if (metrics.includes('solar')) {
-                            const rad = Math.round(day.solar_rad || 0);
-                            message += `🔌 ${lang === 'uk' ? 'Сонячна енергія' : 'Solar energy'}: ${rad} Вт/м²\n`;
-                        }
                         if (metrics.includes('aqi') && aqiData) {
                             // Find AQI for this day - use noon or first available hour of that day
                             const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
@@ -268,15 +294,40 @@ module.exports = async (req, res) => {
                                 if (dayAqi.aqi <= 50) quality = lang === 'uk' ? 'Добре' : 'Good';
                                 else if (dayAqi.aqi <= 100) quality = lang === 'uk' ? 'Помірно' : 'Moderate';
                                 else quality = lang === 'uk' ? 'Шкідливо' : 'Unhealthy';
-                                message += `${fDict[lang].aqi} ${dayAqi.aqi} (${quality})\n`;
+                                message += `${fDict[lang].aqi} ${Math.round(dayAqi.aqi)} (${quality})\n`;
+                                
+                                // Додаткові деталі (гази та частки)
+                                if (lang === 'uk') {
+                                    message += `  ↳ PM2.5: ${Math.round(dayAqi.pm2_5)}, Озон: ${Math.round(dayAqi.o3)}, NO2: ${Math.round(dayAqi.no2)}\n`;
+                                } else {
+                                    message += `  ↳ PM2.5: ${Math.round(dayAqi.pm2_5)}, O3: ${Math.round(dayAqi.o3)}, NO2: ${Math.round(dayAqi.no2)}\n`;
+                                }
+                                
+                                // Стратосферний озон
+                                if (dayAqi.ozone_strat) {
+                                    message += lang === 'uk' 
+                                        ? `  ↳ Озон (стратосф.): ${Math.round(dayAqi.ozone_strat)} DU\n`
+                                        : `  ↳ Ozone (strat.): ${Math.round(dayAqi.ozone_strat)} DU\n`;
+                                }
                             }
                         }
                         if (metrics.includes('pollen') && aqiData) {
                             const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
                             if (dayAqi) {
-                                const p = dayAqi.pollen_level_tree || 0;
+                                // Thresholds for pollen (approximate grains/m3)
+                                const pTree = dayAqi.pollen_tree || 0;
+                                const pGrass = dayAqi.pollen_grass || 0;
+                                const pWeed = dayAqi.pollen_weed || 0;
+                                
+                                let level = 0; // 0 = None, 1 = Low, 2 = Moderate, 3 = High, 4 = Very High
+                                
+                                if (pTree > 100 || pGrass > 50 || pWeed > 500) level = 4;
+                                else if (pTree > 50 || pGrass > 20 || pWeed > 50) level = 3;
+                                else if (pTree > 10 || pGrass > 5 || pWeed > 10) level = 2;
+                                else if (pTree > 1 || pGrass > 1 || pWeed > 1) level = 1;
+
                                 const pLabels = lang === 'uk' ? ['Низький', 'Помірний', 'Високий', 'Дуже високий'] : ['Low', 'Moderate', 'High', 'Very High'];
-                                const pStr = p === 0 ? (lang === 'uk' ? 'Відсутній' : 'None') : pLabels[p - 1] || pLabels[0];
+                                const pStr = level === 0 ? (lang === 'uk' ? 'Відсутній' : 'None') : pLabels[level - 1] || pLabels[0];
                                 message += `${fDict[lang].pollen} ${pStr}\n`;
                             }
                         }

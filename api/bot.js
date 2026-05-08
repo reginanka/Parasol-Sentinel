@@ -91,7 +91,9 @@ const dict = {
         metric_aqi: "Повітря (AQI)",
         metric_pollen: "Пилок",
         metric_sun: "Схід/Захід сонця",
-        metric_solar: "Сонячна енергія (Вт/м²)"
+        metric_solar: "Сонячна енергія (Вт/м²)",
+        metric_ozone: "Озон (стратосф.)",
+        agroAnalyticsBtn: "📉 Агро-аналітика"
     },
     en: {
 
@@ -161,13 +163,18 @@ const dict = {
         metric_aqi: "Air Quality (AQI)",
         metric_pollen: "Pollen",
         metric_sun: "Sunrise/Sunset",
-        metric_solar: "Solar Energy (W/m²)"
+        metric_solar: "Solar Energy (W/m²)",
+        metric_ozone: "Ozone (stratosphere)",
+        agroAnalyticsBtn: "📉 Agro-Analytics"
     }
 };
 
 
 // Build settings keyboard based on current user preferences
 function buildSettingsKeyboard(lang, units = {}) {
+    const d = dict[lang];
+    const wind = units.wind || 'ms';
+    const pressure = units.pressure || 'mmhg';
     const d = dict[lang];
     const wind = units.wind || 'ms';
     const pressure = units.pressure || 'mmhg';
@@ -186,10 +193,12 @@ function buildSettingsKeyboard(lang, units = {}) {
                 { text: `${units.temp === 'f' ? '✅' : ''} ${d.unitF}`, callback_data: 'unit|temp|f' }
             ],
             [
-                { text: d.settingsForecastBtn, callback_data: 'forecast_menu' }
+                { text: d.settingsForecastBtn, callback_data: 'forecast_menu' },
+                { text: d.helpBtn, callback_data: 'open_help' }
             ],
             [
-                { text: d.settingsCity, callback_data: 'change_city' }
+                { text: d.settingsCity, callback_data: 'change_city' },
+                { text: d.cropsBtn, callback_data: 'crops_main' }
             ]
         ]
     };
@@ -213,7 +222,7 @@ function buildForecastSettingsKeyboard(lang, settings = {}) {
         ['uv', 'visibility'],
         ['moon', 'sun'],
         ['aqi', 'pollen'],
-        ['solar']
+        ['solar', 'ozone']
     ];
 
     const metricButtons = metricItems.map(row => 
@@ -462,6 +471,18 @@ bot.on('text', async (ctx) => {
         });
     }
 
+    const isAgroAnalytics = query.includes(dict.uk.agroAnalyticsBtn) || query.includes(dict.en.agroAnalyticsBtn);
+    if (isAgroAnalytics) {
+        return ctx.reply(lang === 'uk' ? '📉 Оберіть інструмент агро-аналітики:' : '📉 Select agro-analytics tool:', {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: dict[lang].agroForecastBtn, callback_data: 'agro_forecast_menu' }],
+                    [{ text: dict[lang].agroArchiveBtn, callback_data: 'agro_archive_menu' }]
+                ]
+            }
+        });
+    }
+
     const isAgroForecast = query.includes(dict.uk.agroForecastBtn) || query.includes(dict.en.agroForecastBtn);
     if (isAgroForecast) {
         const user = await User.findOne({ telegramId: ctx.from.id });
@@ -579,10 +600,32 @@ bot.on('text', async (ctx) => {
     }
 });
 
-// Handle button clicks
 bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data.split('|');
     const lang = getLang(ctx);
+
+    if (data[0] === 'open_help') {
+        await ctx.answerCbQuery().catch(() => {});
+        return sendHelpMenu(ctx);
+    }
+    
+    if (data[0] === 'agro_forecast_menu') {
+        await ctx.answerCbQuery().catch(() => {});
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+        const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+        const cityData = await City.findOne({ externalId: cityKey });
+        return ctx.editMessageText(lang === 'uk' ? '🔮 Оберіть тип прогнозу:' : '🔮 Select forecast type:', {
+            reply_markup: buildAgroForecastKeyboard(lang, cityData?.eveningState?.updatedAt)
+        });
+    }
+
+    if (data[0] === 'agro_archive_menu') {
+        await ctx.answerCbQuery().catch(() => {});
+        return ctx.editMessageText(lang === 'uk' ? '📊 Оберіть період для аналізу:' : '📊 Select period for analysis:', {
+            reply_markup: buildArchiveKeyboard(lang)
+        });
+    }
 
     // --- City selection callback ---
     if (data[0] === 'set') {
@@ -688,13 +731,45 @@ bot.on('callback_query', async (ctx) => {
             // Check if we have at least 7 days of history for risks calculation
             await fetchMissingHistory(cityDoc, 7);
 
+            // Fetch AQI/Pollen from Open-Meteo if enabled
+            let extraMetrics = null;
+            if (user.forecastSettings?.enabledMetrics?.includes('aqi') || user.forecastSettings?.enabledMetrics?.includes('pollen')) {
+                try {
+                    const [aqiRes, weatherRes] = await Promise.all([
+                        axios.get(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}&hourly=us_aqi,pm10,pm2_5,nitrogen_dioxide,ozone,birch_pollen,grass_pollen,ragweed_pollen&timezone=auto`),
+                        axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=shortwave_radiation,total_column_ozone&timezone=auto`)
+                    ]);
+                    const hAqi = aqiRes.data.hourly;
+                    const hW = weatherRes.data.hourly;
+                    const dateStr = tomorrowForecast.valid_date || tomorrowForecast.datetime;
+                    const idx = hAqi.time.findIndex(t => t.startsWith(dateStr));
+                    if (idx !== -1) {
+                        // For solar, find max in that day
+                        const dayHours = hW.shortwave_radiation.slice(idx, idx + 24);
+                        const maxSolar = Math.max(...dayHours);
+
+                        extraMetrics = {
+                            aqi: hAqi.us_aqi[idx],
+                            pm2_5: hAqi.pm2_5[idx],
+                            o3: hAqi.ozone[idx],
+                            no2: hAqi.nitrogen_dioxide[idx],
+                            pollen_tree: hAqi.birch_pollen[idx],
+                            pollen_grass: hAqi.grass_pollen[idx],
+                            pollen_weed: hAqi.ragweed_pollen[idx],
+                            solar_max: maxSolar,
+                            ozone_strat: hW.total_column_ozone[idx]
+                        };
+                    }
+                } catch (e) { console.error('On-demand AQI fetch error:', e.message); }
+            }
+
             // Fetch last 7 days of history for this city
             const history = await History.find({
                 externalId: cityKey
             }).sort({ date: -1 }).limit(7).lean();
 
             const risks = analyzeAgroRisks(tomorrowForecast, history, user.crops || []);
-            const report = formatAgroReport(user.city, risks, lang, tomorrowForecast.valid_date || tomorrowForecast.datetime);
+            const report = formatAgroReport(user.city, risks, lang, tomorrowForecast.valid_date || tomorrowForecast.datetime, extraMetrics);
 
             await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (error) {

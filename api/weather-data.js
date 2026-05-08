@@ -116,9 +116,19 @@ module.exports = async (req, res) => {
                 // Also normalize daily wind direction
                 wind_cdir: d.wind_dir != null ? degToCard(d.wind_dir) : (d.wind_cdir || 'N')
             })),
+            aqi: null, // Placeholder for AQI data
             lat: cityLat,
             lon: cityLon
         };
+
+        // 3. Open-Meteo Air Quality (Free)
+        try {
+            const omAqiUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityLat}&longitude=${cityLon}&hourly=us_aqi,birch_pollen,grass_pollen,ragweed_pollen&timezone=auto`;
+            const aqiRes = await axios.get(omAqiUrl);
+            responseData.aqi = aqiRes.data.hourly;
+        } catch (e) {
+            console.error('Open-Meteo AQI Error:', e.message);
+        }
 
         // Attach user unit preferences so the site can display correctly
         const unitsToReturn = userData?.units || { wind: 'ms', pressure: 'mmhg' };
