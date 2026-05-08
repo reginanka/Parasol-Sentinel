@@ -89,7 +89,9 @@ const dict = {
         metric_visibility: "Видимість",
         metric_moon: "Місяць",
         metric_aqi: "Повітря (AQI)",
-        metric_pollen: "Пилок"
+        metric_pollen: "Пилок",
+        metric_sun: "Схід/Захід сонця",
+        metric_solar: "Сонячна енергія (Вт/м²)"
     },
     en: {
 
@@ -157,7 +159,9 @@ const dict = {
         metric_visibility: "Visibility",
         metric_moon: "Moon",
         metric_aqi: "Air Quality (AQI)",
-        metric_pollen: "Pollen"
+        metric_pollen: "Pollen",
+        metric_sun: "Sunrise/Sunset",
+        metric_solar: "Solar Energy (W/m²)"
     }
 };
 
@@ -207,8 +211,9 @@ function buildForecastSettingsKeyboard(lang, settings = {}) {
         ['precip', 'wind'],
         ['pressure', 'dew'],
         ['uv', 'visibility'],
-        ['moon', 'aqi'],
-        ['pollen']
+        ['moon', 'sun'],
+        ['aqi', 'pollen'],
+        ['solar']
     ];
 
     const metricButtons = metricItems.map(row => 

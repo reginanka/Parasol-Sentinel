@@ -136,15 +136,22 @@ module.exports = async (req, res) => {
             return `${Math.round(uv)} ${desc}`;
         };
 
-        const formatMoon = (phase) => {
-            if (phase === 0 || phase === 1) return '🌑';
-            if (phase < 0.25) return '🌒';
-            if (phase === 0.25) return '🌓';
-            if (phase < 0.5) return '🌔';
-            if (phase === 0.5) return '🌕';
-            if (phase < 0.75) return '🌖';
-            if (phase === 0.75) return '🌗';
-            return '🌘';
+        const formatMoon = (phase, lang) => {
+            const isUk = lang === 'uk';
+            let name = '';
+            let icon = '';
+            
+            if (phase === 0 || phase === 1) { name = isUk ? 'Новий місяць' : 'New Moon'; icon = '🌑'; }
+            else if (phase < 0.25) { name = isUk ? 'Молодик' : 'Waxing Crescent'; icon = '🌒'; }
+            else if (phase === 0.25) { name = isUk ? 'Перша чверть' : 'First Quarter'; icon = '🌓'; }
+            else if (phase < 0.5) { name = isUk ? 'Зростаючий' : 'Waxing Gibbous'; icon = '🌔'; }
+            else if (phase === 0.5) { name = isUk ? 'Повня' : 'Full Moon'; icon = '🌕'; }
+            else if (phase < 0.75) { name = isUk ? 'Спадний' : 'Waning Gibbous'; icon = '🌖'; }
+            else if (phase === 0.75) { name = isUk ? 'Остання чверть' : 'Last Quarter'; icon = '🌗'; }
+            else { name = isUk ? 'Старий місяць' : 'Waning Crescent'; icon = '🌘'; }
+
+            const percent = phase <= 0.5 ? phase * 200 : (1 - phase) * 200;
+            return `${icon} ${name} (${Math.round(percent)}%)`;
         };
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
@@ -242,18 +249,34 @@ module.exports = async (req, res) => {
                             message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
                         }
                         if (metrics.includes('moon')) {
-                            message += `${fDict[lang].moon} ${formatMoon(day.moon_phase)}\n`;
+                            message += `${fDict[lang].moon} ${formatMoon(day.moon_phase, lang)}\n`;
+                        }
+                        if (metrics.includes('sun')) {
+                            const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
+                            const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
+                            message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
+                        }
+                        if (metrics.includes('solar')) {
+                            const rad = Math.round(day.solar_rad || 0);
+                            message += `🔌 ${lang === 'uk' ? 'Сонячна енергія' : 'Solar energy'}: ${rad} Вт/м²\n`;
                         }
                         if (metrics.includes('aqi') && aqiData) {
-                            // Find AQI for this day (index idx+1 because aqiData starts from today)
+                            // Find AQI for this day - use noon or first available hour of that day
                             const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
-                            if (dayAqi) message += `${fDict[lang].aqi} ${dayAqi.aqi}\n`;
+                            if (dayAqi) {
+                                let quality = '';
+                                if (dayAqi.aqi <= 50) quality = lang === 'uk' ? 'Добре' : 'Good';
+                                else if (dayAqi.aqi <= 100) quality = lang === 'uk' ? 'Помірно' : 'Moderate';
+                                else quality = lang === 'uk' ? 'Шкідливо' : 'Unhealthy';
+                                message += `${fDict[lang].aqi} ${dayAqi.aqi} (${quality})\n`;
+                            }
                         }
                         if (metrics.includes('pollen') && aqiData) {
                             const dayAqi = aqiData.find(d => d.timestamp_local.startsWith(day.valid_date));
                             if (dayAqi) {
                                 const p = dayAqi.pollen_level_tree || 0;
-                                const pStr = p === 0 ? '0' : p === 1 ? 'Low' : p === 2 ? 'Mod' : 'High';
+                                const pLabels = lang === 'uk' ? ['Низький', 'Помірний', 'Високий', 'Дуже високий'] : ['Low', 'Moderate', 'High', 'Very High'];
+                                const pStr = p === 0 ? (lang === 'uk' ? 'Відсутній' : 'None') : pLabels[p - 1] || pLabels[0];
                                 message += `${fDict[lang].pollen} ${pStr}\n`;
                             }
                         }
@@ -265,9 +288,10 @@ module.exports = async (req, res) => {
                         parse_mode: 'Markdown',
                         disable_web_page_preview: true,
                         reply_markup: {
-                            inline_keyboard: [[
-                                { text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }
-                            ]]
+                            inline_keyboard: [
+                                [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
+                                [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                            ]
                         }
                     });
                     sent++;
