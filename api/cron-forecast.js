@@ -10,6 +10,7 @@ const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML } = require('../utils/helpers');
+const { getLunarPhase } = require('../utils/agro');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 
@@ -132,22 +133,24 @@ module.exports = async (req, res) => {
             return `${Math.round(uv)} ${desc}`;
         };
 
-        const formatMoon = (phase, lang) => {
+        const formatMoon = (dateObj, lang) => {
+            const moonInfo = getLunarPhase(dateObj);
             const isUk = lang === 'uk';
             let name = '';
             let icon = '';
 
-            if (phase === 0 || phase === 1) { name = isUk ? 'Новий місяць' : 'New Moon'; icon = '🌑'; }
-            else if (phase < 0.25) { name = isUk ? 'Молодик' : 'Waxing Crescent'; icon = '🌒'; }
-            else if (phase === 0.25) { name = isUk ? 'Перша чверть' : 'First Quarter'; icon = '🌓'; }
-            else if (phase < 0.5) { name = isUk ? 'Зростаючий' : 'Waxing Gibbous'; icon = '🌔'; }
-            else if (phase === 0.5) { name = isUk ? 'Повня' : 'Full Moon'; icon = '🌕'; }
-            else if (phase < 0.75) { name = isUk ? 'Спадний' : 'Waning Gibbous'; icon = '🌖'; }
-            else if (phase === 0.75) { name = isUk ? 'Остання чверть' : 'Last Quarter'; icon = '🌗'; }
-            else { name = isUk ? 'Старий місяць' : 'Waning Crescent'; icon = '🌘'; }
+            switch (moonInfo.index) {
+                case 0: name = isUk ? 'Новий місяць' : 'New Moon'; icon = '🌑'; break;
+                case 1: name = isUk ? 'Молодик' : 'Waxing Crescent'; icon = '🌒'; break;
+                case 2: name = isUk ? 'Перша чверть' : 'First Quarter'; icon = '🌓'; break;
+                case 3: name = isUk ? 'Зростаючий' : 'Waxing Gibbous'; icon = '🌔'; break;
+                case 4: name = isUk ? 'Повня' : 'Full Moon'; icon = '🌕'; break;
+                case 5: name = isUk ? 'Спадний' : 'Waning Gibbous'; icon = '🌖'; break;
+                case 6: name = isUk ? 'Остання чверть' : 'Last Quarter'; icon = '🌗'; break;
+                case 7: name = isUk ? 'Старий місяць' : 'Waning Crescent'; icon = '🌘'; break;
+            }
 
-            const percent = phase <= 0.5 ? phase * 200 : (1 - phase) * 200;
-            return `${icon} ${name} (${Math.round(percent)}%)`;
+            return `${icon} ${name}`;
         };
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
@@ -235,7 +238,8 @@ module.exports = async (req, res) => {
                             message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
                         }
                         if (metrics.includes('moon')) {
-                            message += `${fDict[lang].moon} ${formatMoon(day.moon_phase, lang)}\n`;
+                            const dObj = new Date(day.valid_date || day.datetime);
+                            message += `${fDict[lang].moon} ${formatMoon(dObj, lang)}\n`;
                         }
                         if (metrics.includes('sun')) {
                             const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
