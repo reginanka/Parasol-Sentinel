@@ -724,7 +724,7 @@ function formatAgroReport(city, risks, lang = 'uk', date = null, extraMetrics = 
 
     let moon = getLunarPhase(date || new Date());
     message += `━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `🌙 ${esc(moon.name)}\n`;
+    message += `${esc(moon.name)}\n`;
     message += `<i>`;
     message += lang === 'uk'
         ? `Дані мають рекомендаційний характер для прийняття агро-рішень</i>`
