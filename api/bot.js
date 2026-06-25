@@ -162,13 +162,19 @@ const dict = {
 };
 
 
+
+function withMainButtons(lang, kb) {
+    const d = dict[lang];
+    kb.push([{ text: d.settingsBtn, callback_data: 'open_settings' }, { text: d.agroAnalyticsBtn, callback_data: 'agro_analytics_main' }]);
+    return { inline_keyboard: kb };
+}
+
 // Build settings keyboard based on current user preferences
 function buildSettingsKeyboard(lang, units = {}) {
     const d = dict[lang];
     const wind = units.wind || 'ms';
     const pressure = units.pressure || 'mmhg';
-    return {
-        inline_keyboard: [
+    return withMainButtons(lang, [
             [
                 { text: `${d.settingsWind} ${wind === 'ms' ? '✅' : ''} ${d.unitMs}`, callback_data: 'unit|wind|ms' },
                 { text: `${wind === 'kmh' ? '✅' : ''} ${d.unitKmh}`, callback_data: 'unit|wind|kmh' }
@@ -189,8 +195,7 @@ function buildSettingsKeyboard(lang, units = {}) {
                 { text: d.settingsCity, callback_data: 'change_city' },
                 { text: d.cropsBtn, callback_data: 'crops_main' }
             ]
-        ]
-    };
+        ]);
 }
 
 // Build Forecast configuration keyboard
@@ -219,15 +224,13 @@ function buildForecastSettingsKeyboard(lang, settings = {}) {
         }))
     );
 
-    return {
-        inline_keyboard: [
+    return withMainButtons(lang, [
             [{ text: d.daysCount, callback_data: 'noop' }],
             daysRow,
             [{ text: d.metricsTitle, callback_data: 'noop' }],
             ...metricButtons,
             [{ text: d.backBtn, callback_data: 'open_settings' }]
-        ]
-    };
+        ]);
 }
 
 // Build help keyboard with optional checkmark for the active topic
@@ -241,14 +244,12 @@ function buildHelpKeyboard(lang, activeTopic = null) {
         ['how']
     ];
 
-    return {
-        inline_keyboard: layout.map(row =>
+    return withMainButtons(lang, layout.map(row =>
             row.map(topic => ({
                 text: `${activeTopic === topic ? '✅ ' : ''}${d['help_' + topic]}`,
                 callback_data: `help|${topic}`
             }))
-        )
-    };
+        ));
 }
 // Build crops main categories keyboard
 function buildCropsCategoriesKeyboard(lang) {
@@ -257,7 +258,7 @@ function buildCropsCategoriesKeyboard(lang) {
         text: CROPS_DATA[key].label[lang],
         callback_data: `crops_cat|${key}`
     }]));
-    return { inline_keyboard: buttons };
+    return withMainButtons(lang, buttons);
 }
 
 // Build crops sub-items keyboard with checkboxes
@@ -274,14 +275,13 @@ function buildCropsItemsKeyboard(lang, categoryKey, userCrops = []) {
     // Add Back button
     buttons.push([{ text: d.backBtn, callback_data: 'crops_main' }]);
 
-    return { inline_keyboard: buttons };
+    return withMainButtons(lang, buttons);
 }
 
 // Build archive selection keyboard
 function buildArchiveKeyboard(lang) {
     const isUk = lang === 'uk';
-    return {
-        inline_keyboard: [
+    return withMainButtons(lang, [
             [
                 { text: isUk ? '7 днів' : '7 Days', callback_data: 'archive|7' },
                 { text: isUk ? '30 днів' : '30 Days', callback_data: 'archive|30' }
@@ -294,8 +294,7 @@ function buildArchiveKeyboard(lang) {
                 { text: isUk ? '🗓 Своя дата' : '🗓 Custom Date', callback_data: 'archive|custom' },
                 { text: isUk ? '⬅️ Мин. рік' : '⬅️ Last Year', callback_data: 'archive|last_year' }
             ]
-        ]
-    };
+        ]);
 }
 
 // Build Agro-Forecast sub-menu keyboard
@@ -305,13 +304,11 @@ function buildAgroForecastKeyboard(lang, lastUpdateDate) {
         ? new Date(lastUpdateDate).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { day: '2-digit', month: '2-digit' })
         : '...';
 
-    return {
-        inline_keyboard: [
+    return withMainButtons(lang, [
             [{ text: d.agroRecBtn.replace('{date}', dateFormatted), callback_data: 'agro_tomorrow' }],
             [{ text: d.agroScheduleBtn, callback_data: 'agro_schedule_only' }],
             [{ text: d.agroFiveDayBtn, callback_data: 'agro_5day' }]
-        ]
-    };
+        ]);
 }
 
 const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language_code === 'ru') ? 'uk' : 'en';
@@ -356,28 +353,20 @@ bot.start(async (ctx) => {
     await connectDB();
     const user = await User.findOne({ telegramId: ctx.from.id });
 
-    const keyboard = {
-        keyboard: [
-            [{ text: dict[lang].settingsBtn }, { text: dict[lang].agroAnalyticsBtn }]
-        ],
-        resize_keyboard: true,
-        is_persistent: true
-    };
+    const mainButtons = withMainButtons(lang, []);
+
+    // First remove reply keyboard if exists
+    await ctx.reply('...', { reply_markup: { remove_keyboard: true } }).then(m => ctx.deleteMessage(m.message_id)).catch(() => {});
 
     if (user) {
         const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
         const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
         await ctx.replyWithMarkdown(dict[lang].welcome, {
-            reply_markup: {
-                ...keyboard,
-                //inline_keyboard: [
-                //[{ text: dict[lang].dashboard, url: dashboardUrl }]
-                //]
-            }
+            reply_markup: mainButtons
         });
     } else {
         await ctx.replyWithMarkdown(dict[lang].welcome, {
-            reply_markup: keyboard
+            reply_markup: mainButtons
         });
     }
 
@@ -459,12 +448,10 @@ bot.on('text', async (ctx) => {
     const isAgroAnalytics = query.includes(dict.uk.agroAnalyticsBtn) || query.includes(dict.en.agroAnalyticsBtn);
     if (isAgroAnalytics) {
         return ctx.reply(lang === 'uk' ? '📉 Оберіть інструмент агро-аналітики:' : '📉 Select agro-analytics tool:', {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: dict[lang].agroForecastBtn, callback_data: 'agro_forecast_menu' }],
-                    [{ text: dict[lang].agroArchiveBtn, callback_data: 'agro_archive_menu' }]
-                ]
-            }
+            reply_markup: withMainButtons(lang, [
+                [{ text: dict[lang].agroForecastBtn, callback_data: 'agro_forecast_menu' }],
+                [{ text: dict[lang].agroArchiveBtn, callback_data: 'agro_archive_menu' }]
+            ])
         });
     }
 
@@ -574,7 +561,7 @@ bot.on('text', async (ctx) => {
             });
 
             await ctx.reply(dict[lang].select, {
-                reply_markup: { inline_keyboard: buttons }
+                reply_markup: withMainButtons(lang, buttons)
             });
         } else {
             await ctx.replyWithMarkdown(dict[lang].notFound);
@@ -588,6 +575,16 @@ bot.on('text', async (ctx) => {
 bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data.split('|');
     const lang = getLang(ctx);
+
+    if (data[0] === 'agro_analytics_main') {
+        await ctx.answerCbQuery().catch(() => { });
+        return ctx.editMessageText(lang === 'uk' ? '📉 Оберіть інструмент агро-аналітики:' : '📉 Select agro-analytics tool:', {
+            reply_markup: withMainButtons(lang, [
+                [{ text: dict[lang].agroForecastBtn, callback_data: 'agro_forecast_menu' }],
+                [{ text: dict[lang].agroArchiveBtn, callback_data: 'agro_archive_menu' }]
+            ])
+        });
+    }
 
     if (data[0] === 'open_help') {
         await ctx.answerCbQuery().catch(() => { });
