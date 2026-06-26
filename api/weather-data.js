@@ -82,7 +82,7 @@ module.exports = async (req, res) => {
         const { lat: cityLat, lon: cityLon } = currentRes.data.data[0];
 
         // 2. Open-Meteo (Utility) - Hourly Forecast for the Chart (Free)
-        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&timezone=auto`;
+        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure&timezone=auto`;
         const openMeteoRes = await axios.get(omUrl).catch(e => { console.error('Open-Meteo Hourly Error:', e.message); return null; });
 
         const currentRaw = currentRes.data.data[0];
@@ -99,6 +99,7 @@ module.exports = async (req, res) => {
                 time: openMeteoRes.data.hourly.time,
                 temperature_2m: openMeteoRes.data.hourly.temperature_2m,
                 wind_speed_10m: openMeteoRes.data.hourly.wind_speed_10m,
+                wind_gusts_10m: openMeteoRes.data.hourly.wind_gusts_10m || [],
                 precipitation: openMeteoRes.data.hourly.precipitation,
                 precipitation_probability: openMeteoRes.data.hourly.precipitation_probability,
                 surface_pressure: openMeteoRes.data.hourly.surface_pressure
