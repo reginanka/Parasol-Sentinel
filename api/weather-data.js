@@ -58,7 +58,9 @@ module.exports = async (req, res) => {
 
         if (!refresh && isCacheValid && userData && userData.lastState && userData.lastState.fullData && 
             userData.lastState.fullData.hourly && userData.lastState.fullData.hourly.time && 
-            userData.lastState.fullData.hourly.time.length > 0) {
+            userData.lastState.fullData.hourly.time.length > 0 &&
+            userData.lastState.fullData.hourly.wind_gusts_10m &&
+            userData.lastState.fullData.hourly.wind_gusts_10m.length > 0) {
             
             return res.status(200).json({
                 cached: true,
