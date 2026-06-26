@@ -574,14 +574,19 @@ function renderChart(dayOffset = 0) {
     }
 
     // Smart start: find the index of the selected day's date in the time array.
-    // This handles stale cache where hourly data may start from a previous day.
+    // For "today" (dayOffset=0), always use the actual current local date
+    // so stale cache never shows a previous day's hours.
     const targetDay = weatherData.daily[dayOffset];
-    if (targetDay) {
-        const targetDateStr = (targetDay.valid_date || '').substring(0, 10); // 'YYYY-MM-DD'
-        if (targetDateStr) {
-            const idx = dataSlice.time.findIndex(t => t.substring(0, 10) === targetDateStr);
-            if (idx !== -1) start = idx;
-        }
+    let targetDateStr = '';
+    if (dayOffset === 0) {
+        const now = new Date();
+        targetDateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    } else if (targetDay) {
+        targetDateStr = (targetDay.valid_date || '').substring(0, 10);
+    }
+    if (targetDateStr && dataSlice.time) {
+        const idx = dataSlice.time.findIndex(t => t.substring(0, 10) === targetDateStr);
+        if (idx !== -1) start = idx;
     }
 
     const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
