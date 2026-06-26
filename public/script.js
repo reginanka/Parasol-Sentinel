@@ -171,6 +171,16 @@ if (!currentLang) {
 }
 let currentDailyIndex = 0;
 
+// Returns the index of today's date in weatherData.daily,
+// falling back to 0 if not found (e.g. data is fresh and starts today).
+function findTodayIndex() {
+    if (!weatherData || !weatherData.daily) return 0;
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    const idx = weatherData.daily.findIndex(d => (d.valid_date || '').substring(0, 10) === todayStr);
+    return idx !== -1 ? idx : 0;
+}
+
 function updateTexts() {
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
@@ -326,7 +336,7 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 localStorage.setItem('units', JSON.stringify(currentUnits));
             }
             accessType.textContent = i18n[currentLang][currentStatusKey];
-            updateUI(0); // Show today by default
+            updateUI(findTodayIndex()); // Select today's card, not always index 0
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
             const lon = data.user?.lon || data.lon || DEFAULT_LON;
             updateWindyWidget(lat, lon);
@@ -353,7 +363,7 @@ async function fetchOpenMeteo(lat, lon, name) {
         weatherData = normalizeOpenMeteo(omData, name);
         currentCity.textContent = name;
         currentStatusKey = 'freeAccess';
-        updateUI(0);
+        updateUI(findTodayIndex()); // Select today's card, not always index 0
         updateWindyWidget(lat, lon);
         updateUpdateTime();
     } catch (error) {
