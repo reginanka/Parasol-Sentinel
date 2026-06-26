@@ -545,8 +545,11 @@ function renderChart(dayOffset = 0) {
     const ctx = document.getElementById('weatherChart').getContext('2d');
     if (weatherChart) weatherChart.destroy();
 
-    const start = dayOffset * 24;
     let dataSlice = weatherData.hourly;
+
+    // Find the correct hourly start index based on the actual date of the selected day,
+    // not just dayOffset*24 — this fixes stale cache where data starts from a previous day.
+    let start = dayOffset * 24; // safe fallback
 
     // Backward compatibility: If hourly is an array (old format), we normalize it on the fly
     if (Array.isArray(dataSlice)) {
@@ -568,6 +571,17 @@ function renderChart(dayOffset = 0) {
         ctx.font = "14px Inter";
         ctx.fillText(i18n[currentLang].chartNoData, ctx.canvas.width / 2, ctx.canvas.height / 2);
         return;
+    }
+
+    // Smart start: find the index of the selected day's date in the time array.
+    // This handles stale cache where hourly data may start from a previous day.
+    const targetDay = weatherData.daily[dayOffset];
+    if (targetDay) {
+        const targetDateStr = (targetDay.valid_date || '').substring(0, 10); // 'YYYY-MM-DD'
+        if (targetDateStr) {
+            const idx = dataSlice.time.findIndex(t => t.substring(0, 10) === targetDateStr);
+            if (idx !== -1) start = idx;
+        }
     }
 
     const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
@@ -594,6 +608,17 @@ function renderChart(dayOffset = 0) {
     } else if (currentMode === 'gusts') {
         // Wind gusts: Open-Meteo hourly wind_gusts_10m is in km/h
         const rawGusts = (dataSlice.wind_gusts_10m || []).slice(start, start + 24);
+        if (!rawGusts.length || rawGusts.every(v => !v)) {
+            // Data missing — show a text message instead of blank chart
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+            ctx.textAlign = 'center';
+            ctx.font = '14px Inter';
+            ctx.fillText(
+                currentLang === 'uk' ? 'Дані поривів недоступні' : 'Gusts data unavailable',
+                ctx.canvas.width / 2, ctx.canvas.height / 2
+            );
+            return;
+        }
         if (currentUnits.wind === 'ms') {
             datasetData = rawGusts.map(v => +(v / 3.6).toFixed(1));
             datasetLabel = currentLang === 'uk' ? 'Пориви (м/с)' : 'Gusts (m/s)';
@@ -678,7 +703,7 @@ function renderChart(dayOffset = 0) {
             },
             scales: {
                 y: {
-                    min: currentMode === 'precip' ? 0 : undefined,
+                    min: (currentMode === 'precip' || currentMode === 'gusts') ? 0 : undefined,
                     grid: { color: 'rgba(255, 255, 255, 0.05)' },
                     ticks: { color: 'rgba(255, 255, 255, 0.4)', font: { size: 10 } }
                 },
