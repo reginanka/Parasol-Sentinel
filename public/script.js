@@ -20,6 +20,7 @@ const i18n = {
         tabProb: "Шанс (%)",
         tabVol: "Об'єм (мм)",
         tabWind: "Вітер",
+        tabGusts: "Пориви",
         tabPress: "Тиск",
         uvIndex: "UV-індекс",
         windGusts: "Вітер",
@@ -54,6 +55,7 @@ const i18n = {
         chartNoData: "Погодинний прогноз недоступний",
         chartTemp: "Темп (°C)",
         chartWind: "Вітер (км/год)",
+        chartGusts: "Пориви вітру",
         chartPrecip: "Опади (мм)",
         chartProb: "Шанс опадів (%)",
         chartPress: "Тиск (мм рт.ст.)",
@@ -92,6 +94,7 @@ const i18n = {
         tabProb: "Prob (%)",
         tabVol: "Vol (mm)",
         tabWind: "Wind",
+        tabGusts: "Gusts",
         tabPress: "Pres",
         uvIndex: "UV Index",
         windGusts: "Wind",
@@ -126,6 +129,7 @@ const i18n = {
         chartNoData: "Hourly forecast unavailable",
         chartTemp: "Temp (°C)",
         chartWind: "Wind (km/h)",
+        chartGusts: "Wind Gusts",
         chartPrecip: "Precip (mm)",
         chartProb: "Precip Chance (%)",
         chartPress: "Pressure (mb)",
@@ -342,7 +346,7 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
 
 async function fetchOpenMeteo(lat, lon, name) {
     try {
-        const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,wind_speed_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,visibility_max,wind_direction_10m_dominant&timezone=auto`);
+        const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,visibility_max,wind_direction_10m_dominant&timezone=auto`);
         if (!omResponse.ok) return;
         const omData = await omResponse.json();
 
@@ -388,7 +392,7 @@ function normalizeOpenMeteo(om, name) {
             uv: om.daily.uv_index_max[0],
             weather: wmoMap[om.current.weather_code] || wmoMap[0]
         },
-        hourly: om.hourly,
+        hourly: { ...om.hourly, wind_gusts_10m: om.hourly.wind_gusts_10m || [] },
         daily: om.daily.time.map((t, i) => {
             const wmo = wmoMap[om.daily.weather_code[i]] || wmoMap[0];
             return {
@@ -550,6 +554,7 @@ function renderChart(dayOffset = 0) {
             time: dataSlice.map(h => h.timestamp_local || h.time),
             temperature_2m: dataSlice.map(h => h.temp || h.temperature_2m),
             wind_speed_10m: dataSlice.map(h => h.wind_spd || h.wind_speed_10m),
+            wind_gusts_10m: dataSlice.map(h => h.gust || h.wind_gusts_10m || 0),
             precipitation: dataSlice.map(h => h.precip || h.precipitation),
             precipitation_probability: dataSlice.map(h => h.pop || h.precipitation_probability),
             surface_pressure: dataSlice.map(h => h.pres || h.surface_pressure)
@@ -586,6 +591,17 @@ function renderChart(dayOffset = 0) {
             datasetLabel = i18n[currentLang].chartWind;
         }
         color = '#38bdf8';
+    } else if (currentMode === 'gusts') {
+        // Wind gusts: Open-Meteo hourly wind_gusts_10m is in km/h
+        const rawGusts = (dataSlice.wind_gusts_10m || []).slice(start, start + 24);
+        if (currentUnits.wind === 'ms') {
+            datasetData = rawGusts.map(v => +(v / 3.6).toFixed(1));
+            datasetLabel = currentLang === 'uk' ? 'Пориви (м/с)' : 'Gusts (m/s)';
+        } else {
+            datasetData = rawGusts;
+            datasetLabel = currentLang === 'uk' ? 'Пориви (км/год)' : 'Gusts (km/h)';
+        }
+        color = '#f97316'; // orange
     } else if (currentMode === 'precip') {
         datasetLabel = i18n[currentLang].chartPrecip;
         datasetData = dataSlice.precipitation.slice(start, start + 24);
@@ -652,6 +668,7 @@ function renderChart(dayOffset = 0) {
                             const y = context.parsed.y;
                             if (currentMode === 'temp') return ` ${formatTemp(y)}`;
                             if (currentMode === 'wind') return ` ${y} ${currentUnits.wind === 'ms' ? 'м/с' : 'км/год'}`;
+                            if (currentMode === 'gusts') return ` ${y} ${currentUnits.wind === 'ms' ? 'м/с' : 'км/год'}`;
                             if (currentMode === 'precip') return ` ${y} мм`;
                             if (currentMode === 'precip_prob') return ` ${y} %`;
                             return ` ${y} ${currentUnits.pressure === 'mmhg' ? 'мм рт.ст.' : 'гПа'}`;
