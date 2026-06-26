@@ -181,6 +181,14 @@ function findTodayIndex() {
     return idx !== -1 ? idx : 0;
 }
 
+// Removes past days from weatherData.daily so stale cache never shows old cards.
+function prunePastDays() {
+    if (!weatherData || !weatherData.daily) return;
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    weatherData.daily = weatherData.daily.filter(d => (d.valid_date || '').substring(0, 10) >= todayStr);
+}
+
 function updateTexts() {
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
@@ -336,6 +344,7 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 localStorage.setItem('units', JSON.stringify(currentUnits));
             }
             accessType.textContent = i18n[currentLang][currentStatusKey];
+            prunePastDays(); // Remove stale past-day cards from cached data
             updateUI(findTodayIndex()); // Select today's card, not always index 0
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
             const lon = data.user?.lon || data.lon || DEFAULT_LON;
@@ -363,6 +372,7 @@ async function fetchOpenMeteo(lat, lon, name) {
         weatherData = normalizeOpenMeteo(omData, name);
         currentCity.textContent = name;
         currentStatusKey = 'freeAccess';
+        prunePastDays(); // Remove stale past-day cards (safety, normally not needed for fresh OM data)
         updateUI(findTodayIndex()); // Select today's card, not always index 0
         updateWindyWidget(lat, lon);
         updateUpdateTime();
