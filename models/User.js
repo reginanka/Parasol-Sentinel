@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const UserSchema = new mongoose.Schema({
     telegramId: { type: Number, required: true, unique: true },
     username: String,
-    city: { type: String, required: true },
+    city: { type: String, default: null },
     lat: Number,
     lon: Number,
     timezone: String,
