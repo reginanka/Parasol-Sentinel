@@ -58,6 +58,12 @@ const dict = {
         settingsWind: "🌬️ Вітер:",
         settingsPress: "🧭 Тиск:",
         settingsCity: "📍 Змінити місто",
+        settingsDeleteCity: "🗑 Видалити місто",
+        settingsUnsubscribe: "🔕 Відписатися від сповіщень",
+        settingsSubscribe: "🔔 Підписатися на сповіщення",
+        cityDeleted: "🗑 Місто видалено. Бот більше не стежить за погодою. Щоб відновити — надішліть назву міста.",
+        notifDisabled: "🔕 Сповіщення вимкнено. Бот продовжує стежити за погодою, але не надсилатиме повідомлення.",
+        notifEnabled: "🔔 Сповіщення увімкнено!",
         settingsSaved: "✅ Налаштування збережено!",
         unitMs: "м/с",
         unitKmh: "км/год",
@@ -126,6 +132,12 @@ const dict = {
         settingsWind: "🌬️ Wind:",
         settingsPress: "🧭 Pressure:",
         settingsCity: "📍 Change city",
+        settingsDeleteCity: "🗑 Delete city",
+        settingsUnsubscribe: "🔕 Unsubscribe from alerts",
+        settingsSubscribe: "🔔 Subscribe to alerts",
+        cityDeleted: "🗑 City removed. The bot is no longer tracking weather. To restore — send a city name.",
+        notifDisabled: "🔕 Notifications disabled. The bot keeps tracking weather but won't send alerts.",
+        notifEnabled: "🔔 Notifications enabled!",
         settingsSaved: "✅ Settings saved!",
         unitMs: "m/s",
         unitKmh: "km/h",
@@ -163,7 +175,7 @@ const dict = {
 
 
 // Build settings keyboard based on current user preferences
-function buildSettingsKeyboard(lang, units = {}) {
+function buildSettingsKeyboard(lang, units = {}, notificationsEnabled = true) {
     const d = dict[lang];
     const wind = units.wind || 'ms';
     const pressure = units.pressure || 'mmhg';
@@ -187,7 +199,11 @@ function buildSettingsKeyboard(lang, units = {}) {
             ],
             [
                 { text: d.settingsCity, callback_data: 'change_city' },
-                { text: d.cropsBtn, callback_data: 'crops_main' }
+                { text: d.settingsDeleteCity, callback_data: 'delete_city' }
+            ],
+            [
+                { text: d.cropsBtn, callback_data: 'crops_main' },
+                { text: notificationsEnabled ? d.settingsUnsubscribe : d.settingsSubscribe, callback_data: 'toggle_notifications' }
             ]
         ]
     };
@@ -399,7 +415,7 @@ bot.command('settings', async (ctx) => {
     }
     await ctx.replyWithMarkdown(
         dict[lang].settings,
-        { reply_markup: buildSettingsKeyboard(lang, user.units) }
+        { reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) }
     );
 });
 
@@ -428,7 +444,7 @@ bot.on('text', async (ctx) => {
             return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
         }
         return ctx.replyWithMarkdown(dict[lang].settings, {
-            reply_markup: buildSettingsKeyboard(lang, user.units)
+            reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false)
         });
     }
 
@@ -918,7 +934,7 @@ bot.on('callback_query', async (ctx) => {
 
         // Use editMessageText if coming from another menu, or reply if new
         const text = dict[lang].settings;
-        const markup = buildSettingsKeyboard(lang, user.units);
+        const markup = buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false);
 
         try {
             await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: markup });
@@ -941,7 +957,7 @@ bot.on('callback_query', async (ctx) => {
             await ctx.answerCbQuery(dict[lang].settingsSaved);
             // Refresh the settings keyboard to show the new checkmark
             await ctx.editMessageReplyMarkup(
-                buildSettingsKeyboard(lang, user?.units)
+                buildSettingsKeyboard(lang, user?.units, user?.notificationsEnabled !== false)
             );
         } catch (error) {
             await ctx.answerCbQuery('❌ Error saving');
@@ -954,6 +970,44 @@ bot.on('callback_query', async (ctx) => {
         await ctx.reply(lang === 'uk'
             ? '📍 Надішліть назву нового міста:'
             : '📍 Send the name of the new city:');
+    }
+
+    // --- Delete city callback ---
+    else if (data[0] === 'delete_city') {
+        try {
+            await connectDB();
+            await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                { $unset: { city: '', lat: '', lon: '', timezone: '', lastState: '' } }
+            );
+            await ctx.answerCbQuery();
+            await ctx.reply(dict[lang].cityDeleted);
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
+    // --- Toggle notifications callback ---
+    else if (data[0] === 'toggle_notifications') {
+        try {
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user) return ctx.answerCbQuery('❌ Error');
+
+            const newValue = user.notificationsEnabled === false ? true : false;
+            await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                { $set: { notificationsEnabled: newValue } }
+            );
+
+            await ctx.answerCbQuery(newValue ? dict[lang].notifEnabled : dict[lang].notifDisabled);
+            // Refresh keyboard to toggle button label
+            await ctx.editMessageReplyMarkup(
+                buildSettingsKeyboard(lang, user.units, newValue)
+            );
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
     }
 
     // --- Archive selection callback ---
