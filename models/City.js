@@ -10,7 +10,8 @@ const CitySchema = new mongoose.Schema({
         temp: Number,
         weatherCode: Number,
         updatedAt: Date,
-        forecast: Array // 3-day forecast data
+        forecast: Array, // 3-day forecast data
+        hourlyPrecip: Array // Додано: збереження плану опадів на завтра
     },
     updatedAt: { type: Date, default: Date.now }
 });
