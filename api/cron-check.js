@@ -171,6 +171,82 @@ module.exports = async (req, res) => {
                     alertTriggered = true;
                 }
 
+                // --- LOGIC D: Smart Hourly Precipitation Check (Open-Meteo) ---
+                try {
+                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=1`;
+                    const omRes = await axios.get(omUrl);
+                    if (omRes.data && omRes.data.hourly) {
+                        const allTimes = omRes.data.hourly.time;
+                        const allPrecip = omRes.data.hourly.precipitation;
+                        
+                        const oldPrecip = evening?.hourlyPrecip || [];
+                        let hasAdded = false;
+                        let hasCanceled = false;
+                        let newRemainingRain = 0;
+                        const rainHours = [];
+                        
+                        let currentHourIso = new Date(localNow);
+                        currentHourIso.setMinutes(0, 0, 0); 
+                        
+                        for (let i = 0; i < allTimes.length; i++) {
+                            const timeStr = allTimes[i];
+                            const hourDate = new Date(timeStr);
+                            
+                            if (hourDate >= currentHourIso && timeStr.startsWith(todayStr)) {
+                                const newP = allPrecip[i];
+                                const oldObj = oldPrecip.find(o => o.time === timeStr);
+                                const oldP = oldObj ? oldObj.precip : 0;
+                                
+                                if (newP >= 0.5 && oldP < 0.5) hasAdded = true;
+                                if (newP < 0.5 && oldP >= 0.5) hasCanceled = true;
+                                
+                                if (newP >= 0.5) {
+                                    newRemainingRain += newP;
+                                    rainHours.push(hourDate.getHours());
+                                }
+                            }
+                        }
+
+                        if (hasAdded || hasCanceled) {
+                            let alertMsg = '';
+                            
+                            if (newRemainingRain === 0) {
+                                alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.`;
+                            } else {
+                                const minH = Math.min(...rainHours);
+                                const maxH = Math.max(...rainHours) + 1;
+                                const hoursStr = minH === (maxH - 1) ? `о ${minH}:00` : `з ${minH}:00 до ${maxH}:00`;
+                                
+                                if (hasAdded) {
+                                    alertMsg = `⚠️ Прогноз змінився: з'явилися нові опади!\nЗагалом сьогодні дощитиме ${hoursStr} (сумарно ${newRemainingRain.toFixed(1)} мм).`;
+                                } else if (hasCanceled) {
+                                    alertMsg = `🌤 Зміни у прогнозі: частину очікуваних опадів скасовано.\nАле обережно, дощ все ще очікується ${hoursStr} (сумарно ${newRemainingRain.toFixed(1)} мм).`;
+                                }
+                            }
+                            
+                            reasons.push("зміна опадів");
+                            for (const user of cityInfo.users) {
+                                alerts.push({ userId: user.telegramId, text: alertMsg });
+                            }
+                            alertTriggered = true;
+                            
+                            const updatedHourly = [];
+                            for (let i = 0; i < allTimes.length; i++) {
+                                if (allTimes[i].startsWith(todayStr)) {
+                                    updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
+                                }
+                            }
+                            
+                            await City.findOneAndUpdate(
+                                { externalId: key },
+                                { $set: { "eveningState.hourlyPrecip": updatedHourly } }
+                            );
+                        }
+                    }
+                } catch (omErr) {
+                    console.error('Open-Meteo fetch error in check:', omErr.message);
+                }
+
                 // --- SENDING ALERTS ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {

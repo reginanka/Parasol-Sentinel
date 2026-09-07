@@ -181,6 +181,24 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 ).catch(e => console.error('History sync error:', e.message));
 
+                let hourlyPrecip = [];
+                try {
+                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
+                    const omRes = await axios.get(omUrl);
+                    if (omRes.data && omRes.data.hourly) {
+                        const tomorrowStr = new Date(Date.now() + 86400000).toLocaleString('en-CA', { timeZone: response.data.timezone || 'Europe/Kyiv' }).slice(0, 10);
+                        const allTimes = omRes.data.hourly.time;
+                        const allPrecip = omRes.data.hourly.precipitation;
+                        for (let i = 0; i < allTimes.length; i++) {
+                            if (allTimes[i].startsWith(tomorrowStr)) {
+                                hourlyPrecip.push({ time: allTimes[i], precip: allPrecip[i] });
+                            }
+                        }
+                    }
+                } catch (omErr) {
+                    console.error('Open-Meteo fetch error in evening forecast:', omErr.message);
+                }
+
                 await City.findOneAndUpdate(
                     { externalId: key },
                     {
@@ -188,7 +206,8 @@ module.exports = async (req, res) => {
                             temp: todayData.temp,
                             weatherCode: todayData.weather.code,
                             updatedAt: new Date(),
-                            forecast: fullResponse
+                            forecast: fullResponse,
+                            hourlyPrecip: hourlyPrecip
                         }
                     },
                     { upsert: true }
