@@ -274,6 +274,7 @@ module.exports = async (req, res) => {
                         disable_web_page_preview: true,
                         reply_markup: {
                             inline_keyboard: [
+                                [{ text: lang === 'uk' ? '🌤 Погод.прогноз на завтра' : '🌤 Weather forecast for tomorrow', callback_data: 'forecast_tomorrow' }],
                                 [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
                                 [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
                             ]

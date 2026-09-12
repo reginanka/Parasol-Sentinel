@@ -699,6 +699,120 @@ bot.on('callback_query', async (ctx) => {
         }
     }
 
+    // --- Detailed tomorrow forecast callback ---
+    else if (data[0] === 'forecast_tomorrow') {
+        try {
+            await ctx.answerCbQuery().catch(() => { });
+            await connectDB();
+
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user || !user.lat || !user.lon) {
+                return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
+            }
+
+            const timezone = user.timezone || 'Europe/Kyiv';
+            const tomorrowDate = new Date(Date.now() + 86400000);
+            const tomorrowStr = tomorrowDate.toLocaleDateString('en-CA', { timeZone: timezone });
+            const formattedDate = tomorrowDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                weekday: 'short', day: 'numeric', month: 'short'
+            });
+
+            // Fetch hourly forecast from Open-Meteo
+            const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,wind_gusts_10m,weather_code&timezone=${encodeURIComponent(timezone)}&forecast_days=2`;
+            const omRes = await axios.get(omUrl);
+
+            if (!omRes.data || !omRes.data.hourly) {
+                return ctx.reply(lang === 'uk' ? '❌ Помилка отримання даних погоди.' : '❌ Failed to fetch weather data.');
+            }
+
+            const { time, temperature_2m, precipitation, precipitation_probability, wind_speed_10m, weather_code } = omRes.data.hourly;
+
+            const getWeatherSymbol = (code) => {
+                if (code === 0) return '☀️';
+                if ([1, 2].includes(code)) return '⛅';
+                if (code === 3) return '☁️';
+                if ([45, 48].includes(code)) return '🌫';
+                if ([51, 53, 55, 56, 57, 61, 63, 65].includes(code)) return '🌧';
+                if ([80, 81, 82].includes(code)) return '🌦';
+                if ([71, 73, 75, 77, 85, 86].includes(code)) return '❄️';
+                if ([95, 96, 99].includes(code)) return '⛈';
+                return '🌡';
+            };
+
+            const displayCity = user.city || (lang === 'uk' ? 'Ваше місто' : 'Your city');
+
+            const tomorrowIndices = [];
+            for (let i = 0; i < time.length; i++) {
+                if (time[i].startsWith(tomorrowStr)) {
+                    tomorrowIndices.push(i);
+                }
+            }
+
+            if (tomorrowIndices.length === 0) {
+                return ctx.reply(lang === 'uk' ? '⚠️ Прогноз на завтра ще недоступний.' : '⚠️ Tomorrow\'s forecast not yet available.');
+            }
+
+            const temps = tomorrowIndices.map(i => temperature_2m[i]);
+            const precips = tomorrowIndices.map(i => precipitation[i]);
+            const minTemp = Math.round(Math.min(...temps));
+            const maxTemp = Math.round(Math.max(...temps));
+            const totalPrecip = precips.reduce((a, b) => a + b, 0).toFixed(1);
+
+            const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
+
+            let msg = lang === 'uk'
+                ? `🌤 <b>Погодинний прогноз на завтра (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`
+                : `🌤 <b>Hourly forecast for tomorrow (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
+
+            msg += lang === 'uk'
+                ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Загалом опадів: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`
+                : `🌡 Temperature: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Total precip: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`;
+
+            let table = `<table bordered striped>\n`;
+            table += `  <caption>${lang === 'uk' ? 'Погодинний прогноз' : 'Hourly Forecast'}</caption>\n`;
+            table += `  <tr>\n`;
+            table += `    <th align="left">${lang === 'uk' ? 'Час' : 'Time'}</th>\n`;
+            table += `    <th align="center">${lang === 'uk' ? 'Стан' : 'Cond'}</th>\n`;
+            table += `    <th align="right">${lang === 'uk' ? 'Темп' : 'Temp'}</th>\n`;
+            table += `    <th align="right">${lang === 'uk' ? 'Опади' : 'Precip'}</th>\n`;
+            table += `    <th align="right">${lang === 'uk' ? 'Вітер' : 'Wind'}</th>\n`;
+            table += `  </tr>\n`;
+
+            const windUnit = user.units?.wind || 'ms';
+            const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
+
+            for (const idx of tomorrowIndices) {
+                const hourDate = new Date(time[idx]);
+                const hour = hourDate.getHours();
+                if (hour % 3 !== 0) continue;
+
+                const hStr = `${hour.toString().padStart(2, '0')}:00`;
+                const icon = getWeatherSymbol(weather_code[idx]);
+                const tVal = `${Math.round(temperature_2m[idx])}°C`;
+                const pMm = precipitation[idx] > 0 ? `${precipitation[idx].toFixed(1)} ${precipUnitStr}` : `0 ${precipUnitStr}`;
+                const wSpd = windUnit === 'kmh' ? Math.round(wind_speed_10m[idx] * 3.6) : Math.round(wind_speed_10m[idx]);
+                const wVal = `${wSpd} ${windUnitStr}`;
+
+                table += `  <tr>\n`;
+                table += `    <td>${hStr}</td>\n`;
+                table += `    <td align="center">${icon}</td>\n`;
+                table += `    <td align="right">${tVal}</td>\n`;
+                table += `    <td align="right">${pMm}</td>\n`;
+                table += `    <td align="right">${wVal}</td>\n`;
+                table += `  </tr>\n`;
+            }
+
+            table += `</table>`;
+
+            msg += table;
+
+            await ctx.reply(msg, { parse_mode: 'HTML' });
+        } catch (error) {
+            console.error('Tomorrow forecast error:', error);
+            await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
+        }
+    }
+
     // --- Agro recommendations callback ---
     else if (data[0] === 'agro_tomorrow') {
         try {
