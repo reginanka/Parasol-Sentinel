@@ -213,6 +213,29 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 );
 
+                // --- FETCH NOAA Kp-index (geomagnetic forecast) ---
+                let geomagInfo = null;
+                try {
+                    const noaaRes = await axios.get('https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json');
+                    if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 1) {
+                        // Skip header row (index 0), look at next ~8 entries (3h blocks = ~24h)
+                        const rows = noaaRes.data.slice(1, 9);
+                        const kpValues = rows.map(r => parseFloat(r[1])).filter(v => !isNaN(v));
+                        const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
+                        if (maxKp !== null) {
+                            let badge = '🟢';
+                            let labelUk = 'Спокійно';
+                            let labelEn = 'Calm';
+                            if (maxKp >= 5) { badge = '🔴'; labelUk = `Буря (Kp ${maxKp.toFixed(0)})`; labelEn = `Storm (Kp ${maxKp.toFixed(0)})`; }
+                            else if (maxKp >= 4) { badge = '🟡'; labelUk = `Збурення (Kp ${maxKp.toFixed(0)})`; labelEn = `Unsettled (Kp ${maxKp.toFixed(0)})`; }
+                            else { labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`; labelEn = `Calm (Kp ${maxKp.toFixed(0)})`; }
+                            geomagInfo = { badge, labelUk, labelEn };
+                        }
+                    }
+                } catch (noaaErr) {
+                    console.error('NOAA Kp fetch error:', noaaErr.message);
+                }
+
                 for (const user of cityInfo.users) {
                     await sleep(40);
                     const lang = user.language || 'uk';
@@ -264,6 +287,11 @@ module.exports = async (req, res) => {
                             const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
+                        }
+                        if (metrics.includes('geomag') && geomagInfo && idx === 0) {
+                            const label = lang === 'uk' ? geomagInfo.labelUk : geomagInfo.labelEn;
+                            const geomagLabel = lang === 'uk' ? '🧲 **Магн. поле:**' : '🧲 **Geomag:**';
+                            message += `${geomagLabel} ${geomagInfo.badge} ${label}\n`;
                         }
 
                         message += '\n';

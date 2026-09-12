@@ -95,7 +95,13 @@ const dict = {
         metric_visibility: "Видимість",
         metric_moon: "Місяць",
         metric_sun: "Схід/Захід сонця",
-        agroAnalyticsBtn: "📉 Агро-аналітика"
+        agroAnalyticsBtn: "📉 Агро-аналітика",
+        metric_aqi: "🍃 Якість повітря",
+        metric_geomag: "🧲 Магнітні бурі",
+        help_aqi: "🍃 Якість повітря",
+        help_geomag: "🧲 Магнітні бурі",
+        help_aqi_desc: "🍃 **ДОВІДКА: ЯКІСТЬ ПОВІТРЯ**\n\nНаш датчик фіксує три фракції **PM (Particulate Matter)** — це мікроскопічний твердий пил, який висить у повітрі:\n\n🔹 **PM₁ (до 1 мкм) — Ультрадрібний пил**\n• *Що це:* Найдрібніші частинки сажі, вихлопних газів авто, диму від торфовищ та промислових викидів.\n• *Чому небезпечно:* Через крихітний розмір вони проходять крізь природні фільтри легень прямо в кров, пошкоджуючи судини та серце.\n\n🔹 **PM₂.₅ (до 2.5 мкм) — Дрібнодисперсний пил**\n• *Норма:* 0–12 мкг/м³\n• *Що це:* Смог, гар від лісових пожеж, пил від тертя автомобільних шин об асфальт.\n• *Чому небезпечно:* Назавжди осідає глибоко в легенях. Найбільше шкодить дітям, вагітним та людям з астмою.\n• *Для тварин/рослин:* Собаки дихають цим інтенсивніше (пил накопичується ближче до землі). На рослинах він забиває пори, заважаючи їм дихати.\n\n🔹 **PM₁₀ (до 10 мкм) — Великий пил**\n• *Норма:* 0–45 мкг/м³\n• *Що це:* Звичайний побутовий пил, пісок, що піднімається вітром, цемент із будівництва та пилок.\n• *Чому небезпечно:* Затримується у носоглотці. Може викликати першіння в горлі, кашель та різь в очах. Важливо для алергіків у сезон цвітіння.\n\n📊 **РІВНІ ІНДЕКСУ AQI**\n\n🟢 **0–50 | Чисто**\nПовітря ідеальне. Можна довго гуляти, провітрювати дім та займатися спортом на вулиці.\n\n🟡 **51–100 | Помірно**\nПовітря прийнятне. Чутливим людям (наприклад, з важкою астмою) краще зменшити тривалі навантаження просто неба.\n\n🟠 **101–150 | Шкідливо для чутливих груп**\nДіти, літні люди та люди з хронічними хворобами дихальних шляхів можуть відчути дискомфорт. Їм краще побути в приміщенні та зачинити вікна.\n\n🔴 **151+ | Шкідливо для всіх**\nНебезпечно для кожного. Спорт на вулиці заборонений, вікна треба щільно зачинити. На вулиці рекомендується перебувати в респіраторі. Кімнатні рослини після тривалого смогу варто протирати вологою губкою.",
+        help_geomag_desc: "🧲 **МАГНІТНІ БУРІ**\n\nГеомагнітна буря — це тимчасове збурення магнітного поля Землі, яке виникає внаслідок сонячних спалахів та корональних викидів маси.\n\n📡 **Kp-індекс** — основна шкала виміру сили бурі (0–9):\n\n🟢 **Kp 0–3 | Спокійно**\nМагнітне поле в нормі. Метеозалежні люди почуваються добре, прилади не збоять.\n\n🟡 **Kp 4 | Слабке збурення**\nМожливе легке погіршення самопочуття у дуже чутливих людей. Полярне сяйво видно на широтах вище 60°.\n\n🔴 **Kp 5–6 | Буря (G1–G2)**\nМетеозалежні люди можуть відчувати головний біль, стрибки тиску, безсоння. Можливі перешкоди у GPS та радіозв'язку.\n\n🔴 **Kp 7–9 | Сильна буря (G3–G5)**\nСерйозний вплив на здоров'я. Можливі збої в електромережах, відхилення компасів. Рекомендується уникати фізичних навантажень.\n\n⚕️ **Поради під час бурі:**\n• Пийте більше води.\n• Уникайте стресів та інтенсивних тренувань.\n• Тримайте під рукою ліки, якщо ви метеозалежні.\n• Рослини можуть реагувати уповільненням росту — не пересаджуйте їх в ці дні."
     },
     en: {
 
@@ -169,7 +175,13 @@ const dict = {
         metric_visibility: "Visibility",
         metric_moon: "Moon",
         metric_sun: "Sunrise/Sunset",
-        agroAnalyticsBtn: "📉 Agro-Analytics"
+        agroAnalyticsBtn: "📉 Agro-Analytics",
+        metric_aqi: "🍃 Air Quality",
+        metric_geomag: "🧲 Magnetic Storms",
+        help_aqi: "🍃 Air Quality",
+        help_geomag: "🧲 Magnetic Storms",
+        help_aqi_desc: "🍃 **AIR QUALITY GUIDE**\n\nOur sensor measures three fractions of **PM (Particulate Matter)** — microscopic solid particles suspended in the air:\n\n🔹 **PM₁ (up to 1 µm) — Ultra-fine particles**\n• *What it is:* The tiniest particles of soot, car exhaust, peat smoke and industrial emissions.\n• *Why it's dangerous:* Due to their tiny size, they pass through the lungs' natural filters directly into the bloodstream, damaging vessels and the heart.\n\n🔹 **PM₂.₅ (up to 2.5 µm) — Fine dust**\n• *Norm:* 0–12 µg/m³\n• *What it is:* Smog, smoke from wildfires, dust from tyre friction on asphalt.\n• *Why it's dangerous:* Permanently settles deep in the lungs. Most harmful to children, pregnant women and people with asthma.\n• *For animals/plants:* Dogs breathe this more intensively (dust accumulates closer to the ground). On plants, it clogs pores, hindering respiration.\n\n🔹 **PM₁₀ (up to 10 µm) — Coarse dust**\n• *Norm:* 0–45 µg/m³\n• *What it is:* Ordinary household dust, wind-blown sand, construction cement and pollen.\n• *Why it's dangerous:* Trapped in the nose and throat. Can cause irritation, coughing and eye irritation. Important for allergy sufferers during pollen season.\n\n📊 **AQI INDEX LEVELS**\n\n🟢 **0–50 | Clean**\nAir is ideal. Safe for long outdoor walks, airing the home and outdoor exercise.\n\n🟡 **51–100 | Moderate**\nAir is acceptable. Sensitive individuals (e.g. with severe asthma) should reduce prolonged outdoor activity.\n\n🟠 **101–150 | Unhealthy for sensitive groups**\nChildren, elderly and people with chronic respiratory conditions may feel discomfort. Better to stay indoors and keep windows closed.\n\n🔴 **151+ | Unhealthy for everyone**\nDangerous for all. Outdoor sport is not recommended, windows should be kept tightly closed. A respirator is advised outdoors. Indoor plants should be wiped with a damp cloth after prolonged smog.",
+        help_geomag_desc: "🧲 **MAGNETIC STORMS**\n\nA geomagnetic storm is a temporary disturbance of Earth's magnetic field caused by solar flares and coronal mass ejections.\n\n📡 **Kp-index** — the main scale for measuring storm intensity (0–9):\n\n🟢 **Kp 0–3 | Calm**\nMagnetic field is normal. Weather-sensitive people feel well, devices work without issues.\n\n🟡 **Kp 4 | Weak disturbance**\nPossible mild discomfort for very sensitive individuals. Aurora visible above 60° latitude.\n\n🔴 **Kp 5–6 | Storm (G1–G2)**\nWeather-sensitive people may experience headaches, blood pressure spikes, insomnia. Possible GPS and radio interference.\n\n🔴 **Kp 7–9 | Severe storm (G3–G5)**\nSerious health impact. Possible power grid disruptions and compass deviations. Avoid physical exertion.\n\n⚕️ **Tips during a storm:**\n• Drink more water.\n• Avoid stress and intense workouts.\n• Keep medication nearby if you are weather-sensitive.\n• Plants may react with slower growth — avoid repotting on these days."
     }
 };
 
@@ -225,7 +237,8 @@ function buildForecastSettingsKeyboard(lang, settings = {}) {
         ['precip', 'wind'],
         ['pressure', 'dew'],
         ['uv', 'visibility'],
-        ['moon', 'sun']
+        ['moon', 'sun'],
+        ['aqi', 'geomag']
     ];
 
     const metricButtons = metricItems.map(row =>
@@ -254,6 +267,7 @@ function buildHelpKeyboard(lang, activeTopic = null) {
         ['press', 'hum'],
         ['precip', 'dew'],
         ['feels', 'cloud'],
+        ['aqi', 'geomag'],
         ['how']
     ];
 
@@ -768,18 +782,17 @@ bot.on('callback_query', async (ctx) => {
                 ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Загалом опадів: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`
                 : `🌡 Temperature: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Total precip: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`;
 
-            let table = `<table bordered striped>\n`;
-            table += `  <caption>${lang === 'uk' ? 'Погодинний прогноз' : 'Hourly Forecast'}</caption>\n`;
-            table += `  <tr>\n`;
-            table += `    <th align="left">${lang === 'uk' ? 'Час' : 'Time'}</th>\n`;
-            table += `    <th align="center">${lang === 'uk' ? 'Стан' : 'Cond'}</th>\n`;
-            table += `    <th align="right">${lang === 'uk' ? 'Темп' : 'Temp'}</th>\n`;
-            table += `    <th align="right">${lang === 'uk' ? 'Опади' : 'Precip'}</th>\n`;
-            table += `    <th align="right">${lang === 'uk' ? 'Вітер' : 'Wind'}</th>\n`;
-            table += `  </tr>\n`;
-
             const windUnit = user.units?.wind || 'ms';
             const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
+
+            // Header
+            const hdr1 = lang === 'uk' ? 'Час  ' : 'Time ';
+            const hdr2 = lang === 'uk' ? 'Стан' : 'Cond';
+            const hdr3 = lang === 'uk' ? ' Темп ' : ' Temp ';
+            const hdr4 = lang === 'uk' ? ' Опади  ' : ' Precip ';
+            const hdr5 = lang === 'uk' ? 'Вітер' : 'Wind ';
+            let table = `<pre>${hdr1}| ${hdr2} |${hdr3}|${hdr4}|${hdr5}\n`;
+            table += `─────┼──────┼──────┼────────┼──────\n`;
 
             for (const idx of tomorrowIndices) {
                 const hourDate = new Date(time[idx]);
@@ -788,21 +801,15 @@ bot.on('callback_query', async (ctx) => {
 
                 const hStr = `${hour.toString().padStart(2, '0')}:00`;
                 const icon = getWeatherSymbol(weather_code[idx]);
-                const tVal = `${Math.round(temperature_2m[idx])}°C`;
-                const pMm = precipitation[idx] > 0 ? `${precipitation[idx].toFixed(1)} ${precipUnitStr}` : `0 ${precipUnitStr}`;
+                const tVal = `${Math.round(temperature_2m[idx])}°C`.padStart(5);
+                const pVal = precipitation[idx] > 0 ? `${precipitation[idx].toFixed(1)}${precipUnitStr}` : `0 ${precipUnitStr}`;
+                const pStr = pVal.padEnd(7);
                 const wSpd = windUnit === 'kmh' ? Math.round(wind_speed_10m[idx] * 3.6) : Math.round(wind_speed_10m[idx]);
-                const wVal = `${wSpd} ${windUnitStr}`;
+                const wStr = `${wSpd}${windUnitStr}`.padEnd(5);
 
-                table += `  <tr>\n`;
-                table += `    <td>${hStr}</td>\n`;
-                table += `    <td align="center">${icon}</td>\n`;
-                table += `    <td align="right">${tVal}</td>\n`;
-                table += `    <td align="right">${pMm}</td>\n`;
-                table += `    <td align="right">${wVal}</td>\n`;
-                table += `  </tr>\n`;
+                table += `${hStr} | ${icon}  |${tVal} | ${pStr}| ${wStr}\n`;
             }
-
-            table += `</table>`;
+            table += `</pre>`;
 
             msg += table;
 

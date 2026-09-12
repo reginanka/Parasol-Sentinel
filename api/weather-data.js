@@ -133,6 +133,36 @@ module.exports = async (req, res) => {
             console.error('Open-Meteo AQI Error:', e.message);
         }
 
+        // 4. WAQI — Real PM sensors (waqi.info)
+        const WAQI_TOKEN = process.env.WAQI_TOKEN;
+        if (WAQI_TOKEN) {
+            try {
+                const waqiUrl = `https://api.waqi.info/feed/geo:${cityLat};${cityLon}/?token=${WAQI_TOKEN}`;
+                const waqiRes = await axios.get(waqiUrl);
+                if (waqiRes.data && waqiRes.data.status === 'ok') {
+                    const waqiData = waqiRes.data.data;
+                    const aqiVal = waqiData.aqi;
+
+                    // Determine AQI badge
+                    let aqiBadge = '🟢';
+                    if (aqiVal > 150) aqiBadge = '🔴';
+                    else if (aqiVal > 100) aqiBadge = '🟠';
+                    else if (aqiVal > 50) aqiBadge = '🟡';
+
+                    responseData.waqi = {
+                        aqi: aqiVal,
+                        aqiBadge,
+                        pm25: waqiData.iaqi?.pm25?.v ?? null,
+                        pm10: waqiData.iaqi?.pm10?.v ?? null,
+                        pm1:  waqiData.iaqi?.pm1?.v  ?? null,
+                        station: waqiData.city?.name || null
+                    };
+                }
+            } catch (e) {
+                console.error('WAQI Error:', e.message);
+            }
+        }
+
         // Attach user unit preferences so the site can display correctly
         const unitsToReturn = userData?.units || { wind: 'ms', pressure: 'mmhg' };
 
