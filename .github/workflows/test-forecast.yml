@@ -1,0 +1,12 @@
+name: Test Forecast (only me)
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Test Forecast
+        run: |
+          curl -X GET "${{ secrets.DOMAIN }}/api/cron-forecast-test" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
