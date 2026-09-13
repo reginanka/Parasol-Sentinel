@@ -998,10 +998,18 @@ bot.on('callback_query', async (ctx) => {
         const text = dict[lang].forecastSettingsTitle;
         const markup = buildForecastSettingsKeyboard(lang, user.forecastSettings);
 
-        // If the button was clicked from a forecast message (identified by the icon), 
+        // If the button was clicked from a forecast message (identified by icons/keywords), 
         // we send a NEW message so the forecast remains visible.
         // Otherwise (from settings menu), we edit the current message.
-        const isFromForecast = ctx.callbackQuery.message?.text?.includes('🌆');
+        const msgText = ctx.callbackQuery.message?.text || '';
+        const isFromForecast = msgText.includes('🌆') || 
+                               msgText.includes('🧪') || 
+                               msgText.includes('Прогноз') || 
+                               msgText.includes('прогноз') || 
+                               msgText.includes('forecast') || 
+                               msgText.includes('Forecast') || 
+                               msgText.includes('Якість повітря') || 
+                               msgText.includes('Air Quality');
 
         if (isFromForecast) {
             await ctx.replyWithMarkdown(text, { reply_markup: markup });
