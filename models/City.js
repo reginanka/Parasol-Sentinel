@@ -13,6 +13,15 @@ const CitySchema = new mongoose.Schema({
         forecast: Array, // 3-day forecast data
         hourlyPrecip: Array // Додано: збереження плану опадів на завтра
     },
+    lastGeomagAlert: {
+        date: String,
+        maxKp: Number
+    },
+    lastAqiAlert: {
+        date: String,
+        tier: Number,
+        aqi: Number
+    },
     updatedAt: { type: Date, default: Date.now }
 });
 

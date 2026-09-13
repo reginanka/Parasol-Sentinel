@@ -247,6 +247,139 @@ module.exports = async (req, res) => {
                     console.error('Open-Meteo fetch error in check:', omErr.message);
                 }
 
+                // --- LOGIC E: Check for Real-time Geomagnetic Activity (Magnetic Storms) ---
+                try {
+                    const noaaRes = await axios.get(
+                        'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
+                        { timeout: 8000 }
+                    );
+                    if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
+                        const now = Date.now();
+                        const next12h = noaaRes.data
+                            .filter(r => {
+                                const t = new Date(r.time_tag).getTime();
+                                return t >= now - 2 * 3600 * 1000 && t <= now + 12 * 3600 * 1000;
+                            })
+                            .map(r => parseFloat(r.kp))
+                            .filter(v => !isNaN(v));
+
+                        const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
+                        
+                        if (currentMaxKp !== null && currentMaxKp >= 4) {
+                            const lastAlertDate = cityDoc?.lastGeomagAlert?.date;
+                            const lastAlertKp = cityDoc?.lastGeomagAlert?.maxKp || 0;
+
+                            // Send alert if no alert sent today or if Kp escalated to a higher level
+                            if (lastAlertDate !== todayStr || currentMaxKp > lastAlertKp) {
+                                const isStorm = currentMaxKp >= 5;
+                                const isUk = (u) => (u.language || 'uk') === 'uk';
+
+                                reasons.push(isStorm ? "магнітна буря" : "збурення магн. поля");
+                                for (const user of cityInfo.users) {
+                                    const metrics = user.forecastSettings?.enabledMetrics || ['condition', 'temp', 'precip', 'wind', 'pressure', 'geomag'];
+                                    if (metrics.includes('geomag')) {
+                                        const ukMsg = isStorm
+                                            ? `🧲 **Увага! Магнітна буря (Kp ${currentMaxKp.toFixed(0)})!**\nФіксується активне збурення геомагнітного поля. Метеозалежним людям варто зменшити навантаження, пити більше води та тримати під рукою ліки.`
+                                            : `🧲 **Увага! Спостерігається збурення магнітного поля (Kp ${currentMaxKp.toFixed(0)})!**\nМожливе незначне погіршення самопочуття у метеочутливих людей.`;
+                                        const enMsg = isStorm
+                                            ? `🧲 **Alert! Magnetic Storm (Kp ${currentMaxKp.toFixed(0)})!**\nActive geomagnetic field disturbance detected. Weather-sensitive people should reduce physical activity and drink plenty of water.`
+                                            : `🧲 **Alert! Unsettled geomagnetic field (Kp ${currentMaxKp.toFixed(0)})!**\nMild discomfort possible for weather-sensitive individuals.`;
+                                        
+                                        alerts.push({ userId: user.telegramId, text: isUk(user) ? ukMsg : enMsg });
+                                    }
+                                }
+                                alertTriggered = true;
+
+                                await City.findOneAndUpdate(
+                                    { externalId: key },
+                                    { $set: { "lastGeomagAlert": { date: todayStr, maxKp: currentMaxKp } } }
+                                );
+                            }
+                        }
+                    }
+                } catch (geomagErr) {
+                    console.error('Geomag check error in cron-check:', geomagErr.message);
+                }
+
+                // --- LOGIC F: Real-time AQI Deterioration Check ---
+                const WAQI_TOKEN = process.env.WAQI_TOKEN;
+                if (WAQI_TOKEN) {
+                    try {
+                        const waqiRes = await axios.get(
+                            `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
+                            { timeout: 8000 }
+                        );
+                        if (waqiRes.data?.status === 'ok') {
+                            const d = waqiRes.data.data;
+                            const aqiVal = d.aqi;
+                            const pm25 = d.iaqi?.pm25?.v ?? null;
+                            const pm10 = d.iaqi?.pm10?.v ?? null;
+
+                            let currentTier = 0;
+                            let badge = '🟢';
+                            if (aqiVal > 150) { currentTier = 3; badge = '🔴'; }
+                            else if (aqiVal > 100) { currentTier = 2; badge = '🟠'; }
+                            else if (aqiVal > 50) { currentTier = 1; badge = '🟡'; }
+
+                            const lastAqiDate = cityDoc?.lastAqiAlert?.date;
+                            const lastAqiTier = cityDoc?.lastAqiAlert?.tier ?? 0;
+
+                            // Alert if air quality has deteriorated to a higher tier or if AQI > 100 on a new day
+                            if (currentTier > 0 && (lastAqiDate !== todayStr || currentTier > lastAqiTier)) {
+                                reasons.push("погіршення якості повітря");
+                                
+                                for (const user of cityInfo.users) {
+                                    const metrics = user.forecastSettings?.enabledMetrics || ['condition', 'temp', 'precip', 'wind', 'pressure', 'aqi'];
+                                    if (metrics.includes('aqi')) {
+                                        const lang = user.language || 'uk';
+                                        const isUk = lang === 'uk';
+                                        
+                                        let title = isUk 
+                                            ? `🍃 **Попередження: Погіршення якості повітря!**` 
+                                            : `🍃 **Alert: Air Quality Deterioration!**`;
+                                        let mainBody = `${title}\n${badge} AQI ${aqiVal}`;
+                                        if (pm25 != null) mainBody += ` | PM2.5: ${pm25}`;
+                                        if (pm10 != null) mainBody += ` | PM10: ${pm10}`;
+
+                                        const issues = [];
+                                        if (pm25 != null && pm25 > 25) issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
+                                        if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
+
+                                        let advice = '';
+                                        if (aqiVal > 150) {
+                                            advice = isUk 
+                                                ? '\n🔴 **Небезпечний рівень забруднення!** Зачиніть вікна, увімкніть очищувач повітря та утримайтесь від виходу на вулицю.' 
+                                                : '\n🔴 **Dangerous air quality!** Close windows, turn on air purifiers, and refrain from going outside.';
+                                        } else if (aqiVal > 100) {
+                                            advice = isUk 
+                                                ? '\n🟠 **Шкідливо для чутливих груп!** Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.' 
+                                                : '\n🟠 **Unhealthy for sensitive groups!** High dust/smog level. We recommend closing windows.';
+                                        } else if (aqiVal > 50) {
+                                            advice = isUk 
+                                                ? '\n🟡 **Повітря помірно забруднене.** Чутливим людям варто бути обережними.' 
+                                                : '\n🟡 **Moderate air pollution.** Sensitive individuals should take precautions.';
+                                        }
+
+                                        if (issues.length > 0) {
+                                            advice += isUk ? `\n(Причина: ${issues.join(', ')})` : `\n(Reason: ${issues.join(', ')})`;
+                                        }
+
+                                        alerts.push({ userId: user.telegramId, text: `${mainBody}${advice}` });
+                                    }
+                                }
+                                alertTriggered = true;
+
+                                await City.findOneAndUpdate(
+                                    { externalId: key },
+                                    { $set: { "lastAqiAlert": { date: todayStr, tier: currentTier, aqi: aqiVal } } }
+                                );
+                            }
+                        }
+                    } catch (aqiErr) {
+                        console.error('AQI check error in cron-check:', aqiErr.message);
+                    }
+                }
+
                 // --- SENDING ALERTS ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {

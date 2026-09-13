@@ -162,6 +162,31 @@ module.exports = async (req, res) => {
                 const todayData = fullResponse[0];
 
                 let aqiData = null;
+                const WAQI_TOKEN = process.env.WAQI_TOKEN;
+                if (WAQI_TOKEN) {
+                    try {
+                        const waqiRes = await axios.get(
+                            `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
+                            { timeout: 8000 }
+                        );
+                        if (waqiRes.data?.status === 'ok') {
+                            const d = waqiRes.data.data;
+                            const aqiVal = d.aqi;
+                            let badge = '🟢';
+                            if (aqiVal > 150) badge = '🔴';
+                            else if (aqiVal > 100) badge = '🟠';
+                            else if (aqiVal > 50) badge = '🟡';
+                            aqiData = {
+                                aqi: aqiVal,
+                                badge,
+                                pm25: d.iaqi?.pm25?.v ?? null,
+                                pm10: d.iaqi?.pm10?.v ?? null
+                            };
+                        }
+                    } catch (e) {
+                        console.error('WAQI error:', e.message);
+                    }
+                }
 
                 // --- SYNC HISTORY ---
                 await History.findOneAndUpdate(
@@ -216,19 +241,38 @@ module.exports = async (req, res) => {
                 // --- FETCH NOAA Kp-index (geomagnetic forecast) ---
                 let geomagInfo = null;
                 try {
-                    const noaaRes = await axios.get('https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json');
-                    if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 1) {
-                        // Skip header row (index 0), look at next ~8 entries (3h blocks = ~24h)
-                        const rows = noaaRes.data.slice(1, 9);
-                        const kpValues = rows.map(r => parseFloat(r[1])).filter(v => !isNaN(v));
+                    const noaaRes = await axios.get(
+                        'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
+                        { timeout: 10000 }
+                    );
+                    if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
+                        const now = Date.now();
+                        const next24h = noaaRes.data
+                            .filter(r => {
+                                const t = new Date(r.time_tag).getTime();
+                                return t >= now - 3 * 3600 * 1000 && t <= now + 24 * 3600 * 1000;
+                            })
+                            .map(r => parseFloat(r.kp))
+                            .filter(v => !isNaN(v));
+
+                        const kpValues = next24h.length > 0
+                            ? next24h
+                            : noaaRes.data.slice(0, 8).map(r => parseFloat(r.kp)).filter(v => !isNaN(v));
+
                         const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
                         if (maxKp !== null) {
                             let badge = '🟢';
-                            let labelUk = 'Спокійно';
-                            let labelEn = 'Calm';
-                            if (maxKp >= 5) { badge = '🔴'; labelUk = `Буря (Kp ${maxKp.toFixed(0)})`; labelEn = `Storm (Kp ${maxKp.toFixed(0)})`; }
-                            else if (maxKp >= 4) { badge = '🟡'; labelUk = `Збурення (Kp ${maxKp.toFixed(0)})`; labelEn = `Unsettled (Kp ${maxKp.toFixed(0)})`; }
-                            else { labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`; labelEn = `Calm (Kp ${maxKp.toFixed(0)})`; }
+                            let labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`;
+                            let labelEn = `Calm (Kp ${maxKp.toFixed(0)})`;
+                            if (maxKp >= 5) {
+                                badge = '🔴';
+                                labelUk = `Буря (Kp ${maxKp.toFixed(0)})`;
+                                labelEn = `Storm (Kp ${maxKp.toFixed(0)})`;
+                            } else if (maxKp >= 4) {
+                                badge = '🟡';
+                                labelUk = `Збурення (Kp ${maxKp.toFixed(0)})`;
+                                labelEn = `Unsettled (Kp ${maxKp.toFixed(0)})`;
+                            }
                             geomagInfo = { badge, labelUk, labelEn };
                         }
                     }
@@ -244,7 +288,50 @@ module.exports = async (req, res) => {
                     const metrics = settings.enabledMetrics;
 
                     const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
-                    let message = `${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity)}\n\n`;
+                    
+                    let aqiPrefix = '';
+                    if (metrics.includes('aqi') && aqiData) {
+                        const aqiLabel = lang === 'uk' ? '🍃 **Якість повітря (на момент зараз):**' : '🍃 **Air Quality (current moment):**';
+                        aqiPrefix = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
+                        if (aqiData.pm25 != null) aqiPrefix += ` | PM2.5: ${aqiData.pm25}`;
+                        if (aqiData.pm10 != null) aqiPrefix += ` | PM10: ${aqiData.pm10}`;
+                        
+                        const isUk = lang === 'uk';
+                        const issues = [];
+                        if (aqiData.pm25 != null && aqiData.pm25 > 25) {
+                            issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
+                        }
+                        if (aqiData.pm10 != null && aqiData.pm10 > 50) {
+                            issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
+                        }
+
+                        let advice = '';
+                        if (aqiData.aqi > 150) {
+                            advice = isUk 
+                                ? '\n🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.' 
+                                : '\n🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
+                        } else if (aqiData.aqi > 100) {
+                            advice = isUk 
+                                ? '\n🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.' 
+                                : '\n🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
+                        } else if (aqiData.aqi > 50) {
+                            advice = isUk 
+                                ? '\n🟡 Повітря прийнятне, але чутливим людям варто бути обережними.' 
+                                : '\n🟡 Air quality is acceptable, but sensitive groups should be cautious.';
+                        } else if (issues.length > 0) {
+                            advice = isUk 
+                                ? '\n⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.' 
+                                : '\n⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+                        }
+
+                        if (issues.length > 0 && advice) {
+                            advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
+                        }
+                        
+                        aqiPrefix += advice + '\n\n';
+                    }
+
+                    let message = `${aqiPrefix}${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity)}\n\n`;
 
                     const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 
@@ -290,7 +377,7 @@ module.exports = async (req, res) => {
                         }
                         if (metrics.includes('geomag') && geomagInfo && idx === 0) {
                             const label = lang === 'uk' ? geomagInfo.labelUk : geomagInfo.labelEn;
-                            const geomagLabel = lang === 'uk' ? '🧲 **Магн. поле:**' : '🧲 **Geomag:**';
+                            const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
                             message += `${geomagLabel} ${geomagInfo.badge} ${label}\n`;
                         }
 

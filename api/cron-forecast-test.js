@@ -240,7 +240,50 @@ module.exports = async (req, res) => {
 
         // --- Формування повідомлення ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
-        let message = `🧪 **ТЕСТОВИЙ прогноз на ${settings.daysCount} дн. для ${displayCity}**\n\n`;
+        
+        let aqiPrefix = '';
+        if (metrics.includes('aqi') && aqiData) {
+            const aqiLabel = lang === 'uk' ? '🍃 **Якість повітря (на момент зараз):**' : '🍃 **Air Quality (current moment):**';
+            aqiPrefix = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
+            if (aqiData.pm25 != null) aqiPrefix += ` | PM2.5: ${aqiData.pm25}`;
+            if (aqiData.pm10 != null) aqiPrefix += ` | PM10: ${aqiData.pm10}`;
+            
+            const isUk = lang === 'uk';
+            const issues = [];
+            if (aqiData.pm25 != null && aqiData.pm25 > 25) {
+                issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
+            }
+            if (aqiData.pm10 != null && aqiData.pm10 > 50) {
+                issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
+            }
+
+            let advice = '';
+            if (aqiData.aqi > 150) {
+                advice = isUk 
+                    ? '\n🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.' 
+                    : '\n🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
+            } else if (aqiData.aqi > 100) {
+                advice = isUk 
+                    ? '\n🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.' 
+                    : '\n🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
+            } else if (aqiData.aqi > 50) {
+                advice = isUk 
+                    ? '\n🟡 Повітря прийнятне, але чутливим людям варто бути обережними.' 
+                    : '\n🟡 Air quality is acceptable, but sensitive groups should be cautious.';
+            } else if (issues.length > 0) {
+                advice = isUk 
+                    ? '\n⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.' 
+                    : '\n⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+            }
+
+            if (issues.length > 0 && advice) {
+                advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
+            }
+            
+            aqiPrefix += advice + '\n\n';
+        }
+
+        let message = `${aqiPrefix}🧪 **ТЕСТОВИЙ прогноз на ${settings.daysCount} дн. для ${displayCity}**\n\n`;
 
         const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 
@@ -288,22 +331,22 @@ module.exports = async (req, res) => {
             }
             if (metrics.includes('geomag') && geomagInfo && idx === 0) {
                 const label = lang === 'uk' ? geomagInfo.labelUk : geomagInfo.labelEn;
-                const geomagLabel = lang === 'uk' ? '🧲 **Магн. поле:**' : '🧲 **Geomag:**';
+                const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
                 message += `${geomagLabel} ${geomagInfo.badge} ${label}\n`;
-            }
-            if (metrics.includes('aqi') && aqiData && idx === 0) {
-                const aqiLabel = lang === 'uk' ? '🍃 **Якість повітря:**' : '🍃 **Air Quality:**';
-                let line = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
-                if (aqiData.pm25 != null) line += ` | PM2.5: ${aqiData.pm25}`;
-                if (aqiData.pm10 != null) line += ` | PM10: ${aqiData.pm10}`;
-                message += `${line}\n`;
             }
             message += '\n';
         });
 
         await bot.telegram.sendMessage(user.telegramId, message, {
             parse_mode: 'Markdown',
-            disable_web_page_preview: true
+            disable_web_page_preview: true,
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: lang === 'uk' ? '🌤 Погод.прогноз на завтра' : '🌤 Weather forecast for tomorrow', callback_data: 'forecast_tomorrow' }],
+                    [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
+                    [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                ]
+            }
         });
         
         await log(`🧪 <b>Тестовий прогноз</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
