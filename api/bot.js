@@ -101,7 +101,21 @@ const dict = {
         help_aqi: "🍃 Якість повітря",
         help_geomag: "🧲 Магнітні бурі",
         help_aqi_desc: "🍃 **ДОВІДКА: ЯКІСТЬ ПОВІТРЯ**\n\nНаш датчик фіксує три фракції **PM (Particulate Matter)** — це мікроскопічний твердий пил, який висить у повітрі:\n\n🔹 **PM₁ (до 1 мкм) — Ультрадрібний пил**\n• __Що це:__ Найдрібніші частинки сажі, вихлопних газів авто, диму від торфовищ та промислових викидів.\n• __Чому небезпечно:__ Через крихітний розмір вони проходять крізь природні фільтри легень прямо в кров, пошкоджуючи судини та серце.\n\n🔹 **PM₂.₅ (до 2.5 мкм) — Дрібнодисперсний пил**\n• __Норма:__ 0–12 мкг/м³\n• __Що це:__ Смог, гар від лісових пожеж, пил від тертя автомобільних шин об асфальт.\n• __Чому небезпечно:__ Назавжди осідає глибоко в легенях. Найбільше шкодить дітям, вагітним та людям з астмою.\n• __Для тварин/рослин:__ Собаки дихають цим інтенсивніше (пил накопичується ближче до землі). На рослинах він забиває пори, заважаючи їм дихати.\n\n🔹 **PM₁₀ (до 10 мкм) — Великий пил**\n• __Норма:__ 0–45 мкг/м³\n• __Що це:__ Звичайний побутовий пил, пісок, що піднімається вітром, цемент із будівництва та пилок.\n• __Чому небезпечно:__ Затримується у носоглотці. Може викликати першіння в горлі, кашель та різь в очах. Важливо для алергіків у сезон цвітіння.\n\n📊 **РІВНІ ІНДЕКСУ AQI**\n\n🟢 **0–50 | Чисто**\nПовітря ідеальне. Можна довго гуляти, провітрювати дім та займатися спортом на вулиці.\n\n🟡 **51–100 | Помірно**\nПовітря прийнятне. Чутливим людям (наприклад, з важкою астмою) краще зменшити тривалі навантаження просто неба.\n\n🟠 **101–150 | Шкідливо для чутливих груп**\nДіти, літні люди та люди з хронічними хворобами дихальних шляхів можуть відчути дискомфорт. Їм краще побути в приміщенні та зачинити вікна.\n\n🔴 **151+ | Шкідливо для всіх**\nНебезпечно для кожного. Спорт на вулиці заборонений, вікна треба щільно зачинити. На вулиці рекомендується перебувати в респіраторі. Кімнатні рослини після тривалого смогу варто протирати вологою губкою.",
-        help_geomag_desc: "🧲 **МАГНІТНІ БУРІ**\n\nГеомагнітна буря — це тимчасове збурення магнітного поля Землі, яке виникає внаслідок сонячних спалахів та корональних викидів маси.\n\n📡 **Kp-індекс** — основна шкала виміру сили бурі (0–9):\n\n🟢 **Kp 0–3 | Спокійно**\nМагнітне поле в нормі. Метеозалежні люди почуваються добре, прилади не збоять.\n\n🟡 **Kp 4 | Слабке збурення**\nМожливе легке погіршення самопочуття у дуже чутливих людей. Полярне сяйво видно на широтах вище 60°.\n\n🔴 **Kp 5–6 | Буря (G1–G2)**\nМетеозалежні люди можуть відчувати головний біль, стрибки тиску, безсоння. Можливі перешкоди у GPS та радіозв'язку.\n\n🔴 **Kp 7–9 | Сильна буря (G3–G5)**\nСерйозний вплив на здоров'я. Можливі збої в електромережах, відхилення компасів. Рекомендується уникати фізичних навантажень.\n\n⚕️ **Поради під час бурі:**\n• Пийте більше води.\n• Уникайте стресів та інтенсивних тренувань.\n• Тримайте під рукою ліки, якщо ви метеозалежні.\n• Рослини можуть реагувати уповільненням росту — не пересаджуйте їх в ці дні."
+        help_geomag_desc: "🧲 **МАГНІТНІ БУРІ**\n\nГеомагнітна буря — це тимчасове збурення магнітного поля Землі, яке виникає внаслідок сонячних спалахів та корональних викидів маси.\n\n📡 **Kp-індекс** — основна шкала виміру сили бурі (0–9):\n\n🟢 **Kp 0–3 | Спокійно**\nМагнітне поле в нормі. Метеозалежні люди почуваються добре, прилади не збоять.\n\n🟡 **Kp 4 | Слабке збурення**\nМожливе легке погіршення самопочуття у дуже чутливих людей. Полярне сяйво видно на широтах вище 60°.\n\n🔴 **Kp 5–6 | Буря (G1–G2)**\nМетеозалежні люди можуть відчувати головний біль, стрибки тиску, безсоння. Можливі перешкоди у GPS та радіозв'язку.\n\n🔴 **Kp 7–9 | Сильна буря (G3–G5)**\nСерйозний вплив на здоров'я. Можливі збої в електромережах, відхилення компасів. Рекомендується уникати фізичних навантажень.\n\n⚕️ **Поради під час бурі:**\n• Пийте більше води.\n• Уникайте стресів та інтенсивних тренувань.\n• Тримайте під рукою ліки, якщо ви метеозалежні.\n• Рослини можуть реагувати уповільненням росту — не пересаджуйте їх в ці дні.",
+        alertSettingsTitle: "🔔 **Сповіщення про зміни**",
+        alertSettingsDesc: "Тут ви керуєте тільки сповіщеннями про різкі зміни погоди.\nВечірній прогноз налаштовується окремо.",
+        alert_temperature: "Температура (зміна прогнозу + аномалія)",
+        alert_precip: "Опади (з’явилися / скасували)",
+        alert_magneticStorm: "Магнітні бурі",
+        alert_airQuality: "Якість повітря",
+        alertDisableAll: "🔕 Вимкнути всі сповіщення про зміни",
+        alertEnableAll: "🔔 Увімкнути всі сповіщення про зміни",
+        alertConfigureBtn: "⚙️ Налаштувати сповіщення",
+        settingsChangeAlerts: "🔔 Сповіщення про зміни",
+        settingsEveningForecastBtn: "🌆 Вечірній прогноз",
+        settingsEveningForecast: "⚙️ Налашт. вечірній прогноз",
+        settingsGeneral: "⚙️ Загальні налаштування",
+        receiveEveningForecast: "Отримувати вечірній прогноз"
     },
     en: {
 
@@ -181,10 +195,48 @@ const dict = {
         help_aqi: "🍃 Air Quality",
         help_geomag: "🧲 Magnetic Storms",
         help_aqi_desc: "🍃 **AIR QUALITY GUIDE**\n\nOur sensor measures three fractions of **PM (Particulate Matter)** — microscopic solid particles suspended in the air:\n\n🔹 **PM₁ (up to 1 µm) — Ultra-fine particles**\n• __What it is:__ The tiniest particles of soot, car exhaust, peat smoke and industrial emissions.\n• __Why it's dangerous:__ Due to their tiny size, they pass through the lungs' natural filters directly into the bloodstream, damaging vessels and the heart.\n\n🔹 **PM₂.₅ (up to 2.5 µm) — Fine dust**\n• __Norm:__ 0–12 µg/m³\n• __What it is:__ Smog, smoke from wildfires, dust from tyre friction on asphalt.\n• __Why it's dangerous:__ Permanently settles deep in the lungs. Most harmful to children, pregnant women and people with asthma.\n• __For animals/plants:__ Dogs breathe this more intensively (dust accumulates closer to the ground). On plants, it clogs pores, hindering respiration.\n\n🔹 **PM₁₀ (up to 10 µm) — Coarse dust**\n• __Norm:__ 0–45 µg/m³\n• __What it is:__ Ordinary household dust, wind-blown sand, construction cement and pollen.\n• __Why it's dangerous:__ Trapped in the nose and throat. Can cause irritation, coughing and eye irritation. Important for allergy sufferers during pollen season.\n\n📊 **AQI INDEX LEVELS**\n\n🟢 **0–50 | Clean**\nAir is ideal. Safe for long outdoor walks, airing the home and outdoor exercise.\n\n🟡 **51–100 | Moderate**\nAir is acceptable. Sensitive individuals (e.g. with severe asthma) should reduce prolonged outdoor activity.\n\n🟠 **101–150 | Unhealthy for sensitive groups**\nChildren, elderly and people with chronic respiratory conditions may feel discomfort. Better to stay indoors and keep windows closed.\n\n🔴 **151+ | Unhealthy for everyone**\nDangerous for all. Outdoor sport is not recommended, windows should be kept tightly closed. A respirator is advised outdoors. Indoor plants should be wiped with a damp cloth after prolonged smog.",
-        help_geomag_desc: "🧲 **MAGNETIC STORMS**\n\nA geomagnetic storm is a temporary disturbance of Earth's magnetic field caused by solar flares and coronal mass ejections.\n\n📡 **Kp-index** — the main scale for measuring storm intensity (0–9):\n\n🟢 **Kp 0–3 | Calm**\nMagnetic field is normal. Weather-sensitive people feel well, devices work without issues.\n\n🟡 **Kp 4 | Weak disturbance**\nPossible mild discomfort for very sensitive individuals. Aurora visible above 60° latitude.\n\n🔴 **Kp 5–6 | Storm (G1–G2)**\nWeather-sensitive people may experience headaches, blood pressure spikes, insomnia. Possible GPS and radio interference.\n\n🔴 **Kp 7–9 | Severe storm (G3–G5)**\nSerious health impact. Possible power grid disruptions and compass deviations. Avoid physical exertion.\n\n⚕️ **Tips during a storm:**\n• Drink more water.\n• Avoid stress and intense workouts.\n• Keep medication nearby if you are weather-sensitive.\n• Plants may react with slower growth — avoid repotting on these days."
+        help_geomag_desc: "🧲 **MAGNETIC STORMS**\n\nA geomagnetic storm is a temporary disturbance of Earth's magnetic field caused by solar flares and coronal mass ejections.\n\n📡 **Kp-index** — the main scale for measuring storm intensity (0–9):\n\n🟢 **Kp 0–3 | Calm**\nMagnetic field is normal. Weather-sensitive people feel well, devices work without issues.\n\n🟡 **Kp 4 | Weak disturbance**\nPossible mild discomfort for very sensitive individuals. Aurora visible above 60° latitude.\n\n🔴 **Kp 5–6 | Storm (G1–G2)**\nWeather-sensitive people may experience headaches, blood pressure spikes, insomnia. Possible GPS and radio interference.\n\n🔴 **Kp 7–9 | Severe storm (G3–G5)**\nSerious health impact. Possible power grid disruptions and compass deviations. Avoid physical exertion.\n\n⚕️ **Tips during a storm:**\n• Drink more water.\n• Avoid stress and intense workouts.\n• Keep medication nearby if you are weather-sensitive.\n• Plants may react with slower growth — avoid repotting on these days.",
+        alertSettingsTitle: "🔔 **Change Alerts**",
+        alertSettingsDesc: "Here you control only alerts about sudden weather changes.\nThe evening forecast is configured separately.",
+        alert_temperature: "Temperature (forecast + anomaly)",
+        alert_precip: "Precipitation (appeared / canceled)",
+        alert_magneticStorm: "Magnetic storms",
+        alert_airQuality: "Air quality",
+        alertDisableAll: "🔕 Disable all change alerts",
+        alertEnableAll: "🔔 Enable all change alerts",
+        alertConfigureBtn: "⚙️ Configure alerts",
+        settingsChangeAlerts: "🔔 Change alerts",
+        settingsEveningForecastBtn: "🌆 Evening forecast",
+        settingsEveningForecast: "⚙️ Evening forecast settings",
+        settingsGeneral: "⚙️ General settings",
+        receiveEveningForecast: "Receive evening forecast"
     }
 };
 
+// Build Alert Triggers configuration keyboard
+function buildAlertTriggersKeyboard(lang, triggers = {}) {
+    const d = dict[lang];
+    const keys = ['temperature', 'precip', 'magneticStorm', 'airQuality'];
+    const hasAnyActive = keys.some(k => triggers[k] !== false);
+
+    const masterBtn = hasAnyActive
+        ? { text: d.alertDisableAll, callback_data: 'alert|toggle_all|off' }
+        : { text: d.alertEnableAll, callback_data: 'alert|toggle_all|on' };
+
+    const getCheck = (key) => (triggers[key] !== false ? '✅ ' : '⬜️ ');
+
+    return {
+        inline_keyboard: [
+            [masterBtn],
+            [{ text: `${getCheck('temperature')}${d.alert_temperature}`, callback_data: 'alert|toggle|temperature' }],
+            [{ text: `${getCheck('precip')}${d.alert_precip}`, callback_data: 'alert|toggle|precip' }],
+            [{ text: `${getCheck('magneticStorm')}${d.alert_magneticStorm}`, callback_data: 'alert|toggle|magneticStorm' }],
+            [{ text: `${getCheck('airQuality')}${d.alert_airQuality}`, callback_data: 'alert|toggle|airQuality' }],
+            [{ text: d.settingsEveningForecast, callback_data: 'forecast_menu' }],
+            [{ text: d.settingsGeneral, callback_data: 'open_settings' }]
+        ]
+    };
+}
 
 // Build settings keyboard based on current user preferences
 function buildSettingsKeyboard(lang, units = {}, notificationsEnabled = true) {
@@ -193,6 +245,15 @@ function buildSettingsKeyboard(lang, units = {}, notificationsEnabled = true) {
     const pressure = units.pressure || 'mmhg';
     return {
         inline_keyboard: [
+            [
+                { text: d.settingsChangeAlerts, callback_data: 'alert_settings' }
+            ],
+            [
+                { text: d.settingsEveningForecastBtn, callback_data: 'forecast_menu' }
+            ],
+            [
+                { text: notificationsEnabled ? d.settingsUnsubscribe : d.settingsSubscribe, callback_data: 'toggle_notifications' }
+            ],
             [
                 { text: `${d.settingsWind} ${wind === 'ms' ? '✅' : ''} ${d.unitMs}`, callback_data: 'unit|wind|ms' },
                 { text: `${wind === 'kmh' ? '✅' : ''} ${d.unitKmh}`, callback_data: 'unit|wind|kmh' }
@@ -206,26 +267,27 @@ function buildSettingsKeyboard(lang, units = {}, notificationsEnabled = true) {
                 { text: `${units.temp === 'f' ? '✅' : ''} ${d.unitF}`, callback_data: 'unit|temp|f' }
             ],
             [
-                { text: d.settingsForecastBtn, callback_data: 'forecast_menu' },
-                { text: d.helpBtn, callback_data: 'open_help' }
+                { text: d.helpBtn, callback_data: 'open_help' },
+                { text: d.cropsBtn, callback_data: 'crops_main' }
             ],
             [
                 { text: d.settingsCity, callback_data: 'change_city' },
                 { text: d.settingsDeleteCity, callback_data: 'delete_city' }
-            ],
-            [
-                { text: d.cropsBtn, callback_data: 'crops_main' },
-                { text: notificationsEnabled ? d.settingsUnsubscribe : d.settingsSubscribe, callback_data: 'toggle_notifications' }
             ]
         ]
     };
 }
 
 // Build Forecast configuration keyboard
-function buildForecastSettingsKeyboard(lang, settings = {}) {
+function buildForecastSettingsKeyboard(lang, settings = {}, eveningForecastEnabled = true) {
     const d = dict[lang];
     const daysCount = settings.daysCount || 3;
     const metrics = settings.enabledMetrics || [];
+
+    const eveningToggleBtn = {
+        text: `${eveningForecastEnabled !== false ? '✅ ' : '⬜️ '}${d.receiveEveningForecast}`,
+        callback_data: 'toggle_evening_forecast'
+    };
 
     const daysRow = [1, 2, 3, 4, 5, 6].map(n => ({
         text: `${daysCount === n ? '✅ ' : ''}${n}`,
@@ -250,6 +312,7 @@ function buildForecastSettingsKeyboard(lang, settings = {}) {
 
     return {
         inline_keyboard: [
+            [eveningToggleBtn],
             [{ text: d.daysCount, callback_data: 'noop' }],
             daysRow,
             [{ text: d.metricsTitle, callback_data: 'noop' }],
@@ -989,6 +1052,102 @@ bot.on('callback_query', async (ctx) => {
         }
     }
 
+    // --- Alert settings screen callback ---
+    else if (data[0] === 'alert_settings') {
+        await connectDB();
+        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (!user) return ctx.answerCbQuery('❌ Error');
+        await ctx.answerCbQuery();
+
+        const text = `${dict[lang].alertSettingsTitle}\n\n${dict[lang].alertSettingsDesc}`;
+        const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers);
+
+        try {
+            await ctx.editMessageText(text, {
+                parse_mode: 'Markdown',
+                reply_markup: markup
+            });
+        } catch (e) {
+            await ctx.replyWithMarkdown(text, { reply_markup: markup });
+        }
+    }
+
+    // --- Alert triggers toggle callback ---
+    else if (data[0] === 'alert' && data[1] === 'toggle') {
+        const key = data[2];
+        try {
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user) return ctx.answerCbQuery('❌ Error');
+
+            const currentTriggers = user.alertTriggers || {};
+            const currentValue = currentTriggers[key] !== false;
+            const newValue = !currentValue;
+
+            const updatedUser = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                { $set: { [`alertTriggers.${key}`]: newValue } },
+                { new: true }
+            );
+
+            await ctx.answerCbQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup(
+                buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers)
+            );
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
+    // --- Master toggle for all change alerts ---
+    else if (data[0] === 'alert' && data[1] === 'toggle_all') {
+        const targetState = data[2] === 'on';
+        try {
+            await connectDB();
+            const updatedUser = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                {
+                    $set: {
+                        'alertTriggers.temperature': targetState,
+                        'alertTriggers.precip': targetState,
+                        'alertTriggers.magneticStorm': targetState,
+                        'alertTriggers.airQuality': targetState
+                    }
+                },
+                { new: true }
+            );
+            await ctx.answerCbQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup(
+                buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers)
+            );
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
+    // --- Toggle evening forecast callback ---
+    else if (data[0] === 'toggle_evening_forecast') {
+        try {
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user) return ctx.answerCbQuery('❌ Error');
+
+            const currentVal = user.eveningForecastEnabled !== false;
+            const updatedUser = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                { $set: { eveningForecastEnabled: !currentVal } },
+                { new: true }
+            );
+
+            await ctx.answerCbQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup(
+                buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings, updatedUser.eveningForecastEnabled !== false)
+            );
+        } catch (error) {
+            await ctx.answerCbQuery('❌ Error');
+        }
+    }
+
     // --- Forecast settings menu callback ---
     else if (data[0] === 'forecast_menu') {
         const user = await User.findOne({ telegramId: ctx.from.id });
@@ -996,7 +1155,7 @@ bot.on('callback_query', async (ctx) => {
         await ctx.answerCbQuery();
 
         const text = dict[lang].forecastSettingsTitle;
-        const markup = buildForecastSettingsKeyboard(lang, user.forecastSettings);
+        const markup = buildForecastSettingsKeyboard(lang, user.forecastSettings, user.eveningForecastEnabled !== false);
 
         // If the button was clicked from a forecast message (identified by icons/keywords), 
         // we send a NEW message so the forecast remains visible.
@@ -1050,7 +1209,7 @@ bot.on('callback_query', async (ctx) => {
 
             await ctx.answerCbQuery(dict[lang].settingsSaved);
             await ctx.editMessageReplyMarkup(
-                buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings)
+                buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings, updatedUser.eveningForecastEnabled !== false)
             );
         } catch (error) {
             await ctx.answerCbQuery('❌ Error');

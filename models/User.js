@@ -28,6 +28,13 @@ const UserSchema = new mongoose.Schema({
             default: ['condition', 'temp', 'precip', 'wind', 'pressure'] 
         }
     },
+    alertTriggers: {
+        temperature: { type: Boolean, default: true },
+        precip: { type: Boolean, default: true },
+        magneticStorm: { type: Boolean, default: true },
+        airQuality: { type: Boolean, default: true }
+    },
+    eveningForecastEnabled: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now }
 
 });

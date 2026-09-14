@@ -94,13 +94,14 @@ module.exports = async (req, res) => {
                         reasons.push("зміна прогнозу");
                         const fmtDelta = (d) => d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
                         for (const user of cityInfo.users) {
+                            if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                             const lang = user.language || 'uk';
                             const msg = alertsDict[lang].forecastShift
                                 .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
                                 .replace('{newMin}', newMin).replace('{newMax}', newMax)
                                 .replace('{minDelta}', fmtDelta(minShift))
                                 .replace('{maxDelta}', fmtDelta(maxShift));
-                            alerts.push({ userId: user.telegramId, text: msg });
+                            alerts.push({ userId: user.telegramId, text: msg, lang });
                         }
                         alertTriggered = true;
                     }
@@ -127,6 +128,7 @@ module.exports = async (req, res) => {
                     if (isAnomaly) {
                         reasons.push("аномалія темп.");
                         for (const user of cityInfo.users) {
+                            if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                             const lang = user.language || 'uk';
                             const unit = user.units?.temp || 'c';
                             const fmtTemp = (c) => unit === 'f' ? `${Math.round(c * 9/5 + 32)}°F` : `${Math.round(c)}°C`;
@@ -136,7 +138,7 @@ module.exports = async (req, res) => {
                                 .replace('{expected}', fmtTemp(expectedBase))
                                 .replace('{delta}', Math.abs(curTemp - expectedBase).toFixed(1))
                                 .replace('{dir}', alertsDict[lang][direction]);
-                            alerts.push({ userId: user.telegramId, text: msg });
+                            alerts.push({ userId: user.telegramId, text: msg, lang });
                         }
                         alertTriggered = true;
                     }
@@ -164,9 +166,10 @@ module.exports = async (req, res) => {
                 if (oldCode >= 800 && newCode < 700) {
                     reasons.push("початок опадів");
                     for (const user of cityInfo.users) {
+                        if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
                         const lang = user.language || 'uk';
                         const msg = alertsDict[lang].precip.replace('{desc}', getWeatherDesc(newCode, lang));
-                        alerts.push({ userId: user.telegramId, text: msg });
+                        alerts.push({ userId: user.telegramId, text: msg, lang });
                     }
                     alertTriggered = true;
                 }
@@ -226,7 +229,9 @@ module.exports = async (req, res) => {
                             
                             reasons.push("зміна опадів");
                             for (const user of cityInfo.users) {
-                                alerts.push({ userId: user.telegramId, text: alertMsg });
+                                if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
+                                const lang = user.language || 'uk';
+                                alerts.push({ userId: user.telegramId, text: alertMsg, lang });
                             }
                             alertTriggered = true;
                             
@@ -272,21 +277,20 @@ module.exports = async (req, res) => {
                             // Send alert if no alert sent today or if Kp escalated to a higher level
                             if (lastAlertDate !== todayStr || currentMaxKp > lastAlertKp) {
                                 const isStorm = currentMaxKp >= 5;
-                                const isUk = (u) => (u.language || 'uk') === 'uk';
 
                                 reasons.push(isStorm ? "магнітна буря" : "збурення магн. поля");
                                 for (const user of cityInfo.users) {
-                                    const metrics = user.forecastSettings?.enabledMetrics || ['condition', 'temp', 'precip', 'wind', 'pressure', 'geomag'];
-                                    if (metrics.includes('geomag')) {
-                                        const ukMsg = isStorm
-                                            ? `🧲 **Увага! Магнітна буря (Kp ${currentMaxKp.toFixed(0)})!**\nФіксується активне збурення геомагнітного поля. Метеозалежним людям варто зменшити навантаження, пити більше води та тримати під рукою ліки.`
-                                            : `🧲 **Увага! Спостерігається збурення магнітного поля (Kp ${currentMaxKp.toFixed(0)})!**\nМожливе незначне погіршення самопочуття у метеочутливих людей.`;
-                                        const enMsg = isStorm
-                                            ? `🧲 **Alert! Magnetic Storm (Kp ${currentMaxKp.toFixed(0)})!**\nActive geomagnetic field disturbance detected. Weather-sensitive people should reduce physical activity and drink plenty of water.`
-                                            : `🧲 **Alert! Unsettled geomagnetic field (Kp ${currentMaxKp.toFixed(0)})!**\nMild discomfort possible for weather-sensitive individuals.`;
-                                        
-                                        alerts.push({ userId: user.telegramId, text: isUk(user) ? ukMsg : enMsg });
-                                    }
+                                    if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
+                                    const lang = user.language || 'uk';
+                                    const isUk = lang === 'uk';
+                                    const ukMsg = isStorm
+                                        ? `🧲 **Увага! Магнітна буря (Kp ${currentMaxKp.toFixed(0)})!**\nФіксується активне збурення геомагнітного поля. Метеозалежним людям варто зменшити навантаження, пити більше води та тримати під рукою ліки.`
+                                        : `🧲 **Увага! Спостерігається збурення магнітного поля (Kp ${currentMaxKp.toFixed(0)})!**\nМожливе незначне погіршення самопочуття у метеочутливих людей.`;
+                                    const enMsg = isStorm
+                                        ? `🧲 **Alert! Magnetic Storm (Kp ${currentMaxKp.toFixed(0)})!**\nActive geomagnetic field disturbance detected. Weather-sensitive people should reduce physical activity and drink plenty of water.`
+                                        : `🧲 **Alert! Unsettled geomagnetic field (Kp ${currentMaxKp.toFixed(0)})!**\nMild discomfort possible for weather-sensitive individuals.`;
+                                    
+                                    alerts.push({ userId: user.telegramId, text: isUk ? ukMsg : enMsg, lang });
                                 }
                                 alertTriggered = true;
 
@@ -329,43 +333,41 @@ module.exports = async (req, res) => {
                                 reasons.push("погіршення якості повітря");
                                 
                                 for (const user of cityInfo.users) {
-                                    const metrics = user.forecastSettings?.enabledMetrics || ['condition', 'temp', 'precip', 'wind', 'pressure', 'aqi'];
-                                    if (metrics.includes('aqi')) {
-                                        const lang = user.language || 'uk';
-                                        const isUk = lang === 'uk';
-                                        
-                                        let title = isUk 
-                                            ? `🍃 **Попередження: Погіршення якості повітря!**` 
-                                            : `🍃 **Alert: Air Quality Deterioration!**`;
-                                        let mainBody = `${title}\n${badge} AQI ${aqiVal}`;
-                                        if (pm25 != null) mainBody += ` | PM2.5: ${pm25}`;
-                                        if (pm10 != null) mainBody += ` | PM10: ${pm10}`;
+                                    if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
+                                    const lang = user.language || 'uk';
+                                    const isUk = lang === 'uk';
+                                    
+                                    let title = isUk 
+                                        ? `🍃 **Попередження: Погіршення якості повітря!**` 
+                                        : `🍃 **Alert: Air Quality Deterioration!**`;
+                                    let mainBody = `${title}\n${badge} AQI ${aqiVal}`;
+                                    if (pm25 != null) mainBody += ` | PM2.5: ${pm25}`;
+                                    if (pm10 != null) mainBody += ` | PM10: ${pm10}`;
 
-                                        const issues = [];
-                                        if (pm25 != null && pm25 > 25) issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
-                                        if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
+                                    const issues = [];
+                                    if (pm25 != null && pm25 > 25) issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
+                                    if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
 
-                                        let advice = '';
-                                        if (aqiVal > 150) {
-                                            advice = isUk 
-                                                ? '\n🔴 **Небезпечний рівень забруднення!** Зачиніть вікна, увімкніть очищувач повітря та утримайтесь від виходу на вулицю.' 
-                                                : '\n🔴 **Dangerous air quality!** Close windows, turn on air purifiers, and refrain from going outside.';
-                                        } else if (aqiVal > 100) {
-                                            advice = isUk 
-                                                ? '\n🟠 **Шкідливо для чутливих груп!** Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.' 
-                                                : '\n🟠 **Unhealthy for sensitive groups!** High dust/smog level. We recommend closing windows.';
-                                        } else if (aqiVal > 50) {
-                                            advice = isUk 
-                                                ? '\n🟡 **Повітря помірно забруднене.** Чутливим людям варто бути обережними.' 
-                                                : '\n🟡 **Moderate air pollution.** Sensitive individuals should take precautions.';
-                                        }
-
-                                        if (issues.length > 0) {
-                                            advice += isUk ? `\n(Причина: ${issues.join(', ')})` : `\n(Reason: ${issues.join(', ')})`;
-                                        }
-
-                                        alerts.push({ userId: user.telegramId, text: `${mainBody}${advice}` });
+                                    let advice = '';
+                                    if (aqiVal > 150) {
+                                        advice = isUk 
+                                            ? '\n🔴 **Небезпечний рівень забруднення!** Зачиніть вікна, увімкніть очищувач повітря та утримайтесь від виходу на вулицю.' 
+                                            : '\n🔴 **Dangerous air quality!** Close windows, turn on air purifiers, and refrain from going outside.';
+                                    } else if (aqiVal > 100) {
+                                        advice = isUk 
+                                            ? '\n🟠 **Шкідливо для чутливих груп!** Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.' 
+                                            : '\n🟠 **Unhealthy for sensitive groups!** High dust/smog level. We recommend closing windows.';
+                                    } else if (aqiVal > 50) {
+                                        advice = isUk 
+                                            ? '\n🟡 **Повітря помірно забруднене.** Чутливим людям варто бути обережними.' 
+                                            : '\n🟡 **Moderate air pollution.** Sensitive individuals should take precautions.';
                                     }
+
+                                    if (issues.length > 0) {
+                                        advice += isUk ? `\n(Причина: ${issues.join(', ')})` : `\n(Reason: ${issues.join(', ')})`;
+                                    }
+
+                                    alerts.push({ userId: user.telegramId, text: `${mainBody}${advice}`, lang });
                                 }
                                 alertTriggered = true;
 
@@ -383,13 +385,22 @@ module.exports = async (req, res) => {
                 // --- SENDING ALERTS ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {
-                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = [];
-                    uniqueAlerts[a.userId].push(a.text);
+                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { texts: [], lang: a.lang || 'uk' };
+                    uniqueAlerts[a.userId].texts.push(a.text);
                 }
 
                 for (const userId of Object.keys(uniqueAlerts)) {
                     await sleep(50);
-                    await bot.telegram.sendMessage(userId, uniqueAlerts[userId].join('\n\n'), { parse_mode: 'Markdown' });
+                    const userLang = uniqueAlerts[userId].lang || 'uk';
+                    const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
+                    await bot.telegram.sendMessage(userId, uniqueAlerts[userId].texts.join('\n\n'), {
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: btnText, callback_data: 'alert_settings' }]
+                            ]
+                        }
+                    });
                     alertsTotal++;
                 }
 

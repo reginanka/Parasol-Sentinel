@@ -23,7 +23,7 @@ module.exports = async (req, res) => {
 
     try {
         await connectDB();
-        const users = await User.find({ notificationsEnabled: true });
+        const users = await User.find({ notificationsEnabled: true, eveningForecastEnabled: { $ne: false } });
 
         // --- FETCH WEATHER ONCE PER UNIQUE CITY COORDINATES ---
         const uniqueCities = {};
@@ -281,6 +281,7 @@ module.exports = async (req, res) => {
                 }
 
                 for (const user of cityInfo.users) {
+                    if (!user.notificationsEnabled || user.eveningForecastEnabled === false) continue;
                     await sleep(40);
                     const lang = user.language || 'uk';
                     const tempUnit = user.units?.temp || 'c';
