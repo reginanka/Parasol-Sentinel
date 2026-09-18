@@ -11,7 +11,9 @@ const CitySchema = new mongoose.Schema({
         weatherCode: Number,
         updatedAt: Date,
         forecast: Array, // 3-day forecast data
-        hourlyPrecip: Array // Додано: збереження плану опадів на завтра
+        hourlyPrecip: Array, // план опадів на завтра (відносно вечірньої відправки)
+        forecastedKp: Number, // max Kp, що був у вечірньому прогнозі на target-день
+        forecastedKpDate: String // YYYY-MM-DD — день, на який стосується forecastedKp
     },
     lastGeomagAlert: {
         date: String,
