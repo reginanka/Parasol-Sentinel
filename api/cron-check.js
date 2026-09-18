@@ -207,7 +207,7 @@ module.exports = async (req, res) => {
                             }
                         }
 
-                        // Helpers: total and rainy hours (any precip > 0 counts)
+                        // Helpers: total, rainy hours, consecutive blocks
                         const calcStats = (byHour) => {
                             let total = 0;
                             const hours = [];
@@ -218,10 +218,30 @@ module.exports = async (req, res) => {
                                     hours.push(h);
                                 }
                             }
-                            const start = hours.length ? Math.min(...hours) : null;
-                            const end = hours.length ? Math.max(...hours) : null; // inclusive hour
-                            const duration = hours.length ? (end - start + 1) : 0;
-                            return { total, hours, start, end, duration };
+                            // Consecutive blocks: [[start, endInclusive], ...]
+                            const blocks = [];
+                            for (const h of hours) {
+                                if (blocks.length && h === blocks[blocks.length - 1][1] + 1) {
+                                    blocks[blocks.length - 1][1] = h;
+                                } else {
+                                    blocks.push([h, h]);
+                                }
+                            }
+                            const start = hours.length ? hours[0] : null;
+                            const end = hours.length ? hours[hours.length - 1] : null;
+                            // duration = actual number of rainy hours (not span min..max)
+                            const duration = hours.length;
+                            return { total, hours, blocks, start, end, duration };
+                        };
+
+                        // e.g. "00:00–03:00, 17:00–18:00, 22:00–24:00"
+                        const fmtBlocks = (s) => {
+                            if (!s.blocks || s.blocks.length === 0) return '';
+                            return s.blocks.map(([a, b]) => {
+                                const from = `${String(a).padStart(2, '0')}:00`;
+                                const to = `${String(b + 1).padStart(2, '0')}:00`;
+                                return a === b ? from : `${from}–${to}`;
+                            }).join(', ');
                         };
 
                         const oldS = calcStats(oldByHour);
@@ -254,6 +274,7 @@ module.exports = async (req, res) => {
                                 const startDelta = Math.abs(newS.start - oldS.start);
                                 const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
                                 significantShift = startDelta >= 2 || endDelta >= 2;
+                                // +2 or more actual rainy hours
                                 significantLonger = (newS.duration - oldS.duration) >= 2;
                             } else if (oldS.start == null && newS.start != null && newS.total >= 0.5) {
                                 // Rain appeared where there was none (and not tiny)
@@ -264,28 +285,23 @@ module.exports = async (req, res) => {
 
                             if (shouldAlert) {
                                 let alertMsg = '';
-                                const fmtHours = (s) => {
-                                    if (s.start == null) return '';
-                                    if (s.start === s.end) return `о ${s.start}:00`;
-                                    return `з ${s.start}:00 до ${s.end + 1}:00`;
-                                };
 
                                 if (fullyCanceled) {
                                     alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.`;
                                 } else if (significantAmountUp) {
                                     alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
                                         `Було ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
-                                        `Дощ очікується ${fmtHours(newS)}.`;
+                                        `Дощ: ${fmtBlocks(newS)}.`;
                                 } else if (significantLonger) {
                                     alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
-                                        `Було ${fmtHours(oldS)}, зараз ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                        `Було: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                                 } else if (significantShift) {
                                     if (oldS.start == null) {
                                         alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
-                                            `Сьогодні дощитиме ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                            `Дощ: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                                     } else {
                                         alertMsg = `🌤 Час опадів змістився.\n` +
-                                            `Було ${fmtHours(oldS)}, зараз ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                            `Було: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                                     }
                                 }
 

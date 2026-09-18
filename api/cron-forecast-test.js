@@ -4,7 +4,6 @@ const getBot = require('../utils/bot');
 const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
-const City = require('../models/City');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
@@ -197,8 +196,8 @@ module.exports = async (req, res) => {
             }
         }
 
-        // --- Open-Meteo hourly precip (for tomorrow) + save eveningState baseline ---
-        const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+        // Target date for hourly button only (TEST does NOT write eveningState —
+        // real baseline is owned exclusively by the production evening cron)
         const cityTz = user.timezone || response.data.timezone || 'Europe/Kyiv';
         const localSend = new Date(new Date().toLocaleString('en-US', { timeZone: cityTz }));
         const targetHourly = new Date(localSend);
@@ -208,45 +207,8 @@ module.exports = async (req, res) => {
             day: '2-digit', month: '2-digit'
         });
 
-        let hourlyPrecip = [];
-        try {
-            const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
-            const omRes = await axios.get(omUrl);
-            if (omRes.data && omRes.data.hourly) {
-                const allTimes = omRes.data.hourly.time;
-                const allPrecip = omRes.data.hourly.precipitation;
-                for (let i = 0; i < allTimes.length; i++) {
-                    if (allTimes[i].startsWith(targetHourlyStr)) {
-                        hourlyPrecip.push({ time: allTimes[i], precip: allPrecip[i] });
-                    }
-                }
-            }
-        } catch (omErr) {
-            console.error('Open-Meteo fetch error in test forecast:', omErr.message);
-        }
-
-        const todayData = fullResponse[0];
-        await City.findOneAndUpdate(
-            { externalId: cityKey },
-            {
-                eveningState: {
-                    temp: todayData.temp,
-                    weatherCode: todayData.weather?.code,
-                    updatedAt: new Date(),
-                    forecast: fullResponse,
-                    hourlyPrecip: hourlyPrecip
-                },
-                name: apiCityName || user.city || cityKey,
-                lat: user.lat,
-                lon: user.lon,
-                timezone: cityTz
-            },
-            { upsert: true }
-        );
-
-        // --- NOAA Kp (geomag) ---
+        // --- NOAA Kp (geomag) — display only, no DB write ---
         let geomagInfo = null;
-        let forecastedMaxKp = null;
         try {
             const noaaRes = await axios.get(
                 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -268,7 +230,6 @@ module.exports = async (req, res) => {
 
                 const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
                 if (maxKp !== null) {
-                    forecastedMaxKp = maxKp;
                     let badge = '🟢';
                     let labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`;
                     let labelEn = `Calm (Kp ${maxKp.toFixed(0)})`;
@@ -286,18 +247,6 @@ module.exports = async (req, res) => {
             }
         } catch (e) {
             console.error('NOAA error:', e.message);
-        }
-
-        if (forecastedMaxKp !== null) {
-            await City.findOneAndUpdate(
-                { externalId: cityKey },
-                {
-                    $set: {
-                        'eveningState.forecastedKp': forecastedMaxKp,
-                        'eveningState.forecastedKpDate': targetHourlyStr
-                    }
-                }
-            ).catch(e => console.error('Save forecastedKp error:', e.message));
         }
 
         // --- Формування повідомлення ---
