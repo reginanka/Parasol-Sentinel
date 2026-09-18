@@ -7,15 +7,25 @@ const User = require('../models/User');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
 
-const API_KEY = process.env.WEATHERBIT_KEY;
-
+/**
+ * Light weather check cron — identical alert logic to cron-check.js
+ * but WITHOUT any Weatherbit API calls (to stay within free-tier limits).
+ *
+ * Data sources:
+ * - Open-Meteo: current temp, daily min/max, hourly precip
+ * - NOAA SWPC: geomagnetic Kp
+ * - WAQI: air quality
+ *
+ * Intended to run frequently (e.g. every 30 min) via external scheduler.
+ */
 module.exports = async (req, res) => {
     const LOG_CHAT_ID = process.env.LOG_CHAT_ID;
     const log = (text) => logToTelegram(bot, LOG_CHAT_ID, text);
-    if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) return res.status(401).send('Unauthorized');
+    if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+        return res.status(401).send('Unauthorized');
+    }
 
     const startTime = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
 
@@ -25,10 +35,12 @@ module.exports = async (req, res) => {
 
         const uniqueCities = {};
         for (const user of users) {
-             if (!user.lat || !user.lon) continue;
-             const key = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
-             if (!uniqueCities[key]) uniqueCities[key] = { lat: user.lat, lon: user.lon, name: user.city, users: [] };
-             uniqueCities[key].users.push(user);
+            if (!user.lat || !user.lon) continue;
+            const key = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            if (!uniqueCities[key]) {
+                uniqueCities[key] = { lat: user.lat, lon: user.lon, name: user.city, users: [] };
+            }
+            uniqueCities[key].users.push(user);
         }
 
         let alertsTotal = 0;
@@ -39,14 +51,12 @@ module.exports = async (req, res) => {
             uk: {
                 tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час ({expected}°C).",
                 forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували: {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
-                precip: "⛈️ **Попередження про опади!**\nЗараз: {desc}.",
                 warmer: "вище",
                 cooler: "нижче"
             },
             en: {
                 tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time ({expected}°C).",
                 forecastShift: "📊 **Today's forecast has changed!**\nExpected: {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
-                precip: "⛈️ **Precipitation alert!**\nNow: {desc}.",
                 warmer: "warmer",
                 cooler: "cooler"
             }
@@ -54,25 +64,32 @@ module.exports = async (req, res) => {
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
-                // 1. Fetch CURRENT weather and updated DAILY forecast
-                const [currResp, foreResp] = await Promise.all([
-                    axios.get(`https://api.weatherbit.io/v2.0/current?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`),
-                    axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=1`)
-                ]);
+                // --- Open-Meteo: current + daily + hourly precip (single request) ---
+                const omUrl =
+                    `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                    `&current=temperature_2m,weather_code,wind_speed_10m` +
+                    `&daily=temperature_2m_min,temperature_2m_max` +
+                    `&hourly=precipitation` +
+                    `&timezone=auto&forecast_days=1`;
 
-                const current = currResp.data.data[0];
-                const newDaily = foreResp.data.data[0];
-                
+                const omRes = await axios.get(omUrl, { timeout: 12000 });
+                const om = omRes.data;
+                if (!om || !om.current) {
+                    throw new Error('Open-Meteo: empty response');
+                }
+
+                const curTemp = om.current.temperature_2m;
+                const newMin = om.daily?.temperature_2m_min?.[0];
+                const newMax = om.daily?.temperature_2m_max?.[0];
+                const cityTimezone = om.timezone || 'Europe/Kyiv';
+
                 const cityDoc = await City.findOne({ externalId: key });
                 const evening = cityDoc?.eveningState;
 
-                const cityTimezone = current.timezone || cityDoc?.timezone || 'Europe/Kyiv';
                 const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: cityTimezone }));
-                const localHour = localNow.getHours();
-                const todayStr = localNow.toISOString().slice(0, 10);
+                const todayStr = localNow.toLocaleDateString('en-CA', { timeZone: cityTimezone });
 
-                // Find the snapshot of today's forecast from last evening
-                const eveningToday = evening?.forecast?.find(d => 
+                const eveningToday = evening?.forecast?.find(d =>
                     (d.valid_date || d.datetime || '').startsWith(todayStr)
                 );
 
@@ -80,19 +97,17 @@ module.exports = async (req, res) => {
                 let alertTriggered = false;
                 let reasons = [];
 
-                if (eveningToday) {
+                // --- LOGIC A + B: Forecast shift & temp anomaly (using Open-Meteo daily/current) ---
+                if (eveningToday && newMin != null && newMax != null) {
                     const oldMin = eveningToday.min_temp;
                     const oldMax = eveningToday.max_temp;
-                    const newMin = newDaily.min_temp;
-                    const newMax = newDaily.max_temp;
 
-                    // --- LOGIC A: Forecast Shift (e.g. 25°C -> 32°C) ---
                     const maxShift = newMax - oldMax;
                     const minShift = newMin - oldMin;
 
                     if (Math.abs(maxShift) >= 4 || Math.abs(minShift) >= 4) {
                         reasons.push("зміна прогнозу");
-                        const fmtDelta = (d) => d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
+                        const fmtDelta = (d) => (d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1));
                         for (const user of cityInfo.users) {
                             if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                             const lang = user.language || 'uk';
@@ -106,24 +121,19 @@ module.exports = async (req, res) => {
                         alertTriggered = true;
                     }
 
-                    // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" (±5°C threshold) ---
-                    const curTemp = current.temp;
                     let isAnomaly = false;
                     let expectedBase = 0;
                     let direction = '';
 
                     if (curTemp < (oldMin - 5)) {
-                        // More than 5°C colder than expected minimum → anomaly
                         isAnomaly = true;
                         expectedBase = oldMin;
                         direction = 'cooler';
                     } else if (curTemp > (oldMax + 5)) {
-                        // More than 5°C hotter than expected maximum → anomaly
                         isAnomaly = true;
                         expectedBase = oldMax;
                         direction = 'warmer';
                     }
-                    // If temp is within min..max or within ±5°C of them → no alert needed
 
                     if (isAnomaly) {
                         reasons.push("аномалія темп.");
@@ -131,12 +141,12 @@ module.exports = async (req, res) => {
                             if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                             const lang = user.language || 'uk';
                             const unit = user.units?.temp || 'c';
-                            const fmtTemp = (c) => unit === 'f' ? `${Math.round(c * 9/5 + 32)}°F` : `${Math.round(c)}°C`;
-                            
+                            const fmtTemp = (c) =>
+                                unit === 'f' ? `${Math.round(c * 9 / 5 + 32)}°F` : `${Math.round(c)}°C`;
+
                             const msg = alertsDict[lang].tempAnomaly
                                 .replace('{temp}', fmtTemp(curTemp))
                                 .replace('{expected}', fmtTemp(expectedBase))
-                                .replace('{delta}', Math.abs(curTemp - expectedBase).toFixed(1))
                                 .replace('{dir}', alertsDict[lang][direction]);
                             alerts.push({ userId: user.telegramId, text: msg, lang });
                         }
@@ -145,14 +155,12 @@ module.exports = async (req, res) => {
                 }
 
                 // --- SMART HISTORY UPDATE ---
-                // Use $min/$max so MongoDB only updates if the current temp
-                // is a new extreme for today. Values inside min..max are ignored.
                 try {
                     await History.findOneAndUpdate(
                         { externalId: key, date: todayStr },
                         {
-                            $min: { temp_min: current.temp },
-                            $max: { temp_max: current.temp }
+                            $min: { temp_min: curTemp },
+                            $max: { temp_max: curTemp }
                         },
                         { upsert: true }
                     );
@@ -160,76 +168,115 @@ module.exports = async (req, res) => {
                     console.error('History smart update error:', histErr.message);
                 }
 
-                // --- LOGIC C: Precipitation Start ---
-                const oldCode = evening?.weatherCode ?? 800;
-                const newCode = current.weather.code;
-                if (oldCode >= 800 && newCode < 700) {
-                    reasons.push("початок опадів");
-                    for (const user of cityInfo.users) {
-                        if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
-                        const lang = user.language || 'uk';
-                        const msg = alertsDict[lang].precip.replace('{desc}', getWeatherDesc(newCode, lang));
-                        alerts.push({ userId: user.telegramId, text: msg, lang });
-                    }
-                    alertTriggered = true;
-                }
+                // LOGIC C (precip start via weather code) skipped — Weatherbit codes;
+                // full-day precip changes are covered by LOGIC D below.
 
-                // --- LOGIC D: Smart Full-Day Precipitation Check (Open-Meteo) ---
-                // Rules:
-                // - Always compare the WHOLE day (not remaining hours only)
-                // - "Canceled" message only if new total for the day is 0.0
-                // - Significant amount change: total precip increased by ≥ 1.5 mm
-                // - Significant timing change: rain window shifted by ≥ 2 h earlier/later
-                //   OR duration increased by ≥ 2 hours
-                // - Ignore insignificant fluctuations (< 1.5 mm and no meaningful time shift)
+                // --- LOGIC D: Smart Full-Day Precipitation Check ---
                 try {
-                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=1`;
-                    const omRes = await axios.get(omUrl);
-                    if (omRes.data && omRes.data.hourly) {
-                        const allTimes = omRes.data.hourly.time;
-                        const allPrecip = omRes.data.hourly.precipitation;
-                        const oldPrecipArr = evening?.hourlyPrecip || [];
+                    const allTimes = om.hourly?.time || [];
+                    const allPrecip = om.hourly?.precipitation || [];
+                    const oldPrecipArr = evening?.hourlyPrecip || [];
 
-                        // Build full-day maps (hour 0..23)
-                        const oldByHour = {};
-                        for (const o of oldPrecipArr) {
-                            if (o.time && o.time.startsWith(todayStr)) {
-                                const h = new Date(o.time).getHours();
-                                oldByHour[h] = o.precip || 0;
+                    const oldByHour = {};
+                    for (const o of oldPrecipArr) {
+                        if (o.time && o.time.startsWith(todayStr)) {
+                            const h = new Date(o.time).getHours();
+                            oldByHour[h] = o.precip || 0;
+                        }
+                    }
+
+                    const newByHour = {};
+                    for (let i = 0; i < allTimes.length; i++) {
+                        if (allTimes[i].startsWith(todayStr)) {
+                            const h = new Date(allTimes[i]).getHours();
+                            newByHour[h] = allPrecip[i] || 0;
+                        }
+                    }
+
+                    const calcStats = (byHour) => {
+                        let total = 0;
+                        const hours = [];
+                        for (let h = 0; h < 24; h++) {
+                            const p = byHour[h] || 0;
+                            if (p > 0) {
+                                total += p;
+                                hours.push(h);
                             }
                         }
+                        const start = hours.length ? Math.min(...hours) : null;
+                        const end = hours.length ? Math.max(...hours) : null;
+                        const duration = hours.length ? (end - start + 1) : 0;
+                        return { total, hours, start, end, duration };
+                    };
 
-                        const newByHour = {};
+                    const oldS = calcStats(oldByHour);
+                    const newS = calcStats(newByHour);
+
+                    if (oldPrecipArr.length === 0) {
+                        const updatedHourly = [];
                         for (let i = 0; i < allTimes.length; i++) {
                             if (allTimes[i].startsWith(todayStr)) {
-                                const h = new Date(allTimes[i]).getHours();
-                                newByHour[h] = allPrecip[i] || 0;
+                                updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
                             }
                         }
+                        await City.findOneAndUpdate(
+                            { externalId: key },
+                            { $set: { "eveningState.hourlyPrecip": updatedHourly } }
+                        );
+                    } else {
+                        const amountIncrease = newS.total - oldS.total;
+                        const significantAmountUp = amountIncrease >= 1.5;
+                        const fullyCanceled = oldS.total > 0 && newS.total === 0;
 
-                        // Helpers: total and rainy hours (any precip > 0 counts)
-                        const calcStats = (byHour) => {
-                            let total = 0;
-                            const hours = [];
-                            for (let h = 0; h < 24; h++) {
-                                const p = byHour[h] || 0;
-                                if (p > 0) {
-                                    total += p;
-                                    hours.push(h);
+                        let significantShift = false;
+                        let significantLonger = false;
+                        if (oldS.start != null && newS.start != null) {
+                            const startDelta = Math.abs(newS.start - oldS.start);
+                            const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
+                            significantShift = startDelta >= 2 || endDelta >= 2;
+                            significantLonger = (newS.duration - oldS.duration) >= 2;
+                        } else if (oldS.start == null && newS.start != null && newS.total >= 0.5) {
+                            significantShift = true;
+                        }
+
+                        const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
+
+                        if (shouldAlert) {
+                            let alertMsg = '';
+                            const fmtHours = (s) => {
+                                if (s.start == null) return '';
+                                if (s.start === s.end) return `о ${s.start}:00`;
+                                return `з ${s.start}:00 до ${s.end + 1}:00`;
+                            };
+
+                            if (fullyCanceled) {
+                                alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.`;
+                            } else if (significantAmountUp) {
+                                alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
+                                    `Було ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
+                                    `Дощ очікується ${fmtHours(newS)}.`;
+                            } else if (significantLonger) {
+                                alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
+                                    `Було ${fmtHours(oldS)}, зараз ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                            } else if (significantShift) {
+                                if (oldS.start == null) {
+                                    alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
+                                        `Сьогодні дощитиме ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                } else {
+                                    alertMsg = `🌤 Час опадів змістився.\n` +
+                                        `Було ${fmtHours(oldS)}, зараз ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                                 }
                             }
-                            const start = hours.length ? Math.min(...hours) : null;
-                            const end = hours.length ? Math.max(...hours) : null; // inclusive hour
-                            const duration = hours.length ? (end - start + 1) : 0;
-                            return { total, hours, start, end, duration };
-                        };
 
-                        const oldS = calcStats(oldByHour);
-                        const newS = calcStats(newByHour);
+                            if (alertMsg) {
+                                reasons.push("зміна опадів");
+                                for (const user of cityInfo.users) {
+                                    if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
+                                    alerts.push({ userId: user.telegramId, text: alertMsg, lang: user.language || 'uk' });
+                                }
+                                alertTriggered = true;
+                            }
 
-                        // No baseline from evening → nothing to compare
-                        if (oldPrecipArr.length === 0) {
-                            // Still store current plan so next checks have a baseline
                             const updatedHourly = [];
                             for (let i = 0; i < allTimes.length; i++) {
                                 if (allTimes[i].startsWith(todayStr)) {
@@ -240,100 +287,24 @@ module.exports = async (req, res) => {
                                 { externalId: key },
                                 { $set: { "eveningState.hourlyPrecip": updatedHourly } }
                             );
-                        } else {
-                            const amountIncrease = newS.total - oldS.total;
-                            const significantAmountUp = amountIncrease >= 1.5;
-
-                            // Full cancel: had some rain planned, now 0 for the whole day
-                            const fullyCanceled = oldS.total > 0 && newS.total === 0;
-
-                            // Timing: only meaningful if both old and new have rain
-                            let significantShift = false;
-                            let significantLonger = false;
-                            if (oldS.start != null && newS.start != null) {
-                                const startDelta = Math.abs(newS.start - oldS.start);
-                                const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
-                                significantShift = startDelta >= 2 || endDelta >= 2;
-                                significantLonger = (newS.duration - oldS.duration) >= 2;
-                            } else if (oldS.start == null && newS.start != null && newS.total >= 0.5) {
-                                // Rain appeared where there was none (and not tiny)
-                                significantShift = true;
-                            }
-
-                            const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
-
-                            if (shouldAlert) {
-                                let alertMsg = '';
-                                const fmtHours = (s) => {
-                                    if (s.start == null) return '';
-                                    if (s.start === s.end) return `о ${s.start}:00`;
-                                    return `з ${s.start}:00 до ${s.end + 1}:00`;
-                                };
-
-                                if (fullyCanceled) {
-                                    alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.`;
-                                } else if (significantAmountUp) {
-                                    alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
-                                        `Було ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
-                                        `Дощ очікується ${fmtHours(newS)}.`;
-                                } else if (significantLonger) {
-                                    alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
-                                        `Було ${fmtHours(oldS)}, зараз ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
-                                } else if (significantShift) {
-                                    if (oldS.start == null) {
-                                        alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
-                                            `Сьогодні дощитиме ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
-                                    } else {
-                                        alertMsg = `🌤 Час опадів змістився.\n` +
-                                            `Було ${fmtHours(oldS)}, зараз ${fmtHours(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
-                                    }
-                                }
-
-                                if (alertMsg) {
-                                    reasons.push("зміна опадів");
-                                    for (const user of cityInfo.users) {
-                                        if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
-                                        alerts.push({ userId: user.telegramId, text: alertMsg, lang: user.language || 'uk' });
-                                    }
-                                    alertTriggered = true;
-                                }
-
-                                // Update baseline so we don't re-alert on the same change
-                                const updatedHourly = [];
-                                for (let i = 0; i < allTimes.length; i++) {
-                                    if (allTimes[i].startsWith(todayStr)) {
-                                        updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
-                                    }
-                                }
-                                await City.findOneAndUpdate(
-                                    { externalId: key },
-                                    { $set: { "eveningState.hourlyPrecip": updatedHourly } }
-                                );
-                            }
                         }
                     }
                 } catch (omErr) {
-                    console.error('Open-Meteo fetch error in check:', omErr.message);
+                    console.error('Open-Meteo precip logic error in light check:', omErr.message);
                 }
 
-                // --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
-                // Rules:
-                // - If evening forecast already told the user about this Kp level for today
-                //   (evening enabled + geomag metric on + forecastedKp >= current) → skip for that user
-                // - If user disabled evening forecast OR disabled geomag metric, but keeps
-                //   alertTriggers.magneticStorm on → they want real-time alerts → send
-                // - Always send if Kp escalated ABOVE what was forecasted / last alerted
+                // --- LOGIC E: Geomagnetic (same as main cron-check) ---
                 try {
                     const noaaRes = await axios.get(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
                         { timeout: 8000 }
                     );
                     if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
-                        const now = Date.now();
+                        const nowTs = Date.now();
                         const next12h = noaaRes.data
                             .filter(r => {
                                 const t = new Date(r.time_tag).getTime();
-                                return t >= now - 2 * 3600 * 1000 && t <= now + 12 * 3600 * 1000;
+                                return t >= nowTs - 2 * 3600 * 1000 && t <= nowTs + 12 * 3600 * 1000;
                             })
                             .map(r => parseFloat(r.kp))
                             .filter(v => !isNaN(v));
@@ -343,9 +314,6 @@ module.exports = async (req, res) => {
                         if (currentMaxKp !== null && currentMaxKp >= 4) {
                             const lastAlertDate = cityDoc?.lastGeomagAlert?.date;
                             const lastAlertKp = cityDoc?.lastGeomagAlert?.maxKp || 0;
-
-                            // City-level: already alerted this level today → no need to process further
-                            // (unless escalated)
                             const cityAlreadyAlerted = lastAlertDate === todayStr && currentMaxKp <= lastAlertKp;
 
                             if (!cityAlreadyAlerted) {
@@ -357,7 +325,6 @@ module.exports = async (req, res) => {
                                 for (const user of cityInfo.users) {
                                     if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
 
-                                    // Did this user already see this (or higher) Kp in the evening forecast for today?
                                     const metrics = user.forecastSettings?.enabledMetrics || [];
                                     const eveningOn = user.eveningForecastEnabled !== false;
                                     const geomagInEvening = metrics.includes('geomag');
@@ -366,11 +333,8 @@ module.exports = async (req, res) => {
                                         forecastedKp != null &&
                                         currentMaxKp <= forecastedKp;
 
-                                    const alreadyInformed = eveningOn && geomagInEvening && eveningCoveredToday;
+                                    if (eveningOn && geomagInEvening && eveningCoveredToday) continue;
 
-                                    if (alreadyInformed) continue;
-
-                                    // User either didn't get evening geomag info, or Kp is worse than forecasted
                                     const lang = user.language || 'uk';
                                     const isUk = lang === 'uk';
                                     const ukMsg = isStorm
@@ -389,8 +353,6 @@ module.exports = async (req, res) => {
                                     alertTriggered = true;
                                 }
 
-                                // Always bump lastGeomagAlert so we don't re-evaluate the same level
-                                // (covers both "sent to someone" and "everyone already informed")
                                 await City.findOneAndUpdate(
                                     { externalId: key },
                                     { $set: { "lastGeomagAlert": { date: todayStr, maxKp: currentMaxKp } } }
@@ -399,14 +361,10 @@ module.exports = async (req, res) => {
                         }
                     }
                 } catch (geomagErr) {
-                    console.error('Geomag check error in cron-check:', geomagErr.message);
+                    console.error('Geomag check error in light cron:', geomagErr.message);
                 }
 
-                // --- LOGIC F: Real-time AQI Transition Check (worsen OR improve to safe) ---
-                // Rules:
-                // - Alert only on transitions: safe → worse, or worse → safe
-                // - Do NOT spam when level stays the same (safe→safe or bad→bad)
-                // - When recovering to safe (tier 0), send a positive message
+                // --- LOGIC F: AQI transition (same as main cron-check) ---
                 const WAQI_TOKEN = process.env.WAQI_TOKEN;
                 if (WAQI_TOKEN) {
                     try {
@@ -428,16 +386,13 @@ module.exports = async (req, res) => {
 
                             const lastAqiTier = cityDoc?.lastAqiAlert?.tier ?? 0;
 
-                            // Always persist current state so next check has correct baseline
                             await City.findOneAndUpdate(
                                 { externalId: key },
                                 { $set: { "lastAqiAlert": { date: todayStr, tier: currentTier, aqi: aqiVal } } }
                             );
 
                             if (currentTier > lastAqiTier) {
-                                // Deterioration: safe → worse, or worse → even worse
                                 reasons.push("погіршення якості повітря");
-
                                 for (const user of cityInfo.users) {
                                     if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
                                     const lang = user.language || 'uk';
@@ -468,40 +423,33 @@ module.exports = async (req, res) => {
                                             ? '\n🟡 **Повітря помірно забруднене.** Чутливим людям варто бути обережними.'
                                             : '\n🟡 **Moderate air pollution.** Sensitive individuals should take precautions.';
                                     }
-
                                     if (issues.length > 0) {
                                         advice += isUk ? `\n(Причина: ${issues.join(', ')})` : `\n(Reason: ${issues.join(', ')})`;
                                     }
-
                                     alerts.push({ userId: user.telegramId, text: `${mainBody}${advice}`, lang });
                                 }
                                 alertTriggered = true;
                             } else if (currentTier === 0 && lastAqiTier > 0) {
-                                // Recovery: was worse → now safe
                                 reasons.push("покращення якості повітря");
-
                                 for (const user of cityInfo.users) {
                                     if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
                                     const lang = user.language || 'uk';
                                     const isUk = lang === 'uk';
-
                                     const goodMsg = isUk
                                         ? `🍃 **Гарні новини! Якість повітря покращилась.**\n🟢 AQI ${aqiVal} — повітря знову в безпечній зоні.\nМожна відкривати вікна та спокійно гуляти на вулиці.`
                                         : `🍃 **Good news! Air quality has improved.**\n🟢 AQI ${aqiVal} — air is back in the safe zone.\nYou can open the windows and safely go for a walk.`;
-
                                     alerts.push({ userId: user.telegramId, text: goodMsg, lang });
                                 }
                                 alertTriggered = true;
                             }
-                            // Same tier (safe→safe or bad→bad) → no message
                         }
                     } catch (aqiErr) {
-                        console.error('AQI check error in cron-check:', aqiErr.message);
+                        console.error('AQI check error in light cron:', aqiErr.message);
                     }
                 }
 
-                // --- SENDING ALERTS ---
-                const uniqueAlerts = {}; // prevent duplicate messages to same user
+                // --- SEND ALERTS ---
+                const uniqueAlerts = {};
                 for (const a of alerts) {
                     if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { texts: [], lang: a.lang || 'uk' };
                     uniqueAlerts[a.userId].texts.push(a.text);
@@ -522,21 +470,22 @@ module.exports = async (req, res) => {
                     alertsTotal++;
                 }
 
-                // Update city and users
-                if (current.timezone && !cityDoc?.timezone) {
-                    await City.findOneAndUpdate({ externalId: key }, { timezone: current.timezone });
+                if (cityTimezone && !cityDoc?.timezone) {
+                    await City.findOneAndUpdate({ externalId: key }, { timezone: cityTimezone });
                 }
 
                 for (const user of cityInfo.users) {
-                    user.lastState = { ...user.lastState, temp: current.temp, weatherCode: newCode, updatedAt: new Date() };
+                    user.lastState = {
+                        ...user.lastState,
+                        temp: curTemp,
+                        weatherCode: om.current.weather_code,
+                        updatedAt: new Date()
+                    };
                     await user.save();
                 }
 
                 const statusStr = alertTriggered ? `🚨 ${reasons.join(', ')}` : '✅ без змін';
-                const weatherDesc = getWeatherDesc(newCode, 'uk');
-                const windDir = getWindDir(current.wind_cdir, 'uk');
-                logLines.push(`• ${cityInfo.name} | ${current.temp}°C | ${weatherDesc} | ${windDir} | ${statusStr}`);
-
+                logLines.push(`• ${cityInfo.name} | ${curTemp}°C | ${statusStr}`);
             } catch (err) {
                 errorsCount++;
                 logLines.push(`• ${cityInfo.name} | ❌ помилка: ${err.message}`);
@@ -544,7 +493,7 @@ module.exports = async (req, res) => {
         }
 
         const summary = [
-            `📋 <b>Перевірка погоди</b> — ${startTime}`,
+            `📋 <b>Легка перевірка (без Weatherbit)</b> — ${startTime}`,
             `👥 Користувачів перевірено: ${users.length}`,
             `🚨 Сповіщень надіслано: ${alertsTotal}`,
             `❌ Помилок: ${errorsCount}`,
@@ -552,11 +501,10 @@ module.exports = async (req, res) => {
             ...logLines
         ].join('\n');
         await log(summary);
-        res.status(200).send('Processed');
-
+        res.status(200).send('Processed (light)');
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Weather Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
+        await log(`❌ <b>Light Weather Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
         res.status(500).send('Error');
     }
-}
+};

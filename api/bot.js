@@ -776,8 +776,8 @@ bot.on('callback_query', async (ctx) => {
         }
     }
 
-    // --- Detailed tomorrow forecast callback ---
-    else if (data[0] === 'forecast_tomorrow') {
+    // --- Detailed hourly forecast callback (supports date: forecast_hourly|YYYY-MM-DD or legacy forecast_tomorrow) ---
+    else if (data[0] === 'forecast_hourly' || data[0] === 'forecast_tomorrow') {
         try {
             await ctx.answerCbQuery().catch(() => { });
             await connectDB();
@@ -788,14 +788,55 @@ bot.on('callback_query', async (ctx) => {
             }
 
             const timezone = user.timezone || 'Europe/Kyiv';
-            const tomorrowDate = new Date(Date.now() + 86400000);
-            const tomorrowStr = tomorrowDate.toLocaleDateString('en-CA', { timeZone: timezone });
-            const formattedDate = tomorrowDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+            const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: timezone }));
+            const todayStr = localNow.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD
+
+            // Determine target date:
+            // 1) Explicit date from callback (forecast_hourly|YYYY-MM-DD)
+            // 2) Legacy "forecast_tomorrow" → smart: if eveningState was updated yesterday (or earlier today before noon-ish),
+            //    the "tomorrow" of that evening is actually today → show today; otherwise show tomorrow.
+            let targetDateStr = data[1] && /^\d{4}-\d{2}-\d{2}$/.test(data[1]) ? data[1] : null;
+
+            if (!targetDateStr) {
+                const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+                const cityDoc = await City.findOne({ externalId: cityKey }).lean();
+                const eveningUpdated = cityDoc?.eveningState?.updatedAt
+                    ? new Date(cityDoc.eveningState.updatedAt)
+                    : null;
+
+                if (eveningUpdated) {
+                    const eveningLocal = new Date(eveningUpdated.toLocaleString('en-US', { timeZone: timezone }));
+                    const eveningDateStr = eveningLocal.toLocaleDateString('en-CA', { timeZone: timezone });
+                    // Evening forecast is sent for the *next* calendar day relative to its send date
+                    const eveningTomorrow = new Date(eveningLocal);
+                    eveningTomorrow.setDate(eveningTomorrow.getDate() + 1);
+                    const eveningTargetStr = eveningTomorrow.toLocaleDateString('en-CA', { timeZone: timezone });
+
+                    // If we are still on the same calendar day as the evening send → show that target (tomorrow)
+                    // If we are already on the target day or later → show today (the original "tomorrow")
+                    if (todayStr === eveningDateStr) {
+                        targetDateStr = eveningTargetStr;
+                    } else {
+                        targetDateStr = todayStr;
+                    }
+                } else {
+                    // No evening state → default to tomorrow
+                    const tmr = new Date(localNow);
+                    tmr.setDate(tmr.getDate() + 1);
+                    targetDateStr = tmr.toLocaleDateString('en-CA', { timeZone: timezone });
+                }
+            }
+
+            const targetDate = new Date(targetDateStr + 'T12:00:00');
+            const formattedDate = targetDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
                 weekday: 'short', day: 'numeric', month: 'short'
             });
+            const shortDate = targetDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                day: '2-digit', month: '2-digit'
+            });
 
-            // Fetch hourly forecast from Open-Meteo
-            const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,wind_gusts_10m,weather_code&timezone=${encodeURIComponent(timezone)}&forecast_days=2`;
+            // Fetch hourly forecast from Open-Meteo (enough days to cover today + tomorrow)
+            const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,weather_code&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
             const omRes = await axios.get(omUrl);
 
             if (!omRes.data || !omRes.data.hourly) {
@@ -818,28 +859,31 @@ bot.on('callback_query', async (ctx) => {
 
             const displayCity = user.city || (lang === 'uk' ? 'Ваше місто' : 'Your city');
 
-            const tomorrowIndices = [];
+            const dayIndices = [];
             for (let i = 0; i < time.length; i++) {
-                if (time[i].startsWith(tomorrowStr)) {
-                    tomorrowIndices.push(i);
+                if (time[i].startsWith(targetDateStr)) {
+                    dayIndices.push(i);
                 }
             }
 
-            if (tomorrowIndices.length === 0) {
-                return ctx.reply(lang === 'uk' ? '⚠️ Прогноз на завтра ще недоступний.' : '⚠️ Tomorrow\'s forecast not yet available.');
+            if (dayIndices.length === 0) {
+                return ctx.reply(lang === 'uk'
+                    ? `⚠️ Прогноз на ${shortDate} ще недоступний.`
+                    : `⚠️ Forecast for ${shortDate} is not yet available.`);
             }
 
-            const temps = tomorrowIndices.map(i => temperature_2m[i]);
-            const precips = tomorrowIndices.map(i => precipitation[i]);
+            const temps = dayIndices.map(i => temperature_2m[i]);
+            const precips = dayIndices.map(i => precipitation[i]);
             const minTemp = Math.round(Math.min(...temps));
             const maxTemp = Math.round(Math.max(...temps));
             const totalPrecip = precips.reduce((a, b) => a + b, 0).toFixed(1);
 
             const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
+            const isToday = targetDateStr === todayStr;
 
             let msg = lang === 'uk'
-                ? `🌤 <b>Погодинний прогноз на завтра (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`
-                : `🌤 <b>Hourly forecast for tomorrow (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
+                ? `🌤 <b>Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`
+                : `🌤 <b>Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
 
             msg += lang === 'uk'
                 ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Загалом опадів: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`
@@ -848,37 +892,66 @@ bot.on('callback_query', async (ctx) => {
             const windUnit = user.units?.wind || 'ms';
             const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
 
-            // Header
-            const hdr1 = lang === 'uk' ? 'Час  ' : 'Time ';
-            const hdr2 = lang === 'uk' ? 'Стан' : 'Cond';
-            const hdr3 = lang === 'uk' ? ' Темп ' : ' Temp ';
-            const hdr4 = lang === 'uk' ? ' Опади  ' : ' Precip ';
-            const hdr5 = lang === 'uk' ? 'Вітер' : 'Wind ';
-            let table = `<pre>${hdr1}| ${hdr2} |${hdr3}|${hdr4}|${hdr5}\n`;
-            table += `─────┼──────┼──────┼────────┼──────\n`;
+            // Header: Time | Cond | Temp | Precip | Prob | Wind
+            const hdr1 = lang === 'uk' ? 'Час ' : 'Time';
+            const hdr2 = lang === 'uk' ? 'Ст' : 'Cd';
+            const hdr3 = lang === 'uk' ? 'Темп' : 'Temp';
+            const hdr4 = lang === 'uk' ? 'Опади' : 'Prec';
+            const hdr5 = lang === 'uk' ? ' % ' : ' % ';
+            const hdr6 = lang === 'uk' ? 'Вітер' : 'Wind';
+            let table = `<pre>${hdr1}|${hdr2}|${hdr3}|${hdr4}|${hdr5}|${hdr6}\n`;
+            table += `────┼───┼────┼─────┼───┼─────\n`;
 
-            for (const idx of tomorrowIndices) {
+            for (const idx of dayIndices) {
+                // Full hourly — no 3-hour step
                 const hourDate = new Date(time[idx]);
                 const hour = hourDate.getHours();
-                if (hour % 3 !== 0) continue;
-
                 const hStr = `${hour.toString().padStart(2, '0')}:00`;
                 const icon = getWeatherSymbol(weather_code[idx]);
-                const tVal = `${Math.round(temperature_2m[idx])}°C`.padStart(5);
-                const pVal = precipitation[idx] > 0 ? `${precipitation[idx].toFixed(1)}${precipUnitStr}` : `0 ${precipUnitStr}`;
-                const pStr = pVal.padEnd(7);
-                const wSpd = windUnit === 'kmh' ? Math.round(wind_speed_10m[idx] * 3.6) : Math.round(wind_speed_10m[idx]);
-                const wStr = `${wSpd}${windUnitStr}`.padEnd(5);
+                const tVal = `${Math.round(temperature_2m[idx])}°`.padStart(4);
+                const pVal = precipitation[idx] > 0
+                    ? `${precipitation[idx].toFixed(1)}`
+                    : '0';
+                const pStr = pVal.padStart(5);
+                const prob = precipitation_probability?.[idx] != null
+                    ? `${Math.round(precipitation_probability[idx])}`.padStart(3)
+                    : '  -';
+                const wSpd = windUnit === 'kmh'
+                    ? Math.round(wind_speed_10m[idx] * 3.6)
+                    : Math.round(wind_speed_10m[idx]);
+                const wStr = `${wSpd}${windUnitStr}`;
 
-                table += `${hStr} | ${icon}  |${tVal} | ${pStr}| ${wStr}\n`;
+                table += `${hStr}| ${icon}|${tVal}|${pStr}|${prob}|${wStr}\n`;
             }
             table += `</pre>`;
 
             msg += table;
 
-            await ctx.reply(msg, { parse_mode: 'HTML' });
+            // Button for the adjacent day (today ↔ tomorrow)
+            const otherDate = new Date(targetDate);
+            if (isToday) {
+                otherDate.setDate(otherDate.getDate() + 1);
+            } else {
+                otherDate.setDate(otherDate.getDate() - 1);
+            }
+            const otherDateStr = otherDate.toLocaleDateString('en-CA', { timeZone: timezone });
+            const otherShort = otherDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                day: '2-digit', month: '2-digit'
+            });
+            const otherLabel = lang === 'uk'
+                ? (isToday ? `➡️ На ${otherShort}` : `⬅️ На ${otherShort}`)
+                : (isToday ? `➡️ For ${otherShort}` : `⬅️ For ${otherShort}`);
+
+            await ctx.reply(msg, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: otherLabel, callback_data: `forecast_hourly|${otherDateStr}` }]
+                    ]
+                }
+            });
         } catch (error) {
-            console.error('Tomorrow forecast error:', error);
+            console.error('Hourly forecast error:', error);
             await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }

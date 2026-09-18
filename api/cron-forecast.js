@@ -240,6 +240,7 @@ module.exports = async (req, res) => {
 
                 // --- FETCH NOAA Kp-index (geomagnetic forecast) ---
                 let geomagInfo = null;
+                let forecastedMaxKp = null;
                 try {
                     const noaaRes = await axios.get(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -261,6 +262,7 @@ module.exports = async (req, res) => {
 
                         const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
                         if (maxKp !== null) {
+                            forecastedMaxKp = maxKp;
                             let badge = '🟢';
                             let labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`;
                             let labelEn = `Calm (Kp ${maxKp.toFixed(0)})`;
@@ -278,6 +280,26 @@ module.exports = async (req, res) => {
                     }
                 } catch (noaaErr) {
                     console.error('NOAA Kp fetch error:', noaaErr.message);
+                }
+
+                // Persist forecasted Kp for the target day (tomorrow relative to send)
+                // so cron-check can avoid repeating the same alert next day
+                if (forecastedMaxKp !== null) {
+                    const cityTzForKp = response.data.timezone || 'Europe/Kyiv';
+                    const localForKp = new Date(new Date().toLocaleString('en-US', { timeZone: cityTzForKp }));
+                    const kpTarget = new Date(localForKp);
+                    kpTarget.setDate(kpTarget.getDate() + 1);
+                    const kpTargetStr = kpTarget.toLocaleDateString('en-CA', { timeZone: cityTzForKp });
+
+                    await City.findOneAndUpdate(
+                        { externalId: key },
+                        {
+                            $set: {
+                                'eveningState.forecastedKp': forecastedMaxKp,
+                                'eveningState.forecastedKpDate': kpTargetStr
+                            }
+                        }
+                    ).catch(e => console.error('Save forecastedKp error:', e.message));
                 }
 
                 for (const user of cityInfo.users) {
@@ -385,12 +407,22 @@ module.exports = async (req, res) => {
                         message += '\n';
                     });
 
+                    // Target date for hourly button = tomorrow relative to send time (in city timezone)
+                    const cityTz = user.timezone || response.data.timezone || 'Europe/Kyiv';
+                    const localSend = new Date(new Date().toLocaleString('en-US', { timeZone: cityTz }));
+                    const targetHourly = new Date(localSend);
+                    targetHourly.setDate(targetHourly.getDate() + 1);
+                    const targetHourlyStr = targetHourly.toLocaleDateString('en-CA', { timeZone: cityTz }); // YYYY-MM-DD
+                    const targetHourlyShort = targetHourly.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                        day: '2-digit', month: '2-digit'
+                    });
+
                     await bot.telegram.sendMessage(user.telegramId, message, {
                         parse_mode: 'Markdown',
                         disable_web_page_preview: true,
                         reply_markup: {
                             inline_keyboard: [
-                                [{ text: lang === 'uk' ? '🌤 Погод.прогноз на завтра' : '🌤 Weather forecast for tomorrow', callback_data: 'forecast_tomorrow' }],
+                                [{ text: lang === 'uk' ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
                                 [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
                                 [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
                             ]
