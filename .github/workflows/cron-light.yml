@@ -1,0 +1,13 @@
+name: Weather Check Light (no Weatherbit)
+
+on:
+  workflow_dispatch: # Manual trigger — scheduling is handled by cron-job.org (or similar)
+
+jobs:
+  weather_check_light:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger cron-check-light endpoint
+        run: |
+          curl -f -X GET "https://${{ secrets.DOMAIN }}/api/cron-check-light" \
+          -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
