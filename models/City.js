@@ -24,6 +24,23 @@ const CitySchema = new mongoose.Schema({
         tier: Number,
         aqi: Number
     },
+    // Snapshot for dashboard — filled by crons; weather-data reads this first
+    dashboardSnapshot: {
+        updatedAtOm: Date,   // last Open-Meteo write (hourly / current OM)
+        updatedAtWb: Date,   // last Weatherbit write (current + daily)
+        current: Object,       // primary current for UI (prefer Weatherbit)
+        currentOm: Object,     // latest Open-Meteo current (fallback / freshness)
+        currentSource: String, // 'weatherbit' | 'open-meteo'
+        hourly: Object,        // Open-Meteo hourly block for charts
+        daily: Array,          // Weatherbit daily cards (preferred)
+        dailySource: String,   // 'weatherbit' | 'open-meteo'
+        aqi: Object,           // Open-Meteo air-quality hourly (optional)
+        waqi: Object,          // WAQI live sensors (optional)
+        geomag: Object,        // NOAA Kp { maxKp, badge, updatedAt }
+        lat: Number,
+        lon: Number,
+        timezone: String
+    },
     updatedAt: { type: Date, default: Date.now }
 });
 

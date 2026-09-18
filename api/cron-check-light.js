@@ -64,13 +64,13 @@ module.exports = async (req, res) => {
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
-                // --- Open-Meteo: current + daily + hourly precip (single request) ---
+                // --- Open-Meteo: current + daily + full hourly (alerts + dashboard snapshot) ---
                 const omUrl =
                     `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                    `&current=temperature_2m,weather_code,wind_speed_10m` +
+                    `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,apparent_temperature,wind_direction_10m,surface_pressure` +
                     `&daily=temperature_2m_min,temperature_2m_max` +
-                    `&hourly=precipitation` +
-                    `&timezone=auto&forecast_days=1`;
+                    `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure` +
+                    `&timezone=auto&forecast_days=2`;
 
                 const omRes = await axios.get(omUrl, { timeout: 12000 });
                 const om = omRes.data;
@@ -82,6 +82,10 @@ module.exports = async (req, res) => {
                 const newMin = om.daily?.temperature_2m_min?.[0];
                 const newMax = om.daily?.temperature_2m_max?.[0];
                 const cityTimezone = om.timezone || 'Europe/Kyiv';
+                const { degToCard } = require('../utils/weather');
+                const windDirCard = om.current.wind_direction_10m != null
+                    ? degToCard(om.current.wind_direction_10m)
+                    : 'N';
 
                 const cityDoc = await City.findOne({ externalId: key });
                 const evening = cityDoc?.eveningState;
@@ -306,6 +310,8 @@ module.exports = async (req, res) => {
                 }
 
                 // --- LOGIC E: Geomagnetic (same as main cron-check) ---
+                let snapGeomag = null;
+                let snapWaqi = null;
                 try {
                     const noaaRes = await axios.get(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -322,6 +328,13 @@ module.exports = async (req, res) => {
                             .filter(v => !isNaN(v));
 
                         const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
+
+                        if (currentMaxKp !== null) {
+                            let gBadge = '🟢';
+                            if (currentMaxKp >= 5) gBadge = '🔴';
+                            else if (currentMaxKp >= 4) gBadge = '🟡';
+                            snapGeomag = { maxKp: currentMaxKp, badge: gBadge, updatedAt: new Date() };
+                        }
 
                         if (currentMaxKp !== null && currentMaxKp >= 4) {
                             const lastAlertDate = cityDoc?.lastGeomagAlert?.date;
@@ -395,6 +408,15 @@ module.exports = async (req, res) => {
                             if (aqiVal > 150) { currentTier = 3; badge = '🔴'; }
                             else if (aqiVal > 100) { currentTier = 2; badge = '🟠'; }
                             else if (aqiVal > 50) { currentTier = 1; badge = '🟡'; }
+
+                            snapWaqi = {
+                                aqi: aqiVal,
+                                aqiBadge: badge,
+                                pm25,
+                                pm10,
+                                pm1: d.iaqi?.pm1?.v ?? null,
+                                station: d.city?.name || null
+                            };
 
                             const lastAqiTier = cityDoc?.lastAqiAlert?.tier ?? 0;
 
@@ -485,6 +507,58 @@ module.exports = async (req, res) => {
                 if (cityTimezone && !cityDoc?.timezone) {
                     await City.findOneAndUpdate({ externalId: key }, { timezone: cityTimezone });
                 }
+
+                // --- Dashboard snapshot (Open-Meteo layer) — for website, no per-user fetch ---
+                const hourlyBlock = om.hourly ? {
+                    time: om.hourly.time || [],
+                    temperature_2m: om.hourly.temperature_2m || [],
+                    wind_speed_10m: om.hourly.wind_speed_10m || [],
+                    wind_gusts_10m: om.hourly.wind_gusts_10m || [],
+                    precipitation: om.hourly.precipitation || [],
+                    precipitation_probability: om.hourly.precipitation_probability || [],
+                    surface_pressure: om.hourly.surface_pressure || []
+                } : null;
+
+                const omCurrentForUi = {
+                    temp: curTemp,
+                    app_temp: om.current.apparent_temperature,
+                    rh: om.current.relative_humidity_2m,
+                    wind_spd: om.current.wind_speed_10m,
+                    wind_dir: om.current.wind_direction_10m,
+                    wind_cdir: windDirCard,
+                    pres: om.current.surface_pressure,
+                    weather: { code: om.current.weather_code },
+                    city_name: cityInfo.name,
+                    lat: cityInfo.lat,
+                    lon: cityInfo.lon,
+                    timezone: cityTimezone,
+                    source: 'open-meteo'
+                };
+
+                // Keep existing WB daily if present; only refresh OM fields
+                const prevSnap = cityDoc?.dashboardSnapshot || {};
+                const snapSet = {
+                    'dashboardSnapshot.updatedAtOm': new Date(),
+                    'dashboardSnapshot.hourly': hourlyBlock,
+                    'dashboardSnapshot.lat': cityInfo.lat,
+                    'dashboardSnapshot.lon': cityInfo.lon,
+                    'dashboardSnapshot.timezone': cityTimezone
+                };
+                // If no Weatherbit current yet (or older than OM preference), set OM current
+                if (!prevSnap.updatedAtWb || !prevSnap.current || prevSnap.currentSource !== 'weatherbit') {
+                    snapSet['dashboardSnapshot.current'] = omCurrentForUi;
+                    snapSet['dashboardSnapshot.currentSource'] = 'open-meteo';
+                }
+                // Always stash latest OM current as fallback field when WB is primary
+                snapSet['dashboardSnapshot.currentOm'] = omCurrentForUi;
+                if (snapGeomag) snapSet['dashboardSnapshot.geomag'] = snapGeomag;
+                if (snapWaqi) snapSet['dashboardSnapshot.waqi'] = snapWaqi;
+
+                await City.findOneAndUpdate(
+                    { externalId: key },
+                    { $set: snapSet },
+                    { upsert: true }
+                );
 
                 for (const user of cityInfo.users) {
                     user.lastState = {

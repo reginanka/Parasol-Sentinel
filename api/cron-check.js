@@ -54,14 +54,15 @@ module.exports = async (req, res) => {
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
-                // 1. Fetch CURRENT weather and updated DAILY forecast
+                // 1. Fetch CURRENT weather and updated DAILY forecast (7 days for dashboard snapshot)
                 const [currResp, foreResp] = await Promise.all([
                     axios.get(`https://api.weatherbit.io/v2.0/current?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`),
-                    axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=1`)
+                    axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=7`)
                 ]);
 
                 const current = currResp.data.data[0];
                 const newDaily = foreResp.data.data[0];
+                const dailyAll = foreResp.data.data || [];
                 
                 const cityDoc = await City.findOne({ externalId: key });
                 const evening = cityDoc?.eveningState;
@@ -182,12 +183,25 @@ module.exports = async (req, res) => {
                 // - Significant timing change: rain window shifted by ≥ 2 h earlier/later
                 //   OR duration increased by ≥ 2 hours
                 // - Ignore insignificant fluctuations (< 1.5 mm and no meaningful time shift)
+                // Also stores full hourly block for dashboard snapshot
+                let omHourlyForSnap = null;
                 try {
-                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=1`;
+                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                        `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure` +
+                        `&timezone=auto&forecast_days=2`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
+                        omHourlyForSnap = {
+                            time: allTimes,
+                            temperature_2m: omRes.data.hourly.temperature_2m || [],
+                            wind_speed_10m: omRes.data.hourly.wind_speed_10m || [],
+                            wind_gusts_10m: omRes.data.hourly.wind_gusts_10m || [],
+                            precipitation: allPrecip,
+                            precipitation_probability: omRes.data.hourly.precipitation_probability || [],
+                            surface_pressure: omRes.data.hourly.surface_pressure || []
+                        };
                         const oldPrecipArr = evening?.hourlyPrecip || [];
 
                         // Build full-day maps (hour 0..23)
@@ -339,6 +353,8 @@ module.exports = async (req, res) => {
                 // - If user disabled evening forecast OR disabled geomag metric, but keeps
                 //   alertTriggers.magneticStorm on → they want real-time alerts → send
                 // - Always send if Kp escalated ABOVE what was forecasted / last alerted
+                let snapGeomag = null;
+                let snapWaqi = null;
                 try {
                     const noaaRes = await axios.get(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -355,6 +371,13 @@ module.exports = async (req, res) => {
                             .filter(v => !isNaN(v));
 
                         const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
+
+                        if (currentMaxKp !== null) {
+                            let gBadge = '🟢';
+                            if (currentMaxKp >= 5) gBadge = '🔴';
+                            else if (currentMaxKp >= 4) gBadge = '🟡';
+                            snapGeomag = { maxKp: currentMaxKp, badge: gBadge, updatedAt: new Date() };
+                        }
 
                         if (currentMaxKp !== null && currentMaxKp >= 4) {
                             const lastAlertDate = cityDoc?.lastGeomagAlert?.date;
@@ -441,6 +464,15 @@ module.exports = async (req, res) => {
                             if (aqiVal > 150) { currentTier = 3; badge = '🔴'; }
                             else if (aqiVal > 100) { currentTier = 2; badge = '🟠'; }
                             else if (aqiVal > 50) { currentTier = 1; badge = '🟡'; }
+
+                            snapWaqi = {
+                                aqi: aqiVal,
+                                aqiBadge: badge,
+                                pm25,
+                                pm10,
+                                pm1: d.iaqi?.pm1?.v ?? null,
+                                station: d.city?.name || null
+                            };
 
                             const lastAqiTier = cityDoc?.lastAqiAlert?.tier ?? 0;
 
@@ -542,6 +574,44 @@ module.exports = async (req, res) => {
                 if (current.timezone && !cityDoc?.timezone) {
                     await City.findOneAndUpdate({ externalId: key }, { timezone: current.timezone });
                 }
+
+                // --- Dashboard snapshot (Weatherbit layer + OM hourly if fetched) ---
+                const { degToCard } = require('../utils/weather');
+                const wbCurrent = {
+                    ...current,
+                    wind_cdir: current.wind_dir != null ? degToCard(current.wind_dir) : (current.wind_cdir || 'N'),
+                    source: 'weatherbit'
+                };
+                const wbDaily = dailyAll.map(d => ({
+                    ...d,
+                    max_temp: d.max_temp,
+                    min_temp: d.min_temp,
+                    pop: d.pop,
+                    gust: d.wind_gust_spd,
+                    vis: d.vis,
+                    uv: d.uv,
+                    sunrise: d.sunrise_ts ? d.sunrise_ts * 1000 : d.sunrise,
+                    sunset: d.sunset_ts ? d.sunset_ts * 1000 : d.sunset,
+                    wind_cdir: d.wind_dir != null ? degToCard(d.wind_dir) : (d.wind_cdir || 'N')
+                }));
+
+                const snapWb = {
+                    'dashboardSnapshot.updatedAtWb': new Date(),
+                    'dashboardSnapshot.current': wbCurrent,
+                    'dashboardSnapshot.currentSource': 'weatherbit',
+                    'dashboardSnapshot.daily': wbDaily,
+                    'dashboardSnapshot.dailySource': 'weatherbit',
+                    'dashboardSnapshot.lat': cityInfo.lat,
+                    'dashboardSnapshot.lon': cityInfo.lon,
+                    'dashboardSnapshot.timezone': cityTimezone
+                };
+                if (omHourlyForSnap) {
+                    snapWb['dashboardSnapshot.hourly'] = omHourlyForSnap;
+                    snapWb['dashboardSnapshot.updatedAtOm'] = new Date();
+                }
+                if (snapGeomag) snapWb['dashboardSnapshot.geomag'] = snapGeomag;
+                if (snapWaqi) snapWb['dashboardSnapshot.waqi'] = snapWaqi;
+                await City.findOneAndUpdate({ externalId: key }, { $set: snapWb }, { upsert: true });
 
                 for (const user of cityInfo.users) {
                     user.lastState = { ...user.lastState, temp: current.temp, weatherCode: newCode, updatedAt: new Date() };

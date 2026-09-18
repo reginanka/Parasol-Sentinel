@@ -103,6 +103,21 @@
                     <h3 id="weather-condition">Аналізуємо...</h3>
                     <p id="weather-feels">Відчувається як --°C</p>
                 </div>
+                <!-- Live-only metrics (now / today) -->
+                <div id="now-extras" class="now-extras" style="display:none;">
+                    <div id="aqi-pill" class="now-pill" title="Якість повітря зараз" style="display:none;">
+                        <span class="now-pill-icon">🍃</span>
+                        <span class="now-pill-label" data-i18n="airQuality">Повітря</span>
+                        <strong id="aqi-val">--</strong>
+                        <span id="aqi-badge" class="now-pill-badge"></span>
+                    </div>
+                    <div id="geomag-pill" class="now-pill" title="Геомагнітна активність зараз" style="display:none;">
+                        <span class="now-pill-icon">🧲</span>
+                        <span class="now-pill-label" data-i18n="geomag">Магнітка</span>
+                        <strong id="geomag-val">--</strong>
+                        <span id="geomag-badge" class="now-pill-badge"></span>
+                    </div>
+                </div>
                 <div class="sun-times">
                     <div class="sun-item">🌅 <span data-i18n="sunrise">Схід</span>: <strong id="sunrise-val">--:--</strong></div>
                     <div class="sun-item">🌇 <span data-i18n="sunset">Захід</span>: <strong id="sunset-val">--:--</strong></div>

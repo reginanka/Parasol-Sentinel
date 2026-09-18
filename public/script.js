@@ -30,6 +30,11 @@ const i18n = {
         visibility: "Видимість",
         pressure: "Тиск",
         gustsTo: "пориви до",
+        airQuality: "Повітря",
+        geomag: "Магнітка",
+        geomagCalm: "Спокійно",
+        geomagUnsettled: "Збурення",
+        geomagStorm: "Буря",
         uvLevels: {
             low: "Низький",
             moderate: "Помірний",
@@ -104,6 +109,11 @@ const i18n = {
         visibility: "Visibility",
         pressure: "Pressure",
         gustsTo: "gusts up to",
+        airQuality: "Air",
+        geomag: "Geomag",
+        geomagCalm: "Calm",
+        geomagUnsettled: "Unsettled",
+        geomagStorm: "Storm",
         uvLevels: {
             low: "Low",
             moderate: "Moderate",
@@ -330,13 +340,15 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             const data = await response.json();
 
             if (data.cached && data.lastState && data.lastState.fullData) {
+                // Legacy user-cache shape
                 weatherData = data.lastState.fullData;
-                currentCity.textContent = data.user.city;
+                currentCity.textContent = data.user?.city || data.current?.city_name || i18n[currentLang].defaultCity;
                 currentStatusKey = 'sentinelDashboard';
             } else {
+                // Snapshot or live response (same shape: current/hourly/daily)
                 weatherData = data;
-                currentCity.textContent = data.current?.city_name || i18n[currentLang].defaultCity;
-                currentStatusKey = 'premiumStatus';
+                currentCity.textContent = data.user?.city || data.current?.city_name || i18n[currentLang].defaultCity;
+                currentStatusKey = data.fromSnapshot ? 'sentinelDashboard' : 'premiumStatus';
             }
             // Apply unit preferences from the API (single source of truth)
             if (data.units) {
@@ -344,13 +356,16 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 localStorage.setItem('units', JSON.stringify(currentUnits));
             }
             accessType.textContent = i18n[currentLang][currentStatusKey];
-            prunePastDays(); // Remove stale past-day cards from cached data
-            updateUI(findTodayIndex()); // Select today's card, not always index 0
+            prunePastDays();
+            updateUI(findTodayIndex());
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
             const lon = data.user?.lon || data.lon || DEFAULT_LON;
             updateWindyWidget(lat, lon);
-            
-            const dbUpdateTime = (data.lastState && data.lastState.updatedAt) ? new Date(data.lastState.updatedAt) : null;
+
+            // Honest update time: prefer meta from snapshot/live, else lastState
+            const dbUpdateTime = data.meta?.updatedAt
+                ? new Date(data.meta.updatedAt)
+                : (data.lastState?.updatedAt ? new Date(data.lastState.updatedAt) : null);
             updateUpdateTime(dbUpdateTime);
         }
     } catch (error) {
@@ -370,10 +385,45 @@ async function fetchOpenMeteo(lat, lon, name) {
         const omData = await omResponse.json();
 
         weatherData = normalizeOpenMeteo(omData, name);
+
+        // Free path extras: AQI (Open-Meteo) + geomag (NOAA) — both public, no key
+        try {
+            const [aqiRes, noaaRes] = await Promise.all([
+                fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi&timezone=auto`),
+                fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json')
+            ]);
+            if (aqiRes.ok) {
+                const aqiData = await aqiRes.json();
+                weatherData.aqi = aqiData.hourly || null;
+            }
+            if (noaaRes.ok) {
+                const noaaData = await noaaRes.json();
+                if (Array.isArray(noaaData) && noaaData.length > 0) {
+                    const nowMs = Date.now();
+                    const vals = noaaData
+                        .filter(r => {
+                            const t = new Date(r.time_tag).getTime();
+                            return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
+                        })
+                        .map(r => parseFloat(r.kp))
+                        .filter(v => !isNaN(v));
+                    const maxKp = vals.length ? Math.max(...vals) : null;
+                    if (maxKp != null) {
+                        let badge = '🟢';
+                        if (maxKp >= 5) badge = '🔴';
+                        else if (maxKp >= 4) badge = '🟡';
+                        weatherData.geomag = { maxKp, badge };
+                    }
+                }
+            }
+        } catch (extraErr) {
+            console.warn('Free extras (AQI/geomag) failed:', extraErr.message);
+        }
+
         currentCity.textContent = name;
         currentStatusKey = 'freeAccess';
-        prunePastDays(); // Remove stale past-day cards (safety, normally not needed for fresh OM data)
-        updateUI(findTodayIndex()); // Select today's card, not always index 0
+        prunePastDays();
+        updateUI(findTodayIndex());
         updateWindyWidget(lat, lon);
         updateUpdateTime();
     } catch (error) {
@@ -444,6 +494,68 @@ function degToCard(deg) {
     return cardinal[index];
 }
 
+/** AQI + geomagnetic pills — only for the current moment (today). */
+function updateNowExtras(isToday) {
+    const wrap = document.getElementById('now-extras');
+    const aqiPill = document.getElementById('aqi-pill');
+    const geoPill = document.getElementById('geomag-pill');
+    if (!wrap || !aqiPill || !geoPill) return;
+
+    if (!isToday) {
+        wrap.style.display = 'none';
+        return;
+    }
+
+    let showAny = false;
+
+    // --- Air quality (prefer WAQI live sensors) ---
+    const waqi = weatherData.waqi;
+    if (waqi && waqi.aqi != null && !isNaN(Number(waqi.aqi))) {
+        const aqiVal = Number(waqi.aqi);
+        document.getElementById('aqi-val').textContent = `AQI ${aqiVal}`;
+        document.getElementById('aqi-badge').textContent = waqi.aqiBadge || (
+            aqiVal > 150 ? '🔴' : aqiVal > 100 ? '🟠' : aqiVal > 50 ? '🟡' : '🟢'
+        );
+        aqiPill.style.display = 'inline-flex';
+        showAny = true;
+    } else if (weatherData.aqi?.us_aqi?.length) {
+        // Fallback: Open-Meteo hourly US AQI — take current hour-ish (index 0 or nearest)
+        const arr = weatherData.aqi.us_aqi;
+        const val = arr.find(v => v != null);
+        if (val != null) {
+            const aqiVal = Number(val);
+            document.getElementById('aqi-val').textContent = `AQI ${aqiVal}`;
+            document.getElementById('aqi-badge').textContent =
+                aqiVal > 150 ? '🔴' : aqiVal > 100 ? '🟠' : aqiVal > 50 ? '🟡' : '🟢';
+            aqiPill.style.display = 'inline-flex';
+            showAny = true;
+        } else {
+            aqiPill.style.display = 'none';
+        }
+    } else {
+        aqiPill.style.display = 'none';
+    }
+
+    // --- Geomagnetic activity ---
+    const geo = weatherData.geomag;
+    if (geo && geo.maxKp != null) {
+        const kp = Number(geo.maxKp);
+        const t = i18n[currentLang];
+        let label = t.geomagCalm;
+        let badge = '🟢';
+        if (kp >= 5) { label = t.geomagStorm; badge = '🔴'; }
+        else if (kp >= 4) { label = t.geomagUnsettled; badge = '🟡'; }
+        document.getElementById('geomag-val').textContent = `Kp ${kp.toFixed(0)} · ${label}`;
+        document.getElementById('geomag-badge').textContent = geo.badge || badge;
+        geoPill.style.display = 'inline-flex';
+        showAny = true;
+    } else {
+        geoPill.style.display = 'none';
+    }
+
+    wrap.style.display = showAny ? 'flex' : 'none';
+}
+
 function updateUI(dayIndex) {
     if (!weatherData) return;
     currentDailyIndex = dayIndex;
@@ -462,6 +574,9 @@ function updateUI(dayIndex) {
     currentTemp.textContent = formatTemp(mainTemp);
     weatherCondition.textContent = translateWeather(day.weather?.code, day.weather?.description || day.weather?.desc || i18n[currentLang].analyzing);
     weatherFeels.textContent = `${i18n[currentLang].feelsLike} ${formatTemp(apparentTemp)}`;
+
+    // AQI + geomag — only meaningful for "now" (today card)
+    updateNowExtras(isToday);
 
     // Premium Icon Upgrade
     weatherIcon.src = getPremiumIcon(day.weather.icon);
