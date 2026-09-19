@@ -8,7 +8,7 @@ const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
-const { sleep, escapeHTML } = require('../utils/helpers');
+const { sleep, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 
@@ -70,7 +70,7 @@ module.exports = async (req, res) => {
                 const cityTimezone = current.timezone || cityDoc?.timezone || 'Europe/Kyiv';
                 const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: cityTimezone }));
                 const localHour = localNow.getHours();
-                const todayStr = localNow.toISOString().slice(0, 10);
+                const todayStr = getLocalDateStr(cityTimezone, 0);
 
                 // Find the snapshot of today's forecast from last evening
                 const eveningToday = evening?.forecast?.find(d => 
@@ -261,8 +261,8 @@ module.exports = async (req, res) => {
                         const oldS = calcStats(oldByHour);
                         const newS = calcStats(newByHour);
 
-                        // No baseline from evening → nothing to compare
-                        if (oldPrecipArr.length === 0) {
+                        // No baseline from evening FOR TODAY → nothing to compare
+                        if (Object.keys(oldByHour).length === 0) {
                             // Still store current plan so next checks have a baseline
                             const updatedHourly = [];
                             for (let i = 0; i < allTimes.length; i++) {

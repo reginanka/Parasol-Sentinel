@@ -88,11 +88,25 @@ const escapeHTML = (text) => {
         .replace(/>/g, '&gt;');
 };
 
+/**
+ * Returns a robust YYYY-MM-DD string for a given timezone and offset in days.
+ */
+const getLocalDateStr = (timezone = 'Europe/Kyiv', offsetDays = 0) => {
+    const d = new Date(Date.now() + offsetDays * 86400000);
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(d);
+};
+
 module.exports = {
     sleep,
     truncate,
     formatUrl,
     generateSignature,
     validateTelegramInitData,
-    escapeHTML
+    escapeHTML,
+    getLocalDateStr
 };

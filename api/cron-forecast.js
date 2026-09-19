@@ -9,7 +9,7 @@ const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
-const { sleep, formatUrl, generateSignature, escapeHTML } = require('../utils/helpers');
+const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
@@ -211,7 +211,7 @@ module.exports = async (req, res) => {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
-                        const tomorrowStr = new Date(Date.now() + 86400000).toLocaleString('en-CA', { timeZone: response.data.timezone || 'Europe/Kyiv' }).slice(0, 10);
+                        const tomorrowStr = getLocalDateStr(response.data.timezone || 'Europe/Kyiv', 1);
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
                         for (let i = 0; i < allTimes.length; i++) {
@@ -289,7 +289,7 @@ module.exports = async (req, res) => {
                     const localForKp = new Date(new Date().toLocaleString('en-US', { timeZone: cityTzForKp }));
                     const kpTarget = new Date(localForKp);
                     kpTarget.setDate(kpTarget.getDate() + 1);
-                    const kpTargetStr = kpTarget.toLocaleDateString('en-CA', { timeZone: cityTzForKp });
+                    const kpTargetStr = getLocalDateStr(cityTzForKp, 1);
 
                     await City.findOneAndUpdate(
                         { externalId: key },
@@ -412,7 +412,7 @@ module.exports = async (req, res) => {
                     const localSend = new Date(new Date().toLocaleString('en-US', { timeZone: cityTz }));
                     const targetHourly = new Date(localSend);
                     targetHourly.setDate(targetHourly.getDate() + 1);
-                    const targetHourlyStr = targetHourly.toLocaleDateString('en-CA', { timeZone: cityTz }); // YYYY-MM-DD
+                    const targetHourlyStr = getLocalDateStr(cityTz, 1);
                     const targetHourlyShort = targetHourly.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
                         day: '2-digit', month: '2-digit'
                     });
