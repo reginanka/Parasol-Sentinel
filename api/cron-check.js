@@ -68,8 +68,13 @@ module.exports = async (req, res) => {
                 const evening = cityDoc?.eveningState;
 
                 const cityTimezone = current.timezone || cityDoc?.timezone || 'Europe/Kyiv';
-                const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: cityTimezone }));
-                const localHour = localNow.getHours();
+                // Robust local hour (avoid toLocaleString → Date timezone pitfalls)
+                const hourParts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: cityTimezone,
+                    hour: 'numeric',
+                    hour12: false
+                }).formatToParts(new Date());
+                const localHour = parseInt(hourParts.find(p => p.type === 'hour')?.value || '0', 10) % 24;
                 const todayStr = getLocalDateStr(cityTimezone, 0);
 
                 // Find the snapshot of today's forecast from last evening
@@ -175,14 +180,14 @@ module.exports = async (req, res) => {
                     alertTriggered = true;
                 }
 
-                // --- LOGIC D: Smart Full-Day Precipitation Check (Open-Meteo) ---
+                // --- LOGIC D: Smart Precipitation Check (Open-Meteo) ---
                 // Rules:
-                // - Always compare the WHOLE day (not remaining hours only)
-                // - "Canceled" message only if new total for the day is 0.0
-                // - Significant amount change: total precip increased by ≥ 1.5 mm
-                // - Significant timing change: rain window shifted by ≥ 2 h earlier/later
-                //   OR duration increased by ≥ 2 hours
-                // - Ignore insignificant fluctuations (< 1.5 mm and no meaningful time shift)
+                // - Compare only FUTURE hours of today (from localHour onward) — past rain is irrelevant
+                // - No baseline for today → set baseline silently, never treat as "was 0.0 mm"
+                // - "Canceled" only if remaining planned rain drops to 0
+                // - Significant amount change: remaining total increased by ≥ 1.5 mm
+                // - Significant timing change: rain window shifted by ≥ 2 h OR duration +≥ 2 h
+                // - When updating baseline, MERGE today's hours into existing array (keep other days)
                 // Also stores full hourly block for dashboard snapshot
                 let omHourlyForSnap = null;
                 try {
@@ -204,35 +209,37 @@ module.exports = async (req, res) => {
                         };
                         const oldPrecipArr = evening?.hourlyPrecip || [];
 
-                        // Build full-day maps (hour 0..23)
+                        // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
+                        const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
+
+                        // Build maps for FUTURE hours only (hour >= localHour)
                         const oldByHour = {};
                         for (const o of oldPrecipArr) {
                             if (o.time && o.time.startsWith(todayStr)) {
-                                const h = new Date(o.time).getHours();
-                                oldByHour[h] = o.precip || 0;
+                                const h = hourFromTime(o.time);
+                                if (h >= localHour) oldByHour[h] = o.precip || 0;
                             }
                         }
 
                         const newByHour = {};
                         for (let i = 0; i < allTimes.length; i++) {
                             if (allTimes[i].startsWith(todayStr)) {
-                                const h = new Date(allTimes[i]).getHours();
-                                newByHour[h] = allPrecip[i] || 0;
+                                const h = hourFromTime(allTimes[i]);
+                                if (h >= localHour) newByHour[h] = allPrecip[i] || 0;
                             }
                         }
 
-                        // Helpers: total, rainy hours, consecutive blocks
+                        // Helpers: total, rainy hours, consecutive blocks (only over remaining hours)
                         const calcStats = (byHour) => {
                             let total = 0;
                             const hours = [];
-                            for (let h = 0; h < 24; h++) {
+                            for (let h = localHour; h < 24; h++) {
                                 const p = byHour[h] || 0;
                                 if (p > 0) {
                                     total += p;
                                     hours.push(h);
                                 }
                             }
-                            // Consecutive blocks: [[start, endInclusive], ...]
                             const blocks = [];
                             for (const h of hours) {
                                 if (blocks.length && h === blocks[blocks.length - 1][1] + 1) {
@@ -243,12 +250,10 @@ module.exports = async (req, res) => {
                             }
                             const start = hours.length ? hours[0] : null;
                             const end = hours.length ? hours[hours.length - 1] : null;
-                            // duration = actual number of rainy hours (not span min..max)
                             const duration = hours.length;
                             return { total, hours, blocks, start, end, duration };
                         };
 
-                        // e.g. "00:00–03:00, 17:00–18:00, 22:00–24:00"
                         const fmtBlocks = (s) => {
                             if (!s.blocks || s.blocks.length === 0) return '';
                             return s.blocks.map(([a, b]) => {
@@ -258,50 +263,57 @@ module.exports = async (req, res) => {
                             }).join(', ');
                         };
 
+                        // Merge today's OM hours into existing hourlyPrecip (preserve other days)
+                        const mergeTodayBaseline = async () => {
+                            const byKey = {};
+                            for (const o of oldPrecipArr) {
+                                if (o.time) byKey[o.time] = o.precip || 0;
+                            }
+                            for (let i = 0; i < allTimes.length; i++) {
+                                if (allTimes[i].startsWith(todayStr)) {
+                                    byKey[allTimes[i]] = allPrecip[i] || 0;
+                                }
+                            }
+                            const yesterdayStr = getLocalDateStr(cityTimezone, -1);
+                            const merged = Object.keys(byKey)
+                                .filter(t => t.slice(0, 10) >= yesterdayStr)
+                                .sort()
+                                .map(time => ({ time, precip: byKey[time] }));
+                            await City.findOneAndUpdate(
+                                { externalId: key },
+                                { $set: { "eveningState.hourlyPrecip": merged } }
+                            );
+                        };
+
                         const oldS = calcStats(oldByHour);
                         const newS = calcStats(newByHour);
 
-                        // No baseline from evening FOR TODAY → nothing to compare
+                        // No baseline for remaining hours today → set silently, do NOT alert
                         if (Object.keys(oldByHour).length === 0) {
-                            // Still store current plan so next checks have a baseline
-                            const updatedHourly = [];
-                            for (let i = 0; i < allTimes.length; i++) {
-                                if (allTimes[i].startsWith(todayStr)) {
-                                    updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
-                                }
-                            }
-                            await City.findOneAndUpdate(
-                                { externalId: key },
-                                { $set: { "eveningState.hourlyPrecip": updatedHourly } }
-                            );
+                            await mergeTodayBaseline();
                         } else {
                             const amountIncrease = newS.total - oldS.total;
                             const significantAmountUp = amountIncrease >= 1.5;
 
-                            // Full cancel: had some rain planned, now 0 for the whole day
                             const fullyCanceled = oldS.total > 0 && newS.total === 0;
 
-                            // Timing: only meaningful if both old and new have rain
                             let significantShift = false;
                             let significantLonger = false;
                             if (oldS.start != null && newS.start != null) {
                                 const startDelta = Math.abs(newS.start - oldS.start);
                                 const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
                                 significantShift = startDelta >= 2 || endDelta >= 2;
-                                // +2 or more actual rainy hours
                                 significantLonger = (newS.duration - oldS.duration) >= 2;
                             } else if (oldS.start == null && newS.start != null && newS.total >= 0.5) {
-                                // Rain appeared where there was none (and not tiny)
                                 significantShift = true;
                             }
 
                             const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
 
                             if (shouldAlert) {
-                                let alertMsg = '';
-
+                                let alertMsg = null;
                                 if (fullyCanceled) {
-                                    alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.`;
+                                    alertMsg = `☀️ Гарні новини! Опади на сьогодні скасовано.`;
                                 } else if (significantAmountUp) {
                                     alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
                                         `Було ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
@@ -328,17 +340,8 @@ module.exports = async (req, res) => {
                                     alertTriggered = true;
                                 }
 
-                                // Update baseline so we don't re-alert on the same change
-                                const updatedHourly = [];
-                                for (let i = 0; i < allTimes.length; i++) {
-                                    if (allTimes[i].startsWith(todayStr)) {
-                                        updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
-                                    }
-                                }
-                                await City.findOneAndUpdate(
-                                    { externalId: key },
-                                    { $set: { "eveningState.hourlyPrecip": updatedHourly } }
-                                );
+                                // Update baseline (merge) so we don't re-alert on the same change
+                                await mergeTodayBaseline();
                             }
                         }
                     }

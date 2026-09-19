@@ -206,19 +206,46 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 ).catch(e => console.error('History sync error:', e.message));
 
+                // Store hourly precip for TODAY + TOMORROW, prune anything older than yesterday.
+                // Keeps daytime precip-check baseline intact after evening overwrite.
                 let hourlyPrecip = [];
                 try {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
-                        const tomorrowStr = getLocalDateStr(response.data.timezone || 'Europe/Kyiv', 1);
+                        const cityTz = response.data.timezone || 'Europe/Kyiv';
+                        const todayLocal = getLocalDateStr(cityTz, 0);
+                        const tomorrowStr = getLocalDateStr(cityTz, 1);
+                        const yesterdayStr = getLocalDateStr(cityTz, -1);
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
+
+                        // Fresh data for today + tomorrow from Open-Meteo
+                        const fresh = [];
                         for (let i = 0; i < allTimes.length; i++) {
-                            if (allTimes[i].startsWith(tomorrowStr)) {
-                                hourlyPrecip.push({ time: allTimes[i], precip: allPrecip[i] });
+                            const t = allTimes[i];
+                            if (t.startsWith(todayLocal) || t.startsWith(tomorrowStr)) {
+                                fresh.push({ time: t, precip: allPrecip[i] || 0 });
                             }
                         }
+
+                        // Keep any existing entries still within yesterday..tomorrow,
+                        // then prefer fresh values for the same timestamp.
+                        const existing = (await City.findOne({ externalId: key }))?.eveningState?.hourlyPrecip || [];
+                        const byKey = {};
+                        for (const o of existing) {
+                            if (!o.time) continue;
+                            const d = o.time.slice(0, 10);
+                            if (d >= yesterdayStr && d <= tomorrowStr) {
+                                byKey[o.time] = o.precip || 0;
+                            }
+                        }
+                        for (const o of fresh) {
+                            byKey[o.time] = o.precip;
+                        }
+                        hourlyPrecip = Object.keys(byKey)
+                            .sort()
+                            .map(time => ({ time, precip: byKey[time] }));
                     }
                 } catch (omErr) {
                     console.error('Open-Meteo fetch error in evening forecast:', omErr.message);
