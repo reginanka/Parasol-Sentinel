@@ -383,11 +383,20 @@ module.exports = async (req, res) => {
 
                     let message = `${aqiPrefix}${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity)}\n\n`;
 
-                    const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
+                    // Show from TOMORROW (evening briefing). Index 0 is still stored in eveningState for daytime shift checks.
+                    // Always resolve days by valid_date so labels never drift relative to stored baseline.
+                    const cityTzForDays = response.data.timezone || 'Europe/Kyiv';
+                    const tomorrowStr = getLocalDateStr(cityTzForDays, 1);
+                    const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
+                    const startIdx = fullResponse.findIndex(d => dayKey(d) === tomorrowStr);
+                    const fromIdx = startIdx >= 0 ? startIdx : 1;
+                    const userForecast = fullResponse.slice(fromIdx, fromIdx + settings.daysCount);
 
                     userForecast.forEach((day, idx) => {
-                        const dateObj = new Date(day.valid_date || day.datetime);
-                        const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, { weekday: 'short', day: 'numeric', month: 'short' });
+                        // Prefer valid_date string to avoid UTC Date parsing shifting the weekday near midnight
+                        const rawDate = day.valid_date || day.datetime || '';
+                        const dateObj = new Date(rawDate.includes('T') ? rawDate : `${rawDate}T12:00:00`);
+                        const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, { weekday: 'short', day: 'numeric', month: 'short', timeZone: cityTzForDays });
                         const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
 
                         message += `📅 **${capDay}**\n`;

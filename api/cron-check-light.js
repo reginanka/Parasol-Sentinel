@@ -7,7 +7,7 @@ const User = require('../models/User');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { sleep, escapeHTML } = require('../utils/helpers');
+const { sleep, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 
 /**
  * Light weather check cron — identical alert logic to cron-check.js
@@ -79,8 +79,6 @@ module.exports = async (req, res) => {
                 }
 
                 const curTemp = om.current.temperature_2m;
-                const newMin = om.daily?.temperature_2m_min?.[0];
-                const newMax = om.daily?.temperature_2m_max?.[0];
                 const cityTimezone = om.timezone || 'Europe/Kyiv';
                 const { degToCard } = require('../utils/weather');
                 const windDirCard = om.current.wind_direction_10m != null
@@ -90,19 +88,26 @@ module.exports = async (req, res) => {
                 const cityDoc = await City.findOne({ externalId: key });
                 const evening = cityDoc?.eveningState;
 
-                const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: cityTimezone }));
-                const todayStr = localNow.toLocaleDateString('en-CA', { timeZone: cityTimezone });
+                // Calendar-safe local date (no toLocaleString → Date anti-pattern)
+                const todayStr = getLocalDateStr(cityTimezone, 0);
 
-                const eveningToday = evening?.forecast?.find(d =>
-                    (d.valid_date || d.datetime || '').startsWith(todayStr)
-                );
+                // Open-Meteo daily.time[] is YYYY-MM-DD in the requested timezone
+                const omDailyTimes = om.daily?.time || [];
+                let omTodayIdx = omDailyTimes.findIndex(t => String(t).slice(0, 10) === todayStr);
+                if (omTodayIdx < 0) omTodayIdx = 0;
+                const newMin = om.daily?.temperature_2m_min?.[omTodayIdx];
+                const newMax = om.daily?.temperature_2m_max?.[omTodayIdx];
+
+                const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
+                const eveningToday = evening?.forecast?.find(d => dayKey(d) === todayStr);
 
                 const alerts = [];
                 let alertTriggered = false;
                 let reasons = [];
 
                 // --- LOGIC A + B: Forecast shift & temp anomaly (using Open-Meteo daily/current) ---
-                if (eveningToday && newMin != null && newMax != null) {
+                // Only compare when baseline is for the same calendar day as todayStr
+                if (eveningToday && dayKey(eveningToday) === todayStr && newMin != null && newMax != null) {
                     const oldMin = eveningToday.min_temp;
                     const oldMax = eveningToday.max_temp;
 
@@ -181,19 +186,22 @@ module.exports = async (req, res) => {
                     const allPrecip = om.hourly?.precipitation || [];
                     const oldPrecipArr = evening?.hourlyPrecip || [];
 
+                    // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
+                    const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
+
                     const oldByHour = {};
                     for (const o of oldPrecipArr) {
                         if (o.time && o.time.startsWith(todayStr)) {
-                            const h = new Date(o.time).getHours();
-                            oldByHour[h] = o.precip || 0;
+                            const h = hourFromTime(o.time);
+                            if (!Number.isNaN(h)) oldByHour[h] = o.precip || 0;
                         }
                     }
 
                     const newByHour = {};
                     for (let i = 0; i < allTimes.length; i++) {
                         if (allTimes[i].startsWith(todayStr)) {
-                            const h = new Date(allTimes[i]).getHours();
-                            newByHour[h] = allPrecip[i] || 0;
+                            const h = hourFromTime(allTimes[i]);
+                            if (!Number.isNaN(h)) newByHour[h] = allPrecip[i] || 0;
                         }
                     }
 

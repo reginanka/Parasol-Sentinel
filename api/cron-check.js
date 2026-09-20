@@ -61,7 +61,6 @@ module.exports = async (req, res) => {
                 ]);
 
                 const current = currResp.data.data[0];
-                const newDaily = foreResp.data.data[0];
                 const dailyAll = foreResp.data.data || [];
                 
                 const cityDoc = await City.findOne({ externalId: key });
@@ -77,76 +76,80 @@ module.exports = async (req, res) => {
                 const localHour = parseInt(hourParts.find(p => p.type === 'hour')?.value || '0', 10) % 24;
                 const todayStr = getLocalDateStr(cityTimezone, 0);
 
-                // Find the snapshot of today's forecast from last evening
-                const eveningToday = evening?.forecast?.find(d => 
-                    (d.valid_date || d.datetime || '').startsWith(todayStr)
-                );
+                // Match BOTH baseline and current forecast by the same local calendar date.
+                // Never trust data[0] alone — near day boundary Weatherbit can shift.
+                const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
+                const eveningToday = evening?.forecast?.find(d => dayKey(d) === todayStr);
+                const newToday = dailyAll.find(d => dayKey(d) === todayStr) || dailyAll[0];
 
                 const alerts = [];
                 let alertTriggered = false;
                 let reasons = [];
 
-                if (eveningToday) {
+                if (eveningToday && newToday) {
                     const oldMin = eveningToday.min_temp;
                     const oldMax = eveningToday.max_temp;
-                    const newMin = newDaily.min_temp;
-                    const newMax = newDaily.max_temp;
+                    const newMin = newToday.min_temp;
+                    const newMax = newToday.max_temp;
 
-                    // --- LOGIC A: Forecast Shift (e.g. 25°C -> 32°C) ---
-                    const maxShift = newMax - oldMax;
-                    const minShift = newMin - oldMin;
+                    // Guard: only compare if both sides refer to the same calendar day
+                    if (dayKey(eveningToday) === todayStr && dayKey(newToday) === todayStr) {
+                        // --- LOGIC A: Forecast Shift (e.g. 25°C -> 32°C) ---
+                        const maxShift = newMax - oldMax;
+                        const minShift = newMin - oldMin;
 
-                    if (Math.abs(maxShift) >= 4 || Math.abs(minShift) >= 4) {
-                        reasons.push("зміна прогнозу");
-                        const fmtDelta = (d) => d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
-                        for (const user of cityInfo.users) {
-                            if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
-                            const lang = user.language || 'uk';
-                            const msg = alertsDict[lang].forecastShift
-                                .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
-                                .replace('{newMin}', newMin).replace('{newMax}', newMax)
-                                .replace('{minDelta}', fmtDelta(minShift))
-                                .replace('{maxDelta}', fmtDelta(maxShift));
-                            alerts.push({ userId: user.telegramId, text: msg, lang });
+                        if (Math.abs(maxShift) >= 4 || Math.abs(minShift) >= 4) {
+                            reasons.push("зміна прогнозу");
+                            const fmtDelta = (d) => d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
+                            for (const user of cityInfo.users) {
+                                if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
+                                const lang = user.language || 'uk';
+                                const msg = alertsDict[lang].forecastShift
+                                    .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
+                                    .replace('{newMin}', newMin).replace('{newMax}', newMax)
+                                    .replace('{minDelta}', fmtDelta(minShift))
+                                    .replace('{maxDelta}', fmtDelta(maxShift));
+                                alerts.push({ userId: user.telegramId, text: msg, lang });
+                            }
+                            alertTriggered = true;
                         }
-                        alertTriggered = true;
-                    }
 
-                    // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" (±5°C threshold) ---
-                    const curTemp = current.temp;
-                    let isAnomaly = false;
-                    let expectedBase = 0;
-                    let direction = '';
+                        // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" (±5°C threshold) ---
+                        const curTemp = current.temp;
+                        let isAnomaly = false;
+                        let expectedBase = 0;
+                        let direction = '';
 
-                    if (curTemp < (oldMin - 5)) {
-                        // More than 5°C colder than expected minimum → anomaly
-                        isAnomaly = true;
-                        expectedBase = oldMin;
-                        direction = 'cooler';
-                    } else if (curTemp > (oldMax + 5)) {
-                        // More than 5°C hotter than expected maximum → anomaly
-                        isAnomaly = true;
-                        expectedBase = oldMax;
-                        direction = 'warmer';
-                    }
-                    // If temp is within min..max or within ±5°C of them → no alert needed
-
-                    if (isAnomaly) {
-                        reasons.push("аномалія темп.");
-                        for (const user of cityInfo.users) {
-                            if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
-                            const lang = user.language || 'uk';
-                            const unit = user.units?.temp || 'c';
-                            const fmtTemp = (c) => unit === 'f' ? `${Math.round(c * 9/5 + 32)}°F` : `${Math.round(c)}°C`;
-                            
-                            const msg = alertsDict[lang].tempAnomaly
-                                .replace('{temp}', fmtTemp(curTemp))
-                                .replace('{expected}', fmtTemp(expectedBase))
-                                .replace('{delta}', Math.abs(curTemp - expectedBase).toFixed(1))
-                                .replace('{dir}', alertsDict[lang][direction]);
-                            alerts.push({ userId: user.telegramId, text: msg, lang });
+                        if (curTemp < (oldMin - 5)) {
+                            // More than 5°C colder than expected minimum → anomaly
+                            isAnomaly = true;
+                            expectedBase = oldMin;
+                            direction = 'cooler';
+                        } else if (curTemp > (oldMax + 5)) {
+                            // More than 5°C hotter than expected maximum → anomaly
+                            isAnomaly = true;
+                            expectedBase = oldMax;
+                            direction = 'warmer';
                         }
-                        alertTriggered = true;
+                        // If temp is within min..max or within ±5°C of them → no alert needed
+
+                        if (isAnomaly) {
+                            reasons.push("аномалія темп.");
+                            for (const user of cityInfo.users) {
+                                if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
+                                const lang = user.language || 'uk';
+                                const unit = user.units?.temp || 'c';
+                                const fmtTemp = (c) => unit === 'f' ? `${Math.round(c * 9/5 + 32)}°F` : `${Math.round(c)}°C`;
+                                
+                                const msg = alertsDict[lang].tempAnomaly
+                                    .replace('{temp}', fmtTemp(curTemp))
+                                    .replace('{expected}', fmtTemp(expectedBase))
+                                    .replace('{delta}', Math.abs(curTemp - expectedBase).toFixed(1))
+                                    .replace('{dir}', alertsDict[lang][direction]);
+                                alerts.push({ userId: user.telegramId, text: msg, lang });
+                            }
+                            alertTriggered = true;
+                        }
                     }
                 }
 
