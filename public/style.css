@@ -45,8 +45,8 @@
     --text: #ffffff;
     --text-dim: rgba(255, 255, 255, 0.5);
     --accent: #ff416c;
-    --font-main: 'Playpen Sans', system-ui, sans-serif;
-    --font-heading: 'Playpen Sans', system-ui, sans-serif;
+    --font-main: 'Andika', system-ui, sans-serif;
+    --font-heading: 'Andika', system-ui, sans-serif;
     --shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
     --glass-blur: blur(16px);
     --transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
@@ -112,6 +112,14 @@ body.snowy {
     padding: 0;
     box-sizing: border-box;
     -webkit-font-smoothing: antialiased;
+}
+
+/* Buttons/inputs often ignore body font — force site font everywhere */
+button,
+input,
+select,
+textarea {
+    font-family: inherit;
 }
 
 body {
@@ -380,8 +388,9 @@ body {
     padding: 0.4rem 1rem;
     border-radius: 7px;
     cursor: pointer;
+    font-family: var(--font-main);
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: 700;
     transition: var(--transition);
 }
 
