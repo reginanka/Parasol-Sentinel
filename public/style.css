@@ -45,8 +45,8 @@
     --text: #ffffff;
     --text-dim: rgba(255, 255, 255, 0.5);
     --accent: #ff416c;
-    --font-main: 'Andika', system-ui, sans-serif;
-    --font-heading: 'Andika', system-ui, sans-serif;
+    --font-main: 'Oswald', system-ui, sans-serif;
+    --font-heading: 'Oswald', system-ui, sans-serif;
     --shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
     --glass-blur: blur(16px);
     --transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);

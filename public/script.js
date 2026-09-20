@@ -745,7 +745,7 @@ function renderChart(dayOffset = 0) {
     if (!dataSlice || !dataSlice.time || dataSlice.time.length === 0) {
         ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
         ctx.textAlign = "center";
-        ctx.font = "14px 'Andika', system-ui, sans-serif";
+        ctx.font = "14px 'Oswald', system-ui, sans-serif";
         ctx.fillText(i18n[currentLang].chartNoData, ctx.canvas.width / 2, ctx.canvas.height / 2);
         return;
     }
@@ -794,7 +794,7 @@ function renderChart(dayOffset = 0) {
             // Data missing — show a text message instead of blank chart
             ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
             ctx.textAlign = 'center';
-            ctx.font = "14px Andika, system-ui, sans-serif";
+            ctx.font = "14px Oswald, system-ui, sans-serif";
             ctx.fillText(
                 currentLang === 'uk' ? 'Дані поривів недоступні' : 'Gusts data unavailable',
                 ctx.canvas.width / 2, ctx.canvas.height / 2
