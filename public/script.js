@@ -65,6 +65,7 @@ const i18n = {
         chartProb: "Шанс опадів (%)",
         chartPress: "Тиск (мм рт.ст.)",
         intelMonitoring: "Інтелектуальний моніторинг",
+        dataSources: "Weather data: Weatherbit, Open-Meteo · Air quality: WAQI (aqicn.org) · Geomagnetic: NOAA SWPC",
         sentinel: "Вартовий",
         dashboard: "Панель керування",
         freeAccess: "Безкоштовний доступ",
@@ -144,6 +145,7 @@ const i18n = {
         chartProb: "Precip Chance (%)",
         chartPress: "Pressure (mb)",
         intelMonitoring: "Intelligence Monitoring",
+        dataSources: "Weather data: Weatherbit, Open-Meteo · Air quality: WAQI (aqicn.org) · Geomagnetic: NOAA SWPC",
         sentinel: "Sentinel",
         dashboard: "Dashboard",
         freeAccess: "Free Access",
@@ -362,10 +364,16 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             const lon = data.user?.lon || data.lon || DEFAULT_LON;
             updateWindyWidget(lat, lon);
 
-            // Honest update time: prefer meta from snapshot/live, else lastState
-            const dbUpdateTime = data.meta?.updatedAt
-                ? new Date(data.meta.updatedAt)
-                : (data.lastState?.updatedAt ? new Date(data.lastState.updatedAt) : null);
+            // Honest update time from DB/API — never invent "now" if we have a server timestamp
+            const rawTs =
+                data.meta?.updatedAt ||
+                data.meta?.updatedAtWb ||
+                data.meta?.updatedAtOm ||
+                data.lastState?.updatedAt ||
+                data.dashboardSnapshot?.updatedAtWb ||
+                data.dashboardSnapshot?.updatedAtOm ||
+                null;
+            const dbUpdateTime = rawTs ? new Date(rawTs) : null;
             updateUpdateTime(dbUpdateTime);
         }
     } catch (error) {
@@ -433,9 +441,20 @@ async function fetchOpenMeteo(lat, lon, name) {
 }
 
 function updateUpdateTime(date) {
-    const timeToDisplay = date || new Date();
+    // Prefer timestamp from DB/API snapshot; only fall back to "now" for free live fetches
+    const timeToDisplay = (date instanceof Date && !isNaN(date.getTime())) ? date : new Date();
     const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
-    updateTime.textContent = timeToDisplay.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    const sameDay = timeToDisplay.toDateString() === now.toDateString();
+    if (sameDay) {
+        updateTime.textContent = timeToDisplay.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
+    } else {
+        updateTime.textContent = timeToDisplay.toLocaleString(loc, {
+            day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+        });
+    }
+    // Expose raw ISO on the element for debugging / future use
+    if (updateTime) updateTime.dataset.updatedAt = timeToDisplay.toISOString();
 }
 
 function normalizeOpenMeteo(om, name) {
@@ -508,7 +527,9 @@ function updateNowExtras(isToday) {
 
     let showAny = false;
 
-    // --- Air quality (prefer WAQI live sensors) ---
+    // --- Air quality ---
+    // Premium: WAQI (ground stations). Free: Open-Meteo US AQI (model).
+    // Different sources → numbers can differ; prefer station data when present.
     const waqi = weatherData.waqi;
     if (waqi && waqi.aqi != null && !isNaN(Number(waqi.aqi))) {
         const aqiVal = Number(waqi.aqi);
@@ -517,17 +538,38 @@ function updateNowExtras(isToday) {
             aqiVal > 150 ? '🔴' : aqiVal > 100 ? '🟠' : aqiVal > 50 ? '🟡' : '🟢'
         );
         aqiPill.style.display = 'inline-flex';
+        aqiPill.title = waqi.station
+            ? `WAQI · ${waqi.station}`
+            : 'Якість повітря (станція WAQI)';
         showAny = true;
     } else if (weatherData.aqi?.us_aqi?.length) {
-        // Fallback: Open-Meteo hourly US AQI — take current hour-ish (index 0 or nearest)
+        // Open-Meteo hourly US AQI — pick value closest to current local hour
         const arr = weatherData.aqi.us_aqi;
-        const val = arr.find(v => v != null);
+        const times = weatherData.aqi.time || [];
+        let val = null;
+        if (times.length === arr.length && times.length > 0) {
+            const now = Date.now();
+            let bestIdx = -1;
+            let bestDiff = Infinity;
+            for (let i = 0; i < times.length; i++) {
+                if (arr[i] == null) continue;
+                const t = new Date(times[i]).getTime();
+                const diff = Math.abs(t - now);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestIdx = i;
+                }
+            }
+            if (bestIdx >= 0) val = arr[bestIdx];
+        }
+        if (val == null) val = arr.find(v => v != null);
         if (val != null) {
             const aqiVal = Number(val);
-            document.getElementById('aqi-val').textContent = `AQI ${aqiVal}`;
+            document.getElementById('aqi-val').textContent = `AQI ${Math.round(aqiVal)}`;
             document.getElementById('aqi-badge').textContent =
                 aqiVal > 150 ? '🔴' : aqiVal > 100 ? '🟠' : aqiVal > 50 ? '🟡' : '🟢';
             aqiPill.style.display = 'inline-flex';
+            aqiPill.title = 'Open-Meteo US AQI (модель)';
             showAny = true;
         } else {
             aqiPill.style.display = 'none';
@@ -703,7 +745,7 @@ function renderChart(dayOffset = 0) {
     if (!dataSlice || !dataSlice.time || dataSlice.time.length === 0) {
         ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
         ctx.textAlign = "center";
-        ctx.font = "14px Inter";
+        ctx.font = "14px 'Playpen Sans', system-ui, sans-serif";
         ctx.fillText(i18n[currentLang].chartNoData, ctx.canvas.width / 2, ctx.canvas.height / 2);
         return;
     }
@@ -752,7 +794,7 @@ function renderChart(dayOffset = 0) {
             // Data missing — show a text message instead of blank chart
             ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
             ctx.textAlign = 'center';
-            ctx.font = '14px Inter';
+            ctx.font = "14px 'Playpen Sans', system-ui, sans-serif";
             ctx.fillText(
                 currentLang === 'uk' ? 'Дані поривів недоступні' : 'Gusts data unavailable',
                 ctx.canvas.width / 2, ctx.canvas.height / 2
