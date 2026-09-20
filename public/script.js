@@ -526,24 +526,25 @@ function updateNowExtras(isToday) {
     }
 
     let showAny = false;
+    const setLvl = (el, lvl) => {
+        el.classList.remove('lvl-good', 'lvl-mod', 'lvl-warn', 'lvl-bad');
+        if (lvl) el.classList.add(lvl);
+    };
+    const aqiLevel = (v) => (v > 150 ? 'lvl-bad' : v > 100 ? 'lvl-warn' : v > 50 ? 'lvl-mod' : 'lvl-good');
 
     // --- Air quality ---
     // Premium: WAQI (ground stations). Free: Open-Meteo US AQI (model).
-    // Different sources → numbers can differ; prefer station data when present.
     const waqi = weatherData.waqi;
     if (waqi && waqi.aqi != null && !isNaN(Number(waqi.aqi))) {
         const aqiVal = Number(waqi.aqi);
         document.getElementById('aqi-val').textContent = `AQI ${aqiVal}`;
-        document.getElementById('aqi-badge').textContent = waqi.aqiBadge || (
-            aqiVal > 150 ? '🔴' : aqiVal > 100 ? '🟠' : aqiVal > 50 ? '🟡' : '🟢'
-        );
+        setLvl(aqiPill, aqiLevel(aqiVal));
         aqiPill.style.display = 'inline-flex';
         aqiPill.title = waqi.station
             ? `WAQI · ${waqi.station}`
             : 'Якість повітря (станція WAQI)';
         showAny = true;
     } else if (weatherData.aqi?.us_aqi?.length) {
-        // Open-Meteo hourly US AQI — pick value closest to current local hour
         const arr = weatherData.aqi.us_aqi;
         const times = weatherData.aqi.time || [];
         let val = null;
@@ -566,8 +567,7 @@ function updateNowExtras(isToday) {
         if (val != null) {
             const aqiVal = Number(val);
             document.getElementById('aqi-val').textContent = `AQI ${Math.round(aqiVal)}`;
-            document.getElementById('aqi-badge').textContent =
-                aqiVal > 150 ? '🔴' : aqiVal > 100 ? '🟠' : aqiVal > 50 ? '🟡' : '🟢';
+            setLvl(aqiPill, aqiLevel(aqiVal));
             aqiPill.style.display = 'inline-flex';
             aqiPill.title = 'Open-Meteo US AQI (модель)';
             showAny = true;
@@ -584,11 +584,11 @@ function updateNowExtras(isToday) {
         const kp = Number(geo.maxKp);
         const t = i18n[currentLang];
         let label = t.geomagCalm;
-        let badge = '🟢';
-        if (kp >= 5) { label = t.geomagStorm; badge = '🔴'; }
-        else if (kp >= 4) { label = t.geomagUnsettled; badge = '🟡'; }
+        let lvl = 'lvl-good';
+        if (kp >= 5) { label = t.geomagStorm; lvl = 'lvl-bad'; }
+        else if (kp >= 4) { label = t.geomagUnsettled; lvl = 'lvl-mod'; }
         document.getElementById('geomag-val').textContent = `Kp ${kp.toFixed(0)} · ${label}`;
-        document.getElementById('geomag-badge').textContent = geo.badge || badge;
+        setLvl(geoPill, lvl);
         geoPill.style.display = 'inline-flex';
         showAny = true;
     } else {
