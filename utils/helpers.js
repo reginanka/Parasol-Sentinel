@@ -90,15 +90,26 @@ const escapeHTML = (text) => {
 
 /**
  * Returns a robust YYYY-MM-DD string for a given timezone and offset in days.
+ * Uses calendar-day arithmetic (not raw ms) so midnight / DST edges stay correct.
  */
 const getLocalDateStr = (timezone = 'Europe/Kyiv', offsetDays = 0) => {
-    const d = new Date(Date.now() + offsetDays * 86400000);
-    return new Intl.DateTimeFormat('en-CA', {
+    const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: timezone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit'
-    }).format(d);
+    }).formatToParts(new Date());
+
+    const y = parseInt(parts.find(p => p.type === 'year')?.value || '0', 10);
+    const m = parseInt(parts.find(p => p.type === 'month')?.value || '1', 10);
+    const d = parseInt(parts.find(p => p.type === 'day')?.value || '1', 10);
+
+    // UTC noon avoids DST edge cases when shifting calendar days
+    const shifted = new Date(Date.UTC(y, m - 1, d + offsetDays, 12, 0, 0));
+    const yy = shifted.getUTCFullYear();
+    const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(shifted.getUTCDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
 };
 
 module.exports = {
