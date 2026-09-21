@@ -12,6 +12,7 @@ const CitySchema = new mongoose.Schema({
         updatedAt: Date,
         forecast: Array, // 3-day forecast data
         hourlyPrecip: Array, // план опадів на завтра (відносно вечірньої відправки)
+        hourlyPrecipUpdatedAt: Date, // коли hourlyPrecip востаннє мерджився (evening cron АБО денний cron-check), окремо від updatedAt
         forecastedKp: Number, // max Kp, що був у вечірньому прогнозі на target-день
         forecastedKpDate: String // YYYY-MM-DD — день, на який стосується forecastedKp
     },
