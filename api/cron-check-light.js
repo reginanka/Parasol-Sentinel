@@ -49,13 +49,13 @@ module.exports = async (req, res) => {
 
         const alertsDict = {
             uk: {
-                tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час (станом на {asOf}: {expected}°C).",
+                tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час (станом на {asOf}: {expected}).",
                 forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували (станом на {asOf}): {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
                 warmer: "вище",
                 cooler: "нижче"
             },
             en: {
-                tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time (as of {asOf}: {expected}°C).",
+                tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time (as of {asOf}: {expected}).",
                 forecastShift: "📊 **Today's forecast has changed!**\nExpected (as of {asOf}): {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
                 warmer: "warmer",
                 cooler: "cooler"
@@ -130,6 +130,26 @@ module.exports = async (req, res) => {
                             alerts.push({ userId: user.telegramId, text: msg, lang });
                         }
                         alertTriggered = true;
+
+                        // Значна зміна → оновлюємо baseline + timestamp,
+                        // щоб наступний алерт показував «станом на» саме цей момент.
+                        const updatedForecast = (evening?.forecast || []).map(d => {
+                            if (dayKey(d) === todayStr) {
+                                return { ...d, min_temp: newMin, max_temp: newMax };
+                            }
+                            return d;
+                        });
+                        await City.findOneAndUpdate(
+                            { externalId: key },
+                            { $set: {
+                                "eveningState.forecast": updatedForecast,
+                                "eveningState.updatedAt": new Date()
+                            }}
+                        );
+                        if (evening) {
+                            evening.forecast = updatedForecast;
+                            evening.updatedAt = new Date();
+                        }
                     }
 
                     let isAnomaly = false;
