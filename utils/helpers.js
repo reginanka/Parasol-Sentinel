@@ -112,6 +112,23 @@ const getLocalDateStr = (timezone = 'Europe/Kyiv', offsetDays = 0) => {
     return `${yy}-${mm}-${dd}`;
 };
 
+// Formats a Date/ISO-string as "дд.мм гг:хх" (uk) or "dd.mm hh:mm" (en) in the given timezone.
+// Used to show "було станом на ..." in alerts, so people can tell how old the baseline is.
+const formatLocalDateTime = (date, timezone = 'Europe/Kyiv', lang = 'uk') => {
+    if (!date) return '';
+    try {
+        return new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', {
+            timeZone: timezone,
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        }).format(new Date(date));
+    } catch {
+        return '';
+    }
+};
+
 module.exports = {
     sleep,
     truncate,
@@ -119,5 +136,6 @@ module.exports = {
     generateSignature,
     validateTelegramInitData,
     escapeHTML,
-    getLocalDateStr
+    getLocalDateStr,
+    formatLocalDateTime
 };
