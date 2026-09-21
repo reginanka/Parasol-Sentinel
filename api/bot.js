@@ -908,6 +908,28 @@ bot.on('callback_query', async (ctx) => {
             const maxTemp = Math.round(Math.max(...temps));
             const totalPrecip = precips.reduce((a, b) => a + b, 0).toFixed(1);
 
+            // Блоки годин з опадами (precip > 0), як у алертах: "04:00–06:00, 10:00–18:00"
+            const wetHours = [];
+            for (const idx of dayIndices) {
+                if ((precipitation[idx] || 0) > 0) {
+                    wetHours.push(parseInt(String(time[idx]).slice(11, 13), 10));
+                }
+            }
+            const precipBlocks = [];
+            for (const h of wetHours) {
+                if (precipBlocks.length && h === precipBlocks[precipBlocks.length - 1][1] + 1) {
+                    precipBlocks[precipBlocks.length - 1][1] = h;
+                } else {
+                    precipBlocks.push([h, h]);
+                }
+            }
+            const fmtPrecipBlocks = precipBlocks.map(([a, b]) => {
+                const from = `${String(a).padStart(2, '0')}:00`;
+                // кінець блоку = остання година з дощем (як у прикладі 04:00-06:00)
+                const to = `${String(b).padStart(2, '0')}:00`;
+                return a === b ? from : `${from}–${to}`;
+            }).join(', ');
+
             const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
             const isToday = targetDateStr === todayStr;
 
@@ -916,8 +938,18 @@ bot.on('callback_query', async (ctx) => {
                 : `🌤 <b>Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
 
             msg += lang === 'uk'
-                ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Загалом опадів: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`
-                : `🌡 Temperature: <b>${minTemp}°C ... ${maxTemp}°C</b>\n💧 Total precip: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`;
+                ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n`
+                : `🌡 Temperature: <b>${minTemp}°C ... ${maxTemp}°C</b>\n`;
+
+            if (Number(totalPrecip) > 0 && fmtPrecipBlocks) {
+                msg += lang === 'uk'
+                    ? `💧 Дощитиме: <b>${fmtPrecipBlocks}</b>\nЗагалом опадів на день: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`
+                    : `💧 Rain: <b>${fmtPrecipBlocks}</b>\nTotal precip for the day: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`;
+            } else {
+                msg += lang === 'uk'
+                    ? `💧 Опадів не очікується\n\n`
+                    : `💧 No precipitation expected\n\n`;
+            }
 
             const windUnit = user.units?.wind || 'ms';
             const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
