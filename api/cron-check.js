@@ -39,14 +39,12 @@ module.exports = async (req, res) => {
             uk: {
                 tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час (станом на {asOf}: {expected}).",
                 forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували (станом на {asOf}): {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
-                precip: "⛈️ **Попередження про опади!**\nВечірній прогноз (станом на {asOf}) опадів не показував — зараз: {desc}.",
                 warmer: "вище",
                 cooler: "нижче"
             },
             en: {
                 tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time (as of {asOf}: {expected}).",
                 forecastShift: "📊 **Today's forecast has changed!**\nExpected (as of {asOf}): {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
-                precip: "⛈️ **Precipitation alert!**\nEvening forecast (as of {asOf}) showed no rain — now: {desc}.",
                 warmer: "warmer",
                 cooler: "cooler"
             }
@@ -139,20 +137,25 @@ module.exports = async (req, res) => {
                         }
 
                         // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" (±5°C threshold) ---
+                        // Після можливого зсуву прогнозу порівнюємо з ОНОВЛЕНИМ baseline
+                        // (evening.forecast уже оновлений вище), а не зі старими oldMin/oldMax.
                         const curTemp = current.temp;
+                        const baselineToday = evening?.forecast?.find(d => dayKey(d) === todayStr);
+                        const baselineMin = baselineToday?.min_temp ?? oldMin;
+                        const baselineMax = baselineToday?.max_temp ?? oldMax;
                         let isAnomaly = false;
                         let expectedBase = 0;
                         let direction = '';
 
-                        if (curTemp < (oldMin - 5)) {
+                        if (curTemp < (baselineMin - 5)) {
                             // More than 5°C colder than expected minimum → anomaly
                             isAnomaly = true;
-                            expectedBase = oldMin;
+                            expectedBase = baselineMin;
                             direction = 'cooler';
-                        } else if (curTemp > (oldMax + 5)) {
+                        } else if (curTemp > (baselineMax + 5)) {
                             // More than 5°C hotter than expected maximum → anomaly
                             isAnomaly = true;
-                            expectedBase = oldMax;
+                            expectedBase = baselineMax;
                             direction = 'warmer';
                         }
                         // If temp is within min..max or within ±5°C of them → no alert needed
@@ -195,22 +198,9 @@ module.exports = async (req, res) => {
                     console.error('History smart update error:', histErr.message);
                 }
 
-                // --- LOGIC C: Precipitation Start ---
-                const oldCode = evening?.weatherCode ?? 800;
+                // Weather code — лише для логів / lastState (не для алертів).
+                // Опади проактивно покриває LOGIC D (Open-Meteo hourly).
                 const newCode = current.weather.code;
-                if (oldCode >= 800 && newCode < 700) {
-                    reasons.push("початок опадів");
-                    for (const user of cityInfo.users) {
-                        if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
-                        const lang = user.language || 'uk';
-                        const asOf = formatLocalDateTime(evening?.updatedAt, cityTimezone, lang);
-                        const msg = alertsDict[lang].precip
-                            .replace('{asOf}', asOf)
-                            .replace('{desc}', getWeatherDesc(newCode, lang));
-                        alerts.push({ userId: user.telegramId, text: msg, lang });
-                    }
-                    alertTriggered = true;
-                }
 
                 // --- LOGIC D: Smart Precipitation Check (Open-Meteo) ---
                 // Rules:

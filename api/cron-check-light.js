@@ -152,17 +152,22 @@ module.exports = async (req, res) => {
                         }
                     }
 
+                    // Після можливого зсуву прогнозу порівнюємо з ОНОВЛЕНИМ baseline
+                    // (evening.forecast уже оновлений вище), а не зі старими oldMin/oldMax.
+                    const baselineToday = evening?.forecast?.find(d => dayKey(d) === todayStr);
+                    const baselineMin = baselineToday?.min_temp ?? oldMin;
+                    const baselineMax = baselineToday?.max_temp ?? oldMax;
                     let isAnomaly = false;
                     let expectedBase = 0;
                     let direction = '';
 
-                    if (curTemp < (oldMin - 5)) {
+                    if (curTemp < (baselineMin - 5)) {
                         isAnomaly = true;
-                        expectedBase = oldMin;
+                        expectedBase = baselineMin;
                         direction = 'cooler';
-                    } else if (curTemp > (oldMax + 5)) {
+                    } else if (curTemp > (baselineMax + 5)) {
                         isAnomaly = true;
-                        expectedBase = oldMax;
+                        expectedBase = baselineMax;
                         direction = 'warmer';
                     }
 
