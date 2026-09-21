@@ -7,7 +7,7 @@ const User = require('../models/User');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { sleep, escapeHTML, getLocalDateStr } = require('../utils/helpers');
+const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../utils/helpers');
 
 /**
  * Light weather check cron — identical alert logic to cron-check.js
@@ -49,14 +49,14 @@ module.exports = async (req, res) => {
 
         const alertsDict = {
             uk: {
-                tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час ({expected}°C).",
-                forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували: {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
+                tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час (станом на {asOf}: {expected}°C).",
+                forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували (станом на {asOf}): {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
                 warmer: "вище",
                 cooler: "нижче"
             },
             en: {
-                tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time ({expected}°C).",
-                forecastShift: "📊 **Today's forecast has changed!**\nExpected: {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
+                tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time (as of {asOf}: {expected}°C).",
+                forecastShift: "📊 **Today's forecast has changed!**\nExpected (as of {asOf}): {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
                 warmer: "warmer",
                 cooler: "cooler"
             }
@@ -120,7 +120,9 @@ module.exports = async (req, res) => {
                         for (const user of cityInfo.users) {
                             if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                             const lang = user.language || 'uk';
+                            const asOf = formatLocalDateTime(evening?.updatedAt, cityTimezone, lang);
                             const msg = alertsDict[lang].forecastShift
+                                .replace('{asOf}', asOf)
                                 .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
                                 .replace('{newMin}', newMin).replace('{newMax}', newMax)
                                 .replace('{minDelta}', fmtDelta(minShift))
@@ -152,9 +154,11 @@ module.exports = async (req, res) => {
                             const unit = user.units?.temp || 'c';
                             const fmtTemp = (c) =>
                                 unit === 'f' ? `${Math.round(c * 9 / 5 + 32)}°F` : `${Math.round(c)}°C`;
+                            const asOf = formatLocalDateTime(evening?.updatedAt, cityTimezone, lang);
 
                             const msg = alertsDict[lang].tempAnomaly
                                 .replace('{temp}', fmtTemp(curTemp))
+                                .replace('{asOf}', asOf)
                                 .replace('{expected}', fmtTemp(expectedBase))
                                 .replace('{dir}', alertsDict[lang][direction]);
                             alerts.push({ userId: user.telegramId, text: msg, lang });
@@ -185,6 +189,7 @@ module.exports = async (req, res) => {
                     const allTimes = om.hourly?.time || [];
                     const allPrecip = om.hourly?.precipitation || [];
                     const oldPrecipArr = evening?.hourlyPrecip || [];
+                    const oldPrecipAsOf = evening?.hourlyPrecipUpdatedAt || evening?.updatedAt || null;
 
                     // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
                     const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
@@ -250,7 +255,10 @@ module.exports = async (req, res) => {
                         }
                         await City.findOneAndUpdate(
                             { externalId: key },
-                            { $set: { "eveningState.hourlyPrecip": updatedHourly } }
+                            { $set: {
+                                "eveningState.hourlyPrecip": updatedHourly,
+                                "eveningState.hourlyPrecipUpdatedAt": new Date()
+                            }}
                         );
                     } else {
                         const amountIncrease = newS.total - oldS.total;
@@ -271,24 +279,28 @@ module.exports = async (req, res) => {
                         const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
 
                         if (shouldAlert) {
+                            const oldAsOfUk = formatLocalDateTime(oldPrecipAsOf, cityTimezone, 'uk');
+                            const asOfSuffixUk = oldAsOfUk ? ` (станом на ${oldAsOfUk})` : '';
+
                             let alertMsg = '';
 
                             if (fullyCanceled) {
-                                alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.`;
+                                alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.\n` +
+                                    `Було${asOfSuffixUk} ~${oldS.total.toFixed(1)} мм → зараз 0 мм.`;
                             } else if (significantAmountUp) {
                                 alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
-                                    `Було ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
+                                    `Було${asOfSuffixUk} ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
                                     `Дощ: ${fmtBlocks(newS)}.`;
                             } else if (significantLonger) {
                                 alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
-                                    `Було: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                    `Було${asOfSuffixUk}: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                             } else if (significantShift) {
                                 if (oldS.start == null) {
                                     alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
                                         `Дощ: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                                 } else {
                                     alertMsg = `🌤 Час опадів змістився.\n` +
-                                        `Було: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                        `Було${asOfSuffixUk}: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
                                 }
                             }
 
@@ -309,7 +321,10 @@ module.exports = async (req, res) => {
                             }
                             await City.findOneAndUpdate(
                                 { externalId: key },
-                                { $set: { "eveningState.hourlyPrecip": updatedHourly } }
+                                { $set: {
+                                    "eveningState.hourlyPrecip": updatedHourly,
+                                    "eveningState.hourlyPrecipUpdatedAt": new Date()
+                                }}
                             );
                         }
                     }
