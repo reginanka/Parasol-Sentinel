@@ -7,7 +7,7 @@ const User = require('../models/User');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { formatUrl, generateSignature } = require('../utils/helpers');
+const { formatUrl, generateSignature, formatLocalDateTime } = require('../utils/helpers');
 const {
     analyzeAgroRisks,
     formatAgroReport,
@@ -835,15 +835,45 @@ bot.on('callback_query', async (ctx) => {
                 day: '2-digit', month: '2-digit'
             });
 
-            // Fetch hourly forecast from Open-Meteo (enough days to cover today + tomorrow)
-            const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,weather_code&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
-            const omRes = await axios.get(omUrl);
+            // --- Hourly data: prefer Mongo snapshot (same as website), fallback to live Open-Meteo ---
+            const OM_FRESH_MS = 90 * 60 * 1000; // 90 хв — як на сайті
+            const cityKey = `${Number(user.lat).toFixed(2)},${Number(user.lon).toFixed(2)}`;
+            const cityDocForSnap = await City.findOne({ externalId: cityKey }).lean();
+            const snap = cityDocForSnap?.dashboardSnapshot;
+            const omAge = snap?.updatedAtOm ? (Date.now() - new Date(snap.updatedAtOm).getTime()) : Infinity;
+            const snapHourly = snap?.hourly;
+            const snapHasDay = Array.isArray(snapHourly?.time) &&
+                snapHourly.time.some(t => String(t).startsWith(targetDateStr));
+            const snapHasCodes = Array.isArray(snapHourly?.weather_code) && snapHourly.weather_code.length > 0;
+            const useSnapshot = snapHasDay && snapHasCodes && omAge < OM_FRESH_MS;
 
-            if (!omRes.data || !omRes.data.hourly) {
-                return ctx.reply(lang === 'uk' ? '❌ Помилка отримання даних погоди.' : '❌ Failed to fetch weather data.');
+            let time, temperature_2m, precipitation, precipitation_probability, wind_speed_10m, weather_code;
+            let dataUpdatedAt = null;
+
+            if (useSnapshot) {
+                time = snapHourly.time || [];
+                temperature_2m = snapHourly.temperature_2m || [];
+                precipitation = snapHourly.precipitation || [];
+                precipitation_probability = snapHourly.precipitation_probability || [];
+                wind_speed_10m = snapHourly.wind_speed_10m || [];
+                weather_code = snapHourly.weather_code || [];
+                dataUpdatedAt = snap.updatedAtOm ? new Date(snap.updatedAtOm) : null;
+            } else {
+                const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
+                    `&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,weather_code` +
+                    `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
+                const omRes = await axios.get(omUrl);
+                if (!omRes.data || !omRes.data.hourly) {
+                    return ctx.reply(lang === 'uk' ? '❌ Помилка отримання даних погоди.' : '❌ Failed to fetch weather data.');
+                }
+                time = omRes.data.hourly.time;
+                temperature_2m = omRes.data.hourly.temperature_2m;
+                precipitation = omRes.data.hourly.precipitation;
+                precipitation_probability = omRes.data.hourly.precipitation_probability;
+                wind_speed_10m = omRes.data.hourly.wind_speed_10m;
+                weather_code = omRes.data.hourly.weather_code;
+                dataUpdatedAt = new Date();
             }
-
-            const { time, temperature_2m, precipitation, precipitation_probability, wind_speed_10m, weather_code } = omRes.data.hourly;
 
             const getWeatherSymbol = (code) => {
                 if (code === 0) return '☀️';
@@ -861,7 +891,7 @@ bot.on('callback_query', async (ctx) => {
 
             const dayIndices = [];
             for (let i = 0; i < time.length; i++) {
-                if (time[i].startsWith(targetDateStr)) {
+                if (String(time[i]).startsWith(targetDateStr)) {
                     dayIndices.push(i);
                 }
             }
@@ -873,7 +903,7 @@ bot.on('callback_query', async (ctx) => {
             }
 
             const temps = dayIndices.map(i => temperature_2m[i]);
-            const precips = dayIndices.map(i => precipitation[i]);
+            const precips = dayIndices.map(i => precipitation[i] || 0);
             const minTemp = Math.round(Math.min(...temps));
             const maxTemp = Math.round(Math.max(...temps));
             const totalPrecip = precips.reduce((a, b) => a + b, 0).toFixed(1);
@@ -892,7 +922,6 @@ bot.on('callback_query', async (ctx) => {
             const windUnit = user.units?.wind || 'ms';
             const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
 
-            // Header: Time | Cond | Temp | Precip | Prob | Wind
             const hdr1 = lang === 'uk' ? 'Час ' : 'Time';
             const hdr2 = lang === 'uk' ? 'Ст' : 'Cd';
             const hdr3 = lang === 'uk' ? 'Темп' : 'Temp';
@@ -903,22 +932,20 @@ bot.on('callback_query', async (ctx) => {
             table += `────┼───┼────┼─────┼───┼─────\n`;
 
             for (const idx of dayIndices) {
-                // Full hourly — no 3-hour step
-                const hourDate = new Date(time[idx]);
-                const hour = hourDate.getHours();
-                const hStr = `${hour.toString().padStart(2, '0')}:00`;
-                const icon = getWeatherSymbol(weather_code[idx]);
+                // Година з рядка OM ("YYYY-MM-DDTHH:MM"), без Date timezone-багів
+                const hStr = `${String(time[idx]).slice(11, 13)}:00`;
+                const icon = getWeatherSymbol(weather_code?.[idx]);
                 const tVal = `${Math.round(temperature_2m[idx])}°`.padStart(4);
-                const pVal = precipitation[idx] > 0
-                    ? `${precipitation[idx].toFixed(1)}`
+                const pVal = (precipitation[idx] || 0) > 0
+                    ? `${Number(precipitation[idx]).toFixed(1)}`
                     : '0';
                 const pStr = pVal.padStart(5);
                 const prob = precipitation_probability?.[idx] != null
                     ? `${Math.round(precipitation_probability[idx])}`.padStart(3)
                     : '  -';
                 const wSpd = windUnit === 'kmh'
-                    ? Math.round(wind_speed_10m[idx] * 3.6)
-                    : Math.round(wind_speed_10m[idx]);
+                    ? Math.round((wind_speed_10m[idx] || 0) * 3.6)
+                    : Math.round(wind_speed_10m[idx] || 0);
                 const wStr = `${wSpd}${windUnitStr}`;
 
                 table += `${hStr}| ${icon}|${tVal}|${pStr}|${prob}|${wStr}\n`;
@@ -926,6 +953,13 @@ bot.on('callback_query', async (ctx) => {
             table += `</pre>`;
 
             msg += table;
+
+            const asOfStr = formatLocalDateTime(dataUpdatedAt, timezone, lang);
+            if (asOfStr) {
+                msg += lang === 'uk'
+                    ? `\nℹ️ Цей погодинний прогноз береться з Open-Meteo, оновлений ${asOfStr}.`
+                    : `\nℹ️ This hourly forecast is from Open-Meteo, updated ${asOfStr}.`;
+            }
 
             // Button for the adjacent day (today ↔ tomorrow)
             const otherDate = new Date(targetDate);

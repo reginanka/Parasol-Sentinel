@@ -224,8 +224,8 @@ module.exports = async (req, res) => {
                 let omHourlyForSnap = null;
                 try {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                        `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure` +
-                        `&timezone=auto&forecast_days=2`;
+                        `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code` +
+                        `&timezone=auto&forecast_days=3`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
                         const allTimes = omRes.data.hourly.time;
@@ -237,7 +237,8 @@ module.exports = async (req, res) => {
                             wind_gusts_10m: omRes.data.hourly.wind_gusts_10m || [],
                             precipitation: allPrecip,
                             precipitation_probability: omRes.data.hourly.precipitation_probability || [],
-                            surface_pressure: omRes.data.hourly.surface_pressure || []
+                            surface_pressure: omRes.data.hourly.surface_pressure || [],
+                            weather_code: omRes.data.hourly.weather_code || []
                         };
                         const oldPrecipArr = evening?.hourlyPrecip || [];
                         // Timestamp of that baseline — fall back to evening.updatedAt for older

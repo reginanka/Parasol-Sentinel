@@ -145,7 +145,7 @@ module.exports = async (req, res) => {
 
         const { lat: cityLat, lon: cityLon } = currentRes.data.data[0];
 
-        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure&timezone=auto`;
+        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code&timezone=auto&forecast_days=3`;
         const openMeteoRes = await axios.get(omUrl).catch(e => {
             console.error('Open-Meteo Hourly Error:', e.message);
             return null;
@@ -167,7 +167,8 @@ module.exports = async (req, res) => {
                 wind_gusts_10m: openMeteoRes.data.hourly.wind_gusts_10m || [],
                 precipitation: openMeteoRes.data.hourly.precipitation,
                 precipitation_probability: openMeteoRes.data.hourly.precipitation_probability,
-                surface_pressure: openMeteoRes.data.hourly.surface_pressure
+                surface_pressure: openMeteoRes.data.hourly.surface_pressure,
+                weather_code: openMeteoRes.data.hourly.weather_code || []
             } : { time: [], temperature_2m: [] },
             daily: dailyRes.data.data.map(d => ({
                 ...d,

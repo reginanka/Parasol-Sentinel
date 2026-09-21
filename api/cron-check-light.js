@@ -69,8 +69,8 @@ module.exports = async (req, res) => {
                     `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                     `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,apparent_temperature,wind_direction_10m,surface_pressure` +
                     `&daily=temperature_2m_min,temperature_2m_max` +
-                    `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure` +
-                    `&timezone=auto&forecast_days=2`;
+                    `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code` +
+                    `&timezone=auto&forecast_days=3`;
 
                 const omRes = await axios.get(omUrl, { timeout: 12000 });
                 const om = omRes.data;
@@ -559,7 +559,8 @@ module.exports = async (req, res) => {
                     wind_gusts_10m: om.hourly.wind_gusts_10m || [],
                     precipitation: om.hourly.precipitation || [],
                     precipitation_probability: om.hourly.precipitation_probability || [],
-                    surface_pressure: om.hourly.surface_pressure || []
+                    surface_pressure: om.hourly.surface_pressure || [],
+                    weather_code: om.hourly.weather_code || []
                 } : null;
 
                 const omCurrentForUi = {
