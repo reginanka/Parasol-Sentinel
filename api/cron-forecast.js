@@ -254,12 +254,13 @@ module.exports = async (req, res) => {
                 await City.findOneAndUpdate(
                     { externalId: key },
                     {
-                        eveningState: {
-                            temp: todayData.temp,
-                            weatherCode: todayData.weather.code,
-                            updatedAt: new Date(),
-                            forecast: fullResponse,
-                            hourlyPrecip: hourlyPrecip
+                        $set: {
+                            "eveningState.temp": todayData.temp,
+                            "eveningState.weatherCode": todayData.weather.code,
+                            "eveningState.updatedAt": new Date(),
+                            "eveningState.forecast": fullResponse,
+                            "eveningState.hourlyPrecip": hourlyPrecip,
+                            "eveningState.hourlyPrecipUpdatedAt": new Date() // коли baseline опадів реально записаний
                         }
                     },
                     { upsert: true }
