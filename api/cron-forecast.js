@@ -206,9 +206,13 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 ).catch(e => console.error('History sync error:', e.message));
 
-                // Store hourly precip for TODAY + TOMORROW, prune anything older than yesterday.
-                // Keeps daytime precip-check baseline intact after evening overwrite.
+                // Hourly precip baseline:
+                // - TODAY is owned by daytime cron-check / cron-check-light — do NOT overwrite it here
+                // - TOMORROW is written/refreshed by evening forecast (this is the "next day" baseline)
+                // - Prune anything older than yesterday
+                // - Do NOT touch hourlyPrecipUpdatedAt (that timestamp is for today's daytime baseline "as of")
                 let hourlyPrecip = [];
+                let wroteHourlyPrecip = false;
                 try {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
                     const omRes = await axios.get(omUrl);
@@ -220,19 +224,19 @@ module.exports = async (req, res) => {
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
 
-                        // Fresh data for today + tomorrow from Open-Meteo
-                        const fresh = [];
+                        // Fresh data ONLY for tomorrow (future day for daytime checks after midnight)
+                        const freshTomorrow = [];
                         for (let i = 0; i < allTimes.length; i++) {
                             const t = allTimes[i];
-                            if (t.startsWith(todayLocal) || t.startsWith(tomorrowStr)) {
-                                fresh.push({ time: t, precip: allPrecip[i] || 0 });
+                            if (t.startsWith(tomorrowStr)) {
+                                freshTomorrow.push({ time: t, precip: allPrecip[i] || 0 });
                             }
                         }
 
-                        // Keep any existing entries still within yesterday..tomorrow,
-                        // then prefer fresh values for the same timestamp.
                         const existing = (await City.findOne({ externalId: key }))?.eveningState?.hourlyPrecip || [];
                         const byKey = {};
+
+                        // Keep existing today (+ yesterday if still in window) untouched
                         for (const o of existing) {
                             if (!o.time) continue;
                             const d = o.time.slice(0, 10);
@@ -240,29 +244,46 @@ module.exports = async (req, res) => {
                                 byKey[o.time] = o.precip || 0;
                             }
                         }
-                        for (const o of fresh) {
+
+                        // If no today hours exist yet (first run / wiped), seed today from OM once
+                        const hasTodayHours = Object.keys(byKey).some(t => t.startsWith(todayLocal));
+                        if (!hasTodayHours) {
+                            for (let i = 0; i < allTimes.length; i++) {
+                                if (allTimes[i].startsWith(todayLocal)) {
+                                    byKey[allTimes[i]] = allPrecip[i] || 0;
+                                }
+                            }
+                        }
+
+                        // Always refresh tomorrow from OM
+                        for (const o of freshTomorrow) {
                             byKey[o.time] = o.precip;
                         }
+
                         hourlyPrecip = Object.keys(byKey)
                             .sort()
                             .map(time => ({ time, precip: byKey[time] }));
+                        wroteHourlyPrecip = true;
                     }
                 } catch (omErr) {
                     console.error('Open-Meteo fetch error in evening forecast:', omErr.message);
                 }
 
+                const eveningSet = {
+                    "eveningState.temp": todayData.temp,
+                    "eveningState.weatherCode": todayData.weather.code,
+                    "eveningState.updatedAt": new Date(),
+                    "eveningState.forecast": fullResponse
+                };
+                if (wroteHourlyPrecip) {
+                    eveningSet["eveningState.hourlyPrecip"] = hourlyPrecip;
+                    // Do NOT set hourlyPrecipUpdatedAt — daytime check owns "as of" for today.
+                    // Tomorrow baseline does not need that timestamp for alerts (alerts compare today only).
+                }
+
                 await City.findOneAndUpdate(
                     { externalId: key },
-                    {
-                        $set: {
-                            "eveningState.temp": todayData.temp,
-                            "eveningState.weatherCode": todayData.weather.code,
-                            "eveningState.updatedAt": new Date(),
-                            "eveningState.forecast": fullResponse,
-                            "eveningState.hourlyPrecip": hourlyPrecip,
-                            "eveningState.hourlyPrecipUpdatedAt": new Date() // коли baseline опадів реально записаний
-                        }
-                    },
+                    { $set: eveningSet },
                     { upsert: true }
                 );
 

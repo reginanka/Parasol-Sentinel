@@ -268,23 +268,38 @@ module.exports = async (req, res) => {
                         }).join(', ');
                     };
 
-                    const oldS = calcStats(oldByHour);
-                    const newS = calcStats(newByHour);
-
-                    if (oldPrecipArr.length === 0) {
-                        const updatedHourly = [];
+                    // Merge ONLY today's hours into existing array — never wipe tomorrow/other days
+                    const mergeTodayBaseline = async () => {
+                        const byKey = {};
+                        for (const o of oldPrecipArr) {
+                            if (o.time) byKey[o.time] = o.precip || 0;
+                        }
                         for (let i = 0; i < allTimes.length; i++) {
                             if (allTimes[i].startsWith(todayStr)) {
-                                updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
+                                byKey[allTimes[i]] = allPrecip[i] || 0;
                             }
                         }
+                        const yesterdayStr = getLocalDateStr(cityTimezone, -1);
+                        const merged = Object.keys(byKey)
+                            .filter(t => t.slice(0, 10) >= yesterdayStr)
+                            .sort()
+                            .map(time => ({ time, precip: byKey[time] }));
                         await City.findOneAndUpdate(
                             { externalId: key },
                             { $set: {
-                                "eveningState.hourlyPrecip": updatedHourly,
+                                "eveningState.hourlyPrecip": merged,
                                 "eveningState.hourlyPrecipUpdatedAt": new Date()
                             }}
                         );
+                    };
+
+                    const oldS = calcStats(oldByHour);
+                    const newS = calcStats(newByHour);
+
+                    // No baseline for THIS calendar day (or all zeros after day rollover) → set silently
+                    const hasTodayBaseline = Object.keys(oldByHour).length > 0 && oldS.total > 0;
+                    if (!hasTodayBaseline) {
+                        await mergeTodayBaseline();
                     } else {
                         const amountIncrease = newS.total - oldS.total;
                         const significantAmountUp = amountIncrease >= 1.5;
@@ -338,19 +353,8 @@ module.exports = async (req, res) => {
                                 alertTriggered = true;
                             }
 
-                            const updatedHourly = [];
-                            for (let i = 0; i < allTimes.length; i++) {
-                                if (allTimes[i].startsWith(todayStr)) {
-                                    updatedHourly.push({ time: allTimes[i], precip: allPrecip[i] });
-                                }
-                            }
-                            await City.findOneAndUpdate(
-                                { externalId: key },
-                                { $set: {
-                                    "eveningState.hourlyPrecip": updatedHourly,
-                                    "eveningState.hourlyPrecipUpdatedAt": new Date()
-                                }}
-                            );
+                            // Merge today only — preserve tomorrow and other days
+                            await mergeTodayBaseline();
                         }
                     }
                 } catch (omErr) {

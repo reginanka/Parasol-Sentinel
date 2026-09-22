@@ -317,8 +317,10 @@ module.exports = async (req, res) => {
                         const oldS = calcStats(oldByHour);
                         const newS = calcStats(newByHour);
 
-                        // No baseline for remaining hours today → set silently, do NOT alert
-                        if (Object.keys(oldByHour).length === 0) {
+                        // No baseline for remaining hours today (or all zeros after day rollover)
+                        // → set silently, do NOT alert with fake "was 0.0 mm"
+                        const hasTodayBaseline = Object.keys(oldByHour).length > 0 && oldS.total > 0;
+                        if (!hasTodayBaseline) {
                             await mergeTodayBaseline();
                         } else {
                             const amountIncrease = newS.total - oldS.total;
@@ -340,8 +342,7 @@ module.exports = async (req, res) => {
                             const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
 
                             if (shouldAlert) {
-                                // "було" завжди означає той самий момент — коли hourlyPrecip
-                                // востаннє записувався в базу (вечірній крон АБО попередній мердж).
+                                // "було" = коли hourlyPrecip востаннє мерджився денним чеком
                                 const oldAsOfUk = formatLocalDateTime(oldPrecipAsOf, cityTimezone, 'uk');
                                 const asOfSuffixUk = oldAsOfUk ? ` (станом на ${oldAsOfUk})` : '';
 
