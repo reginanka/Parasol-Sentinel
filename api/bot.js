@@ -923,12 +923,35 @@ bot.on('callback_query', async (ctx) => {
                     precipBlocks.push([h, h]);
                 }
             }
-            const fmtPrecipBlocks = precipBlocks.map(([a, b]) => {
+            const fmtHourBlocks = (blocks) => blocks.map(([a, b]) => {
                 const from = `${String(a).padStart(2, '0')}:00`;
                 // кінець блоку = остання година з дощем (як у прикладі 04:00-06:00)
                 const to = `${String(b).padStart(2, '0')}:00`;
                 return a === b ? from : `${from}–${to}`;
             }).join(', ');
+            const fmtPrecipBlocks = fmtHourBlocks(precipBlocks);
+
+            // «Можливий дощ»: 0.0 мм, але ймовірність > 15% (підрядні години об'єднуються)
+            const RAIN_PROB_THRESHOLD = 15;
+            const possibleHours = [];
+            for (const idx of dayIndices) {
+                const mm = precipitation[idx] || 0;
+                const pr = precipitation_probability?.[idx] != null
+                    ? Number(precipitation_probability[idx])
+                    : 0;
+                if (mm <= 0 && pr > RAIN_PROB_THRESHOLD) {
+                    possibleHours.push(parseInt(String(time[idx]).slice(11, 13), 10));
+                }
+            }
+            const possibleBlocks = [];
+            for (const h of possibleHours) {
+                if (possibleBlocks.length && h === possibleBlocks[possibleBlocks.length - 1][1] + 1) {
+                    possibleBlocks[possibleBlocks.length - 1][1] = h;
+                } else {
+                    possibleBlocks.push([h, h]);
+                }
+            }
+            const fmtPossibleBlocks = fmtHourBlocks(possibleBlocks);
 
             const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
             const isToday = targetDateStr === todayStr;
@@ -943,12 +966,20 @@ bot.on('callback_query', async (ctx) => {
 
             if (Number(totalPrecip) > 0 && fmtPrecipBlocks) {
                 msg += lang === 'uk'
-                    ? `💧 Дощитиме: <b>${fmtPrecipBlocks}</b>\nЗагалом опадів на день: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`
-                    : `💧 Rain: <b>${fmtPrecipBlocks}</b>\nTotal precip for the day: <b>${totalPrecip} ${precipUnitStr}</b>\n\n`;
+                    ? `💧 Дощитиме: <b>${fmtPrecipBlocks}</b>\nЗагалом опадів на день: <b>${totalPrecip} ${precipUnitStr}</b>\n`
+                    : `💧 Rain: <b>${fmtPrecipBlocks}</b>\nTotal precip for the day: <b>${totalPrecip} ${precipUnitStr}</b>\n`;
             } else {
                 msg += lang === 'uk'
-                    ? `💧 Опадів не очікується\n\n`
-                    : `💧 No precipitation expected\n\n`;
+                    ? `💧 Опадів не очікується\n`
+                    : `💧 No precipitation expected\n`;
+            }
+
+            if (fmtPossibleBlocks) {
+                msg += lang === 'uk'
+                    ? `👀 Можливий дощ: <b>${fmtPossibleBlocks}</b>\n\n`
+                    : `👀 Possible rain: <b>${fmtPossibleBlocks}</b>\n\n`;
+            } else {
+                msg += `\n`;
             }
 
             const windUnit = user.units?.wind || 'ms';
