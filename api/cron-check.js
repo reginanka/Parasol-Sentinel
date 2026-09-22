@@ -239,11 +239,21 @@ module.exports = async (req, res) => {
                         const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
 
                         // Build maps for FUTURE hours only (hour >= localHour)
+                        // Each entry: { precip: mm, prob: 0–100 }. Hour is "rainy" if precip > 0 OR prob > 15.
+                        const allProb = omRes.data.hourly.precipitation_probability || [];
+                        const RAIN_PROB_THRESHOLD = 15;
+
                         const oldByHour = {};
                         for (const o of oldPrecipArr) {
                             if (o.time && o.time.startsWith(todayStr)) {
                                 const h = hourFromTime(o.time);
-                                if (h >= localHour) oldByHour[h] = o.precip || 0;
+                                if (h >= localHour) {
+                                    oldByHour[h] = {
+                                        precip: o.precip || 0,
+                                        // Older baselines may lack prob — treat missing as 0 (mm-only logic)
+                                        prob: (o.prob != null ? o.prob : 0)
+                                    };
+                                }
                             }
                         }
 
@@ -251,18 +261,29 @@ module.exports = async (req, res) => {
                         for (let i = 0; i < allTimes.length; i++) {
                             if (allTimes[i].startsWith(todayStr)) {
                                 const h = hourFromTime(allTimes[i]);
-                                if (h >= localHour) newByHour[h] = allPrecip[i] || 0;
+                                if (h >= localHour) {
+                                    newByHour[h] = {
+                                        precip: allPrecip[i] || 0,
+                                        prob: allProb[i] != null ? allProb[i] : 0
+                                    };
+                                }
                             }
                         }
 
-                        // Helpers: total, rainy hours, consecutive blocks (only over remaining hours)
+                        // Helpers: total mm (actual precip only), rainy hours/blocks (mm > 0 OR prob > threshold)
+                        const isRainyHour = (entry) => {
+                            const p = (entry && entry.precip) || 0;
+                            const pr = (entry && entry.prob) || 0;
+                            return p > 0 || pr > RAIN_PROB_THRESHOLD;
+                        };
                         const calcStats = (byHour) => {
                             let total = 0;
                             const hours = [];
                             for (let h = localHour; h < 24; h++) {
-                                const p = byHour[h] || 0;
-                                if (p > 0) {
-                                    total += p;
+                                const entry = byHour[h] || { precip: 0, prob: 0 };
+                                const p = entry.precip || 0;
+                                if (isRainyHour(entry)) {
+                                    total += p; // only real mm contribute to amount
                                     hours.push(h);
                                 }
                             }
@@ -290,21 +311,34 @@ module.exports = async (req, res) => {
                         };
 
                         // Merge today's OM hours into existing hourlyPrecip (preserve other days)
+                        // Store precip + prob so duration/blocks can use probability on next runs.
                         const mergeTodayBaseline = async () => {
                             const byKey = {};
                             for (const o of oldPrecipArr) {
-                                if (o.time) byKey[o.time] = o.precip || 0;
+                                if (o.time) {
+                                    byKey[o.time] = {
+                                        precip: o.precip || 0,
+                                        prob: (o.prob != null ? o.prob : 0)
+                                    };
+                                }
                             }
                             for (let i = 0; i < allTimes.length; i++) {
                                 if (allTimes[i].startsWith(todayStr)) {
-                                    byKey[allTimes[i]] = allPrecip[i] || 0;
+                                    byKey[allTimes[i]] = {
+                                        precip: allPrecip[i] || 0,
+                                        prob: allProb[i] != null ? allProb[i] : 0
+                                    };
                                 }
                             }
                             const yesterdayStr = getLocalDateStr(cityTimezone, -1);
                             const merged = Object.keys(byKey)
                                 .filter(t => t.slice(0, 10) >= yesterdayStr)
                                 .sort()
-                                .map(time => ({ time, precip: byKey[time] }));
+                                .map(time => ({
+                                    time,
+                                    precip: byKey[time].precip,
+                                    prob: byKey[time].prob
+                                }));
                             await City.findOneAndUpdate(
                                 { externalId: key },
                                 { $set: {
@@ -317,16 +351,18 @@ module.exports = async (req, res) => {
                         const oldS = calcStats(oldByHour);
                         const newS = calcStats(newByHour);
 
-                        // No baseline for remaining hours today (or all zeros after day rollover)
+                        // No baseline for remaining hours today (or all zeros / no high-prob hours)
                         // → set silently, do NOT alert with fake "was 0.0 mm"
-                        const hasTodayBaseline = Object.keys(oldByHour).length > 0 && oldS.total > 0;
+                        // duration > 0 covers hours with precip=0 but prob > threshold
+                        const hasTodayBaseline = Object.keys(oldByHour).length > 0 && (oldS.total > 0 || oldS.duration > 0);
                         if (!hasTodayBaseline) {
                             await mergeTodayBaseline();
                         } else {
                             const amountIncrease = newS.total - oldS.total;
                             const significantAmountUp = amountIncrease >= 1.5;
 
-                            const fullyCanceled = oldS.total > 0 && newS.total === 0;
+                            // Canceled when previous rainy window (mm or high-prob hours) is gone
+                            const fullyCanceled = (oldS.total > 0 || oldS.duration > 0) && newS.total === 0 && newS.duration === 0;
 
                             let significantShift = false;
                             let significantLonger = false;
@@ -335,7 +371,7 @@ module.exports = async (req, res) => {
                                 const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
                                 significantShift = startDelta >= 2 || endDelta >= 2;
                                 significantLonger = (newS.duration - oldS.duration) >= 2;
-                            } else if (oldS.start == null && newS.start != null && newS.total >= 0.5) {
+                            } else if (oldS.start == null && newS.start != null && (newS.total >= 0.5 || newS.duration >= 1)) {
                                 significantShift = true;
                             }
 

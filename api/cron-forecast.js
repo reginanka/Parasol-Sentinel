@@ -214,7 +214,7 @@ module.exports = async (req, res) => {
                 let hourlyPrecip = [];
                 let wroteHourlyPrecip = false;
                 try {
-                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
+                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation,precipitation_probability&timezone=auto&forecast_days=2`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
                         const cityTz = response.data.timezone || 'Europe/Kyiv';
@@ -223,13 +223,19 @@ module.exports = async (req, res) => {
                         const yesterdayStr = getLocalDateStr(cityTz, -1);
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
+                        const allProb = omRes.data.hourly.precipitation_probability || [];
 
                         // Fresh data ONLY for tomorrow (future day for daytime checks after midnight)
+                        // Include prob so duration/blocks can treat high-probability zero-mm hours as rainy.
                         const freshTomorrow = [];
                         for (let i = 0; i < allTimes.length; i++) {
                             const t = allTimes[i];
                             if (t.startsWith(tomorrowStr)) {
-                                freshTomorrow.push({ time: t, precip: allPrecip[i] || 0 });
+                                freshTomorrow.push({
+                                    time: t,
+                                    precip: allPrecip[i] || 0,
+                                    prob: allProb[i] != null ? allProb[i] : 0
+                                });
                             }
                         }
 
@@ -241,7 +247,10 @@ module.exports = async (req, res) => {
                             if (!o.time) continue;
                             const d = o.time.slice(0, 10);
                             if (d >= yesterdayStr && d <= tomorrowStr) {
-                                byKey[o.time] = o.precip || 0;
+                                byKey[o.time] = {
+                                    precip: o.precip || 0,
+                                    prob: (o.prob != null ? o.prob : 0)
+                                };
                             }
                         }
 
@@ -250,19 +259,26 @@ module.exports = async (req, res) => {
                         if (!hasTodayHours) {
                             for (let i = 0; i < allTimes.length; i++) {
                                 if (allTimes[i].startsWith(todayLocal)) {
-                                    byKey[allTimes[i]] = allPrecip[i] || 0;
+                                    byKey[allTimes[i]] = {
+                                        precip: allPrecip[i] || 0,
+                                        prob: allProb[i] != null ? allProb[i] : 0
+                                    };
                                 }
                             }
                         }
 
                         // Always refresh tomorrow from OM
                         for (const o of freshTomorrow) {
-                            byKey[o.time] = o.precip;
+                            byKey[o.time] = { precip: o.precip, prob: o.prob };
                         }
 
                         hourlyPrecip = Object.keys(byKey)
                             .sort()
-                            .map(time => ({ time, precip: byKey[time] }));
+                            .map(time => ({
+                                time,
+                                precip: byKey[time].precip,
+                                prob: byKey[time].prob
+                            }));
                         wroteHourlyPrecip = true;
                     }
                 } catch (omErr) {

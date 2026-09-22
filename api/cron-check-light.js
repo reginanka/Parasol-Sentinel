@@ -213,17 +213,25 @@ module.exports = async (req, res) => {
                 try {
                     const allTimes = om.hourly?.time || [];
                     const allPrecip = om.hourly?.precipitation || [];
+                    const allProb = om.hourly?.precipitation_probability || [];
                     const oldPrecipArr = evening?.hourlyPrecip || [];
                     const oldPrecipAsOf = evening?.hourlyPrecipUpdatedAt || evening?.updatedAt || null;
+                    const RAIN_PROB_THRESHOLD = 15;
 
                     // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
                     const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
 
+                    // Each entry: { precip, prob }. Rainy if precip > 0 OR prob > threshold.
                     const oldByHour = {};
                     for (const o of oldPrecipArr) {
                         if (o.time && o.time.startsWith(todayStr)) {
                             const h = hourFromTime(o.time);
-                            if (!Number.isNaN(h)) oldByHour[h] = o.precip || 0;
+                            if (!Number.isNaN(h)) {
+                                oldByHour[h] = {
+                                    precip: o.precip || 0,
+                                    prob: (o.prob != null ? o.prob : 0)
+                                };
+                            }
                         }
                     }
 
@@ -231,16 +239,27 @@ module.exports = async (req, res) => {
                     for (let i = 0; i < allTimes.length; i++) {
                         if (allTimes[i].startsWith(todayStr)) {
                             const h = hourFromTime(allTimes[i]);
-                            if (!Number.isNaN(h)) newByHour[h] = allPrecip[i] || 0;
+                            if (!Number.isNaN(h)) {
+                                newByHour[h] = {
+                                    precip: allPrecip[i] || 0,
+                                    prob: allProb[i] != null ? allProb[i] : 0
+                                };
+                            }
                         }
                     }
 
+                    const isRainyHour = (entry) => {
+                        const p = (entry && entry.precip) || 0;
+                        const pr = (entry && entry.prob) || 0;
+                        return p > 0 || pr > RAIN_PROB_THRESHOLD;
+                    };
                     const calcStats = (byHour) => {
                         let total = 0;
                         const hours = [];
                         for (let h = 0; h < 24; h++) {
-                            const p = byHour[h] || 0;
-                            if (p > 0) {
+                            const entry = byHour[h] || { precip: 0, prob: 0 };
+                            const p = entry.precip || 0;
+                            if (isRainyHour(entry)) {
                                 total += p;
                                 hours.push(h);
                             }
@@ -272,18 +291,30 @@ module.exports = async (req, res) => {
                     const mergeTodayBaseline = async () => {
                         const byKey = {};
                         for (const o of oldPrecipArr) {
-                            if (o.time) byKey[o.time] = o.precip || 0;
+                            if (o.time) {
+                                byKey[o.time] = {
+                                    precip: o.precip || 0,
+                                    prob: (o.prob != null ? o.prob : 0)
+                                };
+                            }
                         }
                         for (let i = 0; i < allTimes.length; i++) {
                             if (allTimes[i].startsWith(todayStr)) {
-                                byKey[allTimes[i]] = allPrecip[i] || 0;
+                                byKey[allTimes[i]] = {
+                                    precip: allPrecip[i] || 0,
+                                    prob: allProb[i] != null ? allProb[i] : 0
+                                };
                             }
                         }
                         const yesterdayStr = getLocalDateStr(cityTimezone, -1);
                         const merged = Object.keys(byKey)
                             .filter(t => t.slice(0, 10) >= yesterdayStr)
                             .sort()
-                            .map(time => ({ time, precip: byKey[time] }));
+                            .map(time => ({
+                                time,
+                                precip: byKey[time].precip,
+                                prob: byKey[time].prob
+                            }));
                         await City.findOneAndUpdate(
                             { externalId: key },
                             { $set: {
@@ -296,14 +327,16 @@ module.exports = async (req, res) => {
                     const oldS = calcStats(oldByHour);
                     const newS = calcStats(newByHour);
 
-                    // No baseline for THIS calendar day (or all zeros after day rollover) → set silently
-                    const hasTodayBaseline = Object.keys(oldByHour).length > 0 && oldS.total > 0;
+                    // No baseline for THIS calendar day (or all zeros / no high-prob hours) → set silently
+                    // duration > 0 covers hours with precip=0 but prob > threshold
+                    const hasTodayBaseline = Object.keys(oldByHour).length > 0 && (oldS.total > 0 || oldS.duration > 0);
                     if (!hasTodayBaseline) {
                         await mergeTodayBaseline();
                     } else {
                         const amountIncrease = newS.total - oldS.total;
                         const significantAmountUp = amountIncrease >= 1.5;
-                        const fullyCanceled = oldS.total > 0 && newS.total === 0;
+                        // Canceled when previous rainy window (mm or high-prob hours) is gone
+                        const fullyCanceled = (oldS.total > 0 || oldS.duration > 0) && newS.total === 0 && newS.duration === 0;
 
                         let significantShift = false;
                         let significantLonger = false;
@@ -312,7 +345,7 @@ module.exports = async (req, res) => {
                             const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
                             significantShift = startDelta >= 2 || endDelta >= 2;
                             significantLonger = (newS.duration - oldS.duration) >= 2;
-                        } else if (oldS.start == null && newS.start != null && newS.total >= 0.5) {
+                        } else if (oldS.start == null && newS.start != null && (newS.total >= 0.5 || newS.duration >= 1)) {
                             significantShift = true;
                         }
 
