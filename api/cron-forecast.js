@@ -11,6 +11,7 @@ const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
+const { dayKey, daySetPaths, pruneDaysUnset, mergeHourlyFlat, getDayBaseline } = require('../utils/baseline');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 
@@ -206,100 +207,115 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 ).catch(e => console.error('History sync error:', e.message));
 
-                // Hourly precip baseline:
-                // - TODAY is owned by daytime cron-check / cron-check-light — do NOT overwrite it here
-                // - TOMORROW is written/refreshed by evening forecast (this is the "next day" baseline)
-                // - Prune anything older than yesterday
-                // - Do NOT touch hourlyPrecipUpdatedAt (that timestamp is for today's daytime baseline "as of")
-                let hourlyPrecip = [];
+                // Day-scoped baseline:
+                // - TOMORROW: always refresh (daily temps + hourly precip) and set asOf = now
+                // - TODAY: seed only if missing (daytime check owns today after first write)
+                // - Prune days older than yesterday
+                // Legacy flat hourlyPrecip / forecast / updatedAt still written for compat & messages
+                const cityTz = response.data.timezone || 'Europe/Kyiv';
+                const todayLocal = getLocalDateStr(cityTz, 0);
+                const tomorrowStr = getLocalDateStr(cityTz, 1);
+                const yesterdayStr = getLocalDateStr(cityTz, -1);
+                const nowTs = new Date();
+
+                const cityDocPre = await City.findOne({ externalId: key });
+                const eveningPre = cityDocPre?.eveningState;
+
+                let hourlyPrecip = eveningPre?.hourlyPrecip || [];
                 let wroteHourlyPrecip = false;
+                let tomorrowHours = [];
+                let todayHoursSeed = [];
+
                 try {
-                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation,precipitation_probability&timezone=auto&forecast_days=2`;
+                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
-                        const cityTz = response.data.timezone || 'Europe/Kyiv';
-                        const todayLocal = getLocalDateStr(cityTz, 0);
-                        const tomorrowStr = getLocalDateStr(cityTz, 1);
-                        const yesterdayStr = getLocalDateStr(cityTz, -1);
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
-                        const allProb = omRes.data.hourly.precipitation_probability || [];
 
-                        // Fresh data ONLY for tomorrow (future day for daytime checks after midnight)
-                        // Include prob so duration/blocks can treat high-probability zero-mm hours as rainy.
-                        const freshTomorrow = [];
                         for (let i = 0; i < allTimes.length; i++) {
                             const t = allTimes[i];
                             if (t.startsWith(tomorrowStr)) {
-                                freshTomorrow.push({
-                                    time: t,
-                                    precip: allPrecip[i] || 0,
-                                    prob: allProb[i] != null ? allProb[i] : 0
-                                });
+                                tomorrowHours.push({ time: t, precip: allPrecip[i] || 0 });
+                            } else if (t.startsWith(todayLocal)) {
+                                todayHoursSeed.push({ time: t, precip: allPrecip[i] || 0 });
                             }
                         }
 
-                        const existing = (await City.findOne({ externalId: key }))?.eveningState?.hourlyPrecip || [];
-                        const byKey = {};
+                        const existingToday = getDayBaseline(eveningPre, todayLocal, cityTz);
+                        const seedToday = !existingToday || !(existingToday.hourlyPrecip && existingToday.hourlyPrecip.length);
 
-                        // Keep existing today (+ yesterday if still in window) untouched
-                        for (const o of existing) {
-                            if (!o.time) continue;
-                            const d = o.time.slice(0, 10);
-                            if (d >= yesterdayStr && d <= tomorrowStr) {
-                                byKey[o.time] = {
-                                    precip: o.precip || 0,
-                                    prob: (o.prob != null ? o.prob : 0)
-                                };
-                            }
+                        if (seedToday) {
+                            hourlyPrecip = mergeHourlyFlat(
+                                eveningPre?.hourlyPrecip || [],
+                                todayLocal,
+                                [...todayHoursSeed, ...tomorrowHours],
+                                yesterdayStr
+                            );
+                        } else {
+                            // Keep existing today hours; refresh tomorrow only
+                            hourlyPrecip = mergeHourlyFlat(
+                                eveningPre?.hourlyPrecip || [],
+                                tomorrowStr,
+                                tomorrowHours,
+                                yesterdayStr
+                            );
                         }
-
-                        // If no today hours exist yet (first run / wiped), seed today from OM once
-                        const hasTodayHours = Object.keys(byKey).some(t => t.startsWith(todayLocal));
-                        if (!hasTodayHours) {
-                            for (let i = 0; i < allTimes.length; i++) {
-                                if (allTimes[i].startsWith(todayLocal)) {
-                                    byKey[allTimes[i]] = {
-                                        precip: allPrecip[i] || 0,
-                                        prob: allProb[i] != null ? allProb[i] : 0
-                                    };
-                                }
-                            }
-                        }
-
-                        // Always refresh tomorrow from OM
-                        for (const o of freshTomorrow) {
-                            byKey[o.time] = { precip: o.precip, prob: o.prob };
-                        }
-
-                        hourlyPrecip = Object.keys(byKey)
-                            .sort()
-                            .map(time => ({
-                                time,
-                                precip: byKey[time].precip,
-                                prob: byKey[time].prob
-                            }));
                         wroteHourlyPrecip = true;
                     }
                 } catch (omErr) {
                     console.error('Open-Meteo fetch error in evening forecast:', omErr.message);
                 }
 
+                const tomorrowDaily = fullResponse.find(d => dayKey(d) === tomorrowStr) || fullResponse[1];
+                const todayDaily = fullResponse.find(d => dayKey(d) === todayLocal) || todayData;
+
                 const eveningSet = {
                     "eveningState.temp": todayData.temp,
                     "eveningState.weatherCode": todayData.weather.code,
-                    "eveningState.updatedAt": new Date(),
+                    "eveningState.updatedAt": nowTs,
                     "eveningState.forecast": fullResponse
                 };
                 if (wroteHourlyPrecip) {
                     eveningSet["eveningState.hourlyPrecip"] = hourlyPrecip;
-                    // Do NOT set hourlyPrecipUpdatedAt — daytime check owns "as of" for today.
-                    // Tomorrow baseline does not need that timestamp for alerts (alerts compare today only).
                 }
+
+                // days[tomorrow]: always write
+                if (tomorrowDaily) {
+                    Object.assign(eveningSet, daySetPaths(tomorrowStr, {
+                        asOf: nowTs,
+                        min_temp: tomorrowDaily.min_temp,
+                        max_temp: tomorrowDaily.max_temp,
+                        hourlyPrecip: tomorrowHours.length
+                            ? tomorrowHours
+                            : (getDayBaseline(eveningPre, tomorrowStr, cityTz)?.hourlyPrecip || [])
+                    }));
+                }
+
+                // days[today]: seed only if no baseline yet
+                const existingTodayBl = getDayBaseline(eveningPre, todayLocal, cityTz);
+                const needSeedToday = !existingTodayBl || (existingTodayBl.min_temp == null && existingTodayBl.max_temp == null);
+                if (needSeedToday && todayDaily) {
+                    Object.assign(eveningSet, daySetPaths(todayLocal, {
+                        asOf: nowTs,
+                        min_temp: todayDaily.min_temp,
+                        max_temp: todayDaily.max_temp,
+                        hourlyPrecip: todayHoursSeed.length
+                            ? todayHoursSeed
+                            : (existingTodayBl?.hourlyPrecip || [])
+                    }));
+                } else if (existingTodayBl && todayHoursSeed.length && !(existingTodayBl.hourlyPrecip && existingTodayBl.hourlyPrecip.length)) {
+                    Object.assign(eveningSet, daySetPaths(todayLocal, {
+                        asOf: existingTodayBl.asOf || nowTs,
+                        hourlyPrecip: todayHoursSeed
+                    }));
+                }
+
+                const unsetOld = pruneDaysUnset(eveningPre, yesterdayStr);
 
                 await City.findOneAndUpdate(
                     { externalId: key },
-                    { $set: eveningSet },
+                    { $set: eveningSet, ...(Object.keys(unsetOld).length ? { $unset: unsetOld } : {}) },
                     { upsert: true }
                 );
 

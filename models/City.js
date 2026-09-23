@@ -9,12 +9,15 @@ const CitySchema = new mongoose.Schema({
     eveningState: {
         temp: Number,
         weatherCode: Number,
-        updatedAt: Date,
-        forecast: Array, // 3-day forecast data
-        hourlyPrecip: Array, // план опадів на завтра (відносно вечірньої відправки)
-        hourlyPrecipUpdatedAt: Date, // коли hourlyPrecip востаннє мерджився (evening cron АБО денний cron-check), окремо від updatedAt
-        forecastedKp: Number, // max Kp, що був у вечірньому прогнозі на target-день
-        forecastedKpDate: String // YYYY-MM-DD — день, на який стосується forecastedKp
+        updatedAt: Date, // legacy; prefer days[date].asOf for alerts
+        forecast: Array, // full multi-day Weatherbit snapshot (messages + fallback)
+        hourlyPrecip: Array, // legacy flat multi-day hourly (compat)
+        hourlyPrecipUpdatedAt: Date, // legacy
+        // Day-scoped baseline: one asOf + data per calendar day (YYYY-MM-DD)
+        // { asOf, min_temp, max_temp, hourlyPrecip: [{ time, precip, prob? }] }
+        days: { type: mongoose.Schema.Types.Mixed, default: {} },
+        forecastedKp: Number, // max Kp from evening forecast for target day
+        forecastedKpDate: String // YYYY-MM-DD — day that forecastedKp applies to
     },
     lastGeomagAlert: {
         date: String,

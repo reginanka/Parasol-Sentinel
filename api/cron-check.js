@@ -9,6 +9,7 @@ const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir } = require('../utils/weather');
 const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../utils/helpers');
+const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 
@@ -74,10 +75,12 @@ module.exports = async (req, res) => {
                 const localHour = parseInt(hourParts.find(p => p.type === 'hour')?.value || '0', 10) % 24;
                 const todayStr = getLocalDateStr(cityTimezone, 0);
 
-                // Match BOTH baseline and current forecast by the same local calendar date.
-                // Never trust data[0] alone — near day boundary Weatherbit can shift.
-                const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
-                const eveningToday = evening?.forecast?.find(d => dayKey(d) === todayStr);
+                // Day-scoped baseline (days[today]) + legacy fallback. Match new forecast by valid_date.
+                const dayBaseline = getDayBaseline(evening, todayStr, cityTimezone);
+                let dayAsOf = dayBaseline?.asOf || evening?.updatedAt || null;
+                const eveningToday = (dayBaseline && (dayBaseline.min_temp != null || dayBaseline.max_temp != null))
+                    ? { min_temp: dayBaseline.min_temp, max_temp: dayBaseline.max_temp, valid_date: todayStr }
+                    : (evening?.forecast || []).find(d => dayKey(d) === todayStr);
                 const newToday = dailyAll.find(d => dayKey(d) === todayStr) || dailyAll[0];
 
                 const alerts = [];
@@ -102,7 +105,7 @@ module.exports = async (req, res) => {
                             for (const user of cityInfo.users) {
                                 if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                                 const lang = user.language || 'uk';
-                                const asOf = formatLocalDateTime(evening?.updatedAt, cityTimezone, lang);
+                                const asOf = formatLocalDateTime(dayAsOf, cityTimezone, lang);
                                 const msg = alertsDict[lang].forecastShift
                                     .replace('{asOf}', asOf)
                                     .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
@@ -121,28 +124,47 @@ module.exports = async (req, res) => {
                                 }
                                 return d;
                             });
+                            const shiftNow = new Date();
+                            const shiftSet = {
+                                "eveningState.forecast": updatedForecast,
+                                "eveningState.updatedAt": shiftNow,
+                                ...daySetPaths(todayStr, {
+                                    asOf: shiftNow,
+                                    min_temp: newMin,
+                                    max_temp: newMax
+                                })
+                            };
+                            // Keep existing hourly for this day if any
+                            const prevHp = getDayBaseline(evening, todayStr, cityTimezone)?.hourlyPrecip;
+                            if (prevHp && prevHp.length) {
+                                shiftSet[`eveningState.days.${todayStr}.hourlyPrecip`] = prevHp;
+                            }
                             await City.findOneAndUpdate(
                                 { externalId: key },
-                                { $set: {
-                                    "eveningState.forecast": updatedForecast,
-                                    "eveningState.updatedAt": new Date()
-                                }}
+                                { $set: shiftSet }
                             );
-                            // Локальний evening теж оновлюємо, щоб LOGIC B у цьому ж прогоні
-                            // вже порівнював з новим baseline (і asOf був свіжий, якщо знадобиться).
                             if (evening) {
                                 evening.forecast = updatedForecast;
-                                evening.updatedAt = new Date();
+                                evening.updatedAt = shiftNow;
+                                if (!evening.days) evening.days = {};
+                                evening.days[todayStr] = {
+                                    ...(evening.days[todayStr] || {}),
+                                    asOf: shiftNow,
+                                    min_temp: newMin,
+                                    max_temp: newMax,
+                                    hourlyPrecip: prevHp || evening.days[todayStr]?.hourlyPrecip || []
+                                };
                             }
+                            dayAsOf = shiftNow;
                         }
 
                         // --- LOGIC B: Current Temp Anomaly vs "Safe Zone" (±5°C threshold) ---
                         // Після можливого зсуву прогнозу порівнюємо з ОНОВЛЕНИМ baseline
                         // (evening.forecast уже оновлений вище), а не зі старими oldMin/oldMax.
                         const curTemp = current.temp;
-                        const baselineToday = evening?.forecast?.find(d => dayKey(d) === todayStr);
-                        const baselineMin = baselineToday?.min_temp ?? oldMin;
-                        const baselineMax = baselineToday?.max_temp ?? oldMax;
+                        const blAfter = getDayBaseline(evening, todayStr, cityTimezone);
+                        const baselineMin = blAfter?.min_temp ?? oldMin;
+                        const baselineMax = blAfter?.max_temp ?? oldMax;
                         let isAnomaly = false;
                         let expectedBase = 0;
                         let direction = '';
@@ -167,7 +189,7 @@ module.exports = async (req, res) => {
                                 const lang = user.language || 'uk';
                                 const unit = user.units?.temp || 'c';
                                 const fmtTemp = (c) => unit === 'f' ? `${Math.round(c * 9/5 + 32)}°F` : `${Math.round(c)}°C`;
-                                const asOf = formatLocalDateTime(evening?.updatedAt, cityTimezone, lang);
+                                const asOf = formatLocalDateTime(dayAsOf, cityTimezone, lang);
 
                                 const msg = alertsDict[lang].tempAnomaly
                                     .replace('{temp}', fmtTemp(curTemp))
@@ -230,10 +252,12 @@ module.exports = async (req, res) => {
                             surface_pressure: omRes.data.hourly.surface_pressure || [],
                             weather_code: omRes.data.hourly.weather_code || []
                         };
-                        const oldPrecipArr = evening?.hourlyPrecip || [];
-                        // Timestamp of that baseline — fall back to evening.updatedAt for older
-                        // City docs that don't have hourlyPrecipUpdatedAt yet.
-                        const oldPrecipAsOf = evening?.hourlyPrecipUpdatedAt || evening?.updatedAt || null;
+                        const dayBlPrecip = getDayBaseline(evening, todayStr, cityTimezone);
+                        const oldPrecipArr = (dayBlPrecip?.hourlyPrecip?.length
+                            ? dayBlPrecip.hourlyPrecip
+                            : (evening?.hourlyPrecip || []));
+                        // One asOf per calendar day (not per alert type)
+                        const oldPrecipAsOf = dayBlPrecip?.asOf || dayAsOf || evening?.updatedAt || null;
 
                         // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
                         const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
@@ -313,39 +337,58 @@ module.exports = async (req, res) => {
                         // Merge today's OM hours into existing hourlyPrecip (preserve other days)
                         // Store precip + prob so duration/blocks can use probability on next runs.
                         const mergeTodayBaseline = async () => {
-                            const byKey = {};
-                            for (const o of oldPrecipArr) {
-                                if (o.time) {
-                                    byKey[o.time] = {
-                                        precip: o.precip || 0,
-                                        prob: (o.prob != null ? o.prob : 0)
-                                    };
-                                }
-                            }
+                            const yesterdayStr = getLocalDateStr(cityTimezone, -1);
+                            const todayHours = [];
                             for (let i = 0; i < allTimes.length; i++) {
                                 if (allTimes[i].startsWith(todayStr)) {
-                                    byKey[allTimes[i]] = {
+                                    todayHours.push({
+                                        time: allTimes[i],
                                         precip: allPrecip[i] || 0,
                                         prob: allProb[i] != null ? allProb[i] : 0
-                                    };
+                                    });
                                 }
                             }
-                            const yesterdayStr = getLocalDateStr(cityTimezone, -1);
-                            const merged = Object.keys(byKey)
-                                .filter(t => t.slice(0, 10) >= yesterdayStr)
-                                .sort()
-                                .map(time => ({
-                                    time,
-                                    precip: byKey[time].precip,
-                                    prob: byKey[time].prob
-                                }));
+                            const merged = mergeHourlyFlat(
+                                evening?.hourlyPrecip || oldPrecipArr,
+                                todayStr,
+                                todayHours,
+                                yesterdayStr
+                            );
+                            const mergeNow = new Date();
+                            const curBl = getDayBaseline(evening, todayStr, cityTimezone);
+                            const mergeSet = {
+                                "eveningState.hourlyPrecip": merged,
+                                "eveningState.hourlyPrecipUpdatedAt": mergeNow,
+                                "eveningState.updatedAt": mergeNow,
+                                ...daySetPaths(todayStr, {
+                                    asOf: mergeNow,
+                                    hourlyPrecip: todayHours,
+                                    min_temp: curBl?.min_temp,
+                                    max_temp: curBl?.max_temp
+                                })
+                            };
+                            // daySetPaths skips undefined — ensure temps preserved if present
+                            if (curBl?.min_temp != null) mergeSet[`eveningState.days.${todayStr}.min_temp`] = curBl.min_temp;
+                            if (curBl?.max_temp != null) mergeSet[`eveningState.days.${todayStr}.max_temp`] = curBl.max_temp;
+
                             await City.findOneAndUpdate(
                                 { externalId: key },
-                                { $set: {
-                                    "eveningState.hourlyPrecip": merged,
-                                    "eveningState.hourlyPrecipUpdatedAt": new Date()
-                                }}
+                                { $set: mergeSet }
                             );
+                            if (evening) {
+                                evening.hourlyPrecip = merged;
+                                evening.hourlyPrecipUpdatedAt = mergeNow;
+                                evening.updatedAt = mergeNow;
+                                if (!evening.days) evening.days = {};
+                                evening.days[todayStr] = {
+                                    ...(evening.days[todayStr] || {}),
+                                    asOf: mergeNow,
+                                    hourlyPrecip: todayHours,
+                                    min_temp: curBl?.min_temp ?? evening.days[todayStr]?.min_temp,
+                                    max_temp: curBl?.max_temp ?? evening.days[todayStr]?.max_temp
+                                };
+                            }
+                            dayAsOf = mergeNow;
                         };
 
                         const oldS = calcStats(oldByHour);
