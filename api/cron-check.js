@@ -224,12 +224,12 @@ module.exports = async (req, res) => {
                 // Опади проактивно покриває LOGIC D (Open-Meteo hourly).
                 const newCode = current.weather.code;
 
-                // --- LOGIC D: Smart Precipitation Check (Open-Meteo) ---
-                // Rules:
-                // - Compare only FUTURE hours of today (from localHour onward) — past rain is irrelevant
+                // --- LOGIC D: Smart Full-Day Precipitation Check (Open-Meteo) ---
+                // Rules (aligned with cron-check-light.js):
+                // - Compare FULL calendar day (hours 0–23), not only future hours
                 // - No baseline for today → set baseline silently, never treat as "was 0.0 mm"
-                // - "Canceled" only if remaining planned rain drops to 0
-                // - Significant amount change: remaining total increased by ≥ 1.5 mm
+                // - "Canceled" only if planned rain for the day drops to 0
+                // - Significant amount change: day total increased by ≥ 1.5 mm
                 // - Significant timing change: rain window shifted by ≥ 2 h OR duration +≥ 2 h
                 // - When updating baseline, MERGE today's hours into existing array (keep other days)
                 // Also stores full hourly block for dashboard snapshot
@@ -262,7 +262,7 @@ module.exports = async (req, res) => {
                         // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
                         const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
 
-                        // Build maps for FUTURE hours only (hour >= localHour)
+                        // Full calendar day (0–23), same as cron-check-light.js
                         // Each entry: { precip: mm, prob: 0–100 }. Hour is "rainy" if precip > 0 OR prob > 15.
                         const allProb = omRes.data.hourly.precipitation_probability || [];
                         const RAIN_PROB_THRESHOLD = 15;
@@ -271,7 +271,7 @@ module.exports = async (req, res) => {
                         for (const o of oldPrecipArr) {
                             if (o.time && o.time.startsWith(todayStr)) {
                                 const h = hourFromTime(o.time);
-                                if (h >= localHour) {
+                                if (!Number.isNaN(h)) {
                                     oldByHour[h] = {
                                         precip: o.precip || 0,
                                         // Older baselines may lack prob — treat missing as 0 (mm-only logic)
@@ -285,7 +285,7 @@ module.exports = async (req, res) => {
                         for (let i = 0; i < allTimes.length; i++) {
                             if (allTimes[i].startsWith(todayStr)) {
                                 const h = hourFromTime(allTimes[i]);
-                                if (h >= localHour) {
+                                if (!Number.isNaN(h)) {
                                     newByHour[h] = {
                                         precip: allPrecip[i] || 0,
                                         prob: allProb[i] != null ? allProb[i] : 0
@@ -303,7 +303,7 @@ module.exports = async (req, res) => {
                         const calcStats = (byHour) => {
                             let total = 0;
                             const hours = [];
-                            for (let h = localHour; h < 24; h++) {
+                            for (let h = 0; h < 24; h++) {
                                 const entry = byHour[h] || { precip: 0, prob: 0 };
                                 const p = entry.precip || 0;
                                 if (isRainyHour(entry)) {
@@ -394,7 +394,7 @@ module.exports = async (req, res) => {
                         const oldS = calcStats(oldByHour);
                         const newS = calcStats(newByHour);
 
-                        // No baseline for remaining hours today (or all zeros / no high-prob hours)
+                        // No baseline for THIS calendar day (or all zeros / no high-prob hours)
                         // → set silently, do NOT alert with fake "was 0.0 mm"
                         // duration > 0 covers hours with precip=0 but prob > threshold
                         const hasTodayBaseline = Object.keys(oldByHour).length > 0 && (oldS.total > 0 || oldS.duration > 0);
