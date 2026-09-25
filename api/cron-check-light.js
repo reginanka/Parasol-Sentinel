@@ -92,6 +92,14 @@ module.exports = async (req, res) => {
                 // Calendar-safe local date (no toLocaleString → Date anti-pattern)
                 const todayStr = getLocalDateStr(cityTimezone, 0);
 
+                // Local hour for future-only precip compare (same as cron-check.js)
+                const hourParts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: cityTimezone,
+                    hour: 'numeric',
+                    hour12: false
+                }).formatToParts(new Date());
+                const localHour = parseInt(hourParts.find(p => p.type === 'hour')?.value || '0', 10) % 24;
+
                 // Open-Meteo daily.time[] is YYYY-MM-DD in the requested timezone
                 const omDailyTimes = om.daily?.time || [];
                 let omTodayIdx = omDailyTimes.findIndex(t => String(t).slice(0, 10) === todayStr);
@@ -233,7 +241,9 @@ module.exports = async (req, res) => {
                 // LOGIC C (precip start via weather code) skipped — Weatherbit codes;
                 // full-day precip changes are covered by LOGIC D below.
 
-                // --- LOGIC D: Smart Full-Day Precipitation Check ---
+                // --- LOGIC D: Smart Precipitation Check ---
+                // Compare FUTURE hours only (no spam from past-hour model updates);
+                // alert text shows FULL calendar day schedule when we do alert.
                 try {
                     const allTimes = om.hourly?.time || [];
                     const allPrecip = om.hourly?.precipitation || [];
@@ -248,7 +258,7 @@ module.exports = async (req, res) => {
                     // Parse hour from "YYYY-MM-DDTHH:MM" — avoid Date timezone bugs
                     const hourFromTime = (t) => parseInt(String(t).slice(11, 13), 10);
 
-                    // Each entry: { precip, prob }. Rainy if precip > 0 OR prob > threshold.
+                    // Full-day maps (0–23). Compare uses future slice; message uses full day.
                     const oldByHour = {};
                     for (const o of oldPrecipArr) {
                         if (o.time && o.time.startsWith(todayStr)) {
@@ -275,15 +285,16 @@ module.exports = async (req, res) => {
                         }
                     }
 
+                    // fromHour: 0 = full day (message), localHour = future only (compare / shouldAlert)
                     const isRainyHour = (entry) => {
                         const p = (entry && entry.precip) || 0;
                         const pr = (entry && entry.prob) || 0;
                         return p > 0 || pr > RAIN_PROB_THRESHOLD;
                     };
-                    const calcStats = (byHour) => {
+                    const calcStats = (byHour, fromHour = 0) => {
                         let total = 0;
                         const hours = [];
-                        for (let h = 0; h < 24; h++) {
+                        for (let h = fromHour; h < 24; h++) {
                             const entry = byHour[h] || { precip: 0, prob: 0 };
                             const p = entry.precip || 0;
                             if (isRainyHour(entry)) {
@@ -367,18 +378,20 @@ module.exports = async (req, res) => {
                         dayAsOf = mergeNow;
                     };
 
-                    const oldS = calcStats(oldByHour);
-                    const newS = calcStats(newByHour);
+                    // Future-only for shouldAlert; full-day for alert text
+                    const oldS = calcStats(oldByHour, localHour);
+                    const newS = calcStats(newByHour, localHour);
+                    const oldSFull = calcStats(oldByHour, 0);
+                    const newSFull = calcStats(newByHour, 0);
 
-                    // No baseline for THIS calendar day (or all zeros / no high-prob hours) → set silently
-                    // duration > 0 covers hours with precip=0 but prob > threshold
+                    // No baseline for remaining (future) hours today → set silently
                     const hasTodayBaseline = Object.keys(oldByHour).length > 0 && (oldS.total > 0 || oldS.duration > 0);
                     if (!hasTodayBaseline) {
                         await mergeTodayBaseline();
                     } else {
                         const amountIncrease = newS.total - oldS.total;
                         const significantAmountUp = amountIncrease >= 1.5;
-                        // Canceled when previous rainy window (mm or high-prob hours) is gone
+                        // Canceled when previous FUTURE rainy window is gone
                         const fullyCanceled = (oldS.total > 0 || oldS.duration > 0) && newS.total === 0 && newS.duration === 0;
 
                         let significantShift = false;
@@ -398,25 +411,26 @@ module.exports = async (req, res) => {
                             const oldAsOfUk = formatLocalDateTime(oldPrecipAsOf, cityTimezone, 'uk');
                             const asOfSuffixUk = oldAsOfUk ? ` (станом на ${oldAsOfUk})` : '';
 
+                            // Message uses FULL-day schedule; decision was future-only
                             let alertMsg = '';
 
                             if (fullyCanceled) {
                                 alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.\n` +
-                                    `Було${asOfSuffixUk} ~${oldS.total.toFixed(1)} мм → зараз 0 мм.`;
+                                    `Було${asOfSuffixUk} ~${oldSFull.total.toFixed(1)} мм → зараз 0 мм.`;
                             } else if (significantAmountUp) {
                                 alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
-                                    `Було${asOfSuffixUk} ~${oldS.total.toFixed(1)} мм → зараз ~${newS.total.toFixed(1)} мм.\n` +
-                                    `Дощ: ${fmtBlocks(newS)}.`;
+                                    `Було${asOfSuffixUk} ~${oldSFull.total.toFixed(1)} мм → зараз ~${newSFull.total.toFixed(1)} мм.\n` +
+                                    `Дощ: ${fmtBlocks(newSFull)}.`;
                             } else if (significantLonger) {
                                 alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
-                                    `Було${asOfSuffixUk}: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                    `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)}\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
                             } else if (significantShift) {
                                 if (oldS.start == null) {
                                     alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
-                                        `Дощ: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                        `Дощ: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
                                 } else {
                                     alertMsg = `🌤 Час опадів змістився.\n` +
-                                        `Було${asOfSuffixUk}: ${fmtBlocks(oldS)}\nЗараз: ${fmtBlocks(newS)} (сумарно ${newS.total.toFixed(1)} мм).`;
+                                        `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)}\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
                                 }
                             }
 
