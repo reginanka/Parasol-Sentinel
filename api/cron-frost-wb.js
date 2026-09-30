@@ -1,14 +1,20 @@
 /**
  * Evening Weatherbit soil-frost cross-check (~21:00 local per city).
  *
- * Free Weatherbit has no soil temperature — we estimate surface (0 cm) from
- * air temp, dew point, clouds and wind, then compare with Open-Meteo frost
- * already stored in dashboardSnapshot (or fetched live as fallback).
+ * Goal: estimate **morning** soil frost risk (plants), not current evening surface.
  *
- * Messages (always evaluated; silent if both sources say no frost):
+ * Free Weatherbit has no soil temperature. We estimate morning surface (0 cm):
+ *   T_soil ≈ T_min − k · (T_min − T_dew)
+ * where:
+ *   - T_min  = Weatherbit forecast/daily min_temp for tomorrow (night → morning)
+ *   - T_dew, clouds, wind = Weatherbit current at run time (evening proxy)
+ *   - k from clouds + wind (clear + calm → stronger radiative cooling)
+ *
+ * Compared with Open-Meteo soil frost (snapshot or live):
  * - OM frost + WB frost  → confirmation
  * - no OM + WB frost     → attention warning
  * - OM frost + no WB     → WB does not see the risk
+ * - both false           → silent
  */
 require('dotenv').config();
 const axios = require('axios');
@@ -67,29 +73,29 @@ module.exports = async (req, res) => {
         const msgDict = {
             uk: {
                 confirm:
-                    '✅ **Weatherbit підтвердив заморозок по ґрунту {soil}**\n' +
-                    'Оцінка поверхні з температури повітря, точки роси, хмарності та вітру (k={k}).\n' +
+                    '✅ **Weatherbit підтвердив заморозок по ґрунту {soil} (під ранок)**\n' +
+                    'Оцінка: мін. повітря {tMin}°C, точка роси {td}°C, k={k} (хмари/вітер).\n' +
                     'Open-Meteo: мін. ґрунт {omSoil}.',
                 warn:
-                    '⚠️ **Увага! Weatherbit бачить ризик заморозку по ґрунту {soil}**\n' +
-                    'Open-Meteo цього заморозку не показував. Можливе радіаційне вихолоджування поверхні цієї ночі (k={k}).',
+                    '⚠️ **Увага! Weatherbit бачить ризик заморозку по ґрунту {soil} (під ранок)**\n' +
+                    'Open-Meteo цього не показував. Мін. повітря {tMin}°C, точка роси {td}°C, k={k}.',
                 deny:
-                    'ℹ️ **Weatherbit не підтверджує ризик заморозку**\n' +
-                    'Оцінка ґрунту за поточними умовами: **{soil}** (k={k}).\n' +
-                    'Open-Meteo раніше показував заморозок (мін. ґрунт {omSoil}).'
+                    'ℹ️ **Weatherbit не підтверджує ризик заморозку під ранок**\n' +
+                    'Оцінка ґрунту: **{soil}** (мін. повітря {tMin}°C, Td {td}°C, k={k}).\n' +
+                    'Open-Meteo показував заморозок (мін. ґрунт {omSoil}).'
             },
             en: {
                 confirm:
-                    '✅ **Weatherbit confirmed soil frost at {soil}**\n' +
-                    'Surface estimate from air temp, dew point, clouds and wind (k={k}).\n' +
+                    '✅ **Weatherbit confirmed morning soil frost at {soil}**\n' +
+                    'Estimate: air min {tMin}°C, dew point {td}°C, k={k} (clouds/wind).\n' +
                     'Open-Meteo min soil: {omSoil}.',
                 warn:
-                    '⚠️ **Attention! Weatherbit sees soil frost risk at {soil}**\n' +
-                    'Open-Meteo did not show this frost. Possible radiative cooling at the surface tonight (k={k}).',
+                    '⚠️ **Attention! Weatherbit sees morning soil frost risk at {soil}**\n' +
+                    'Open-Meteo did not show this. Air min {tMin}°C, dew point {td}°C, k={k}.',
                 deny:
-                    'ℹ️ **Weatherbit does not confirm frost risk**\n' +
-                    'Current soil estimate: **{soil}** (k={k}).\n' +
-                    'Open-Meteo earlier indicated frost (min soil {omSoil}).'
+                    'ℹ️ **Weatherbit does not confirm morning frost risk**\n' +
+                    'Soil estimate: **{soil}** (air min {tMin}°C, Td {td}°C, k={k}).\n' +
+                    'Open-Meteo indicated frost (min soil {omSoil}).'
             }
         };
 
@@ -110,23 +116,38 @@ module.exports = async (req, res) => {
                     continue;
                 }
 
-                // --- Weatherbit current (temp, dewpt, clouds, wind) ---
-                const wbUrl =
-                    `https://api.weatherbit.io/v2.0/current?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`;
-                const wbRes = await axios.get(wbUrl, { timeout: 12000 });
-                const cur = wbRes.data?.data?.[0];
-                if (!cur) {
-                    throw new Error('Weatherbit: empty current');
-                }
+                // --- Weatherbit: daily min_temp (tomorrow) + current dewpt/clouds/wind ---
+                const [wbDailyRes, wbCurRes] = await Promise.all([
+                    axios.get(
+                        `https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=3`,
+                        { timeout: 12000 }
+                    ),
+                    axios.get(
+                        `https://api.weatherbit.io/v2.0/current?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`,
+                        { timeout: 12000 }
+                    )
+                ]);
 
-                const tempAir = cur.temp;
-                const dewpt = cur.dewpt;
+                const dailyArr = wbDailyRes.data?.data || [];
+                const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
+                const tomorrowDaily = dailyArr.find(d => dayKey(d) === tomorrowStr) || dailyArr[1];
+                if (!tomorrowDaily || tomorrowDaily.min_temp == null) {
+                    throw new Error('Weatherbit: no min_temp for tomorrow');
+                }
+                const tMin = Number(tomorrowDaily.min_temp);
+
+                const cur = wbCurRes.data?.data?.[0];
+                if (!cur || cur.dewpt == null) {
+                    throw new Error('Weatherbit: empty current / dewpt');
+                }
+                const dewpt = Number(cur.dewpt);
                 const clouds = cur.clouds != null ? cur.clouds : 50;
                 const windMs = cur.wind_spd != null ? cur.wind_spd : 2;
 
-                const est = estimateSoilTemp0(tempAir, dewpt, clouds, windMs);
+                // Morning soil estimate: use forecast min air temp, not evening current temp
+                const est = estimateSoilTemp0(tMin, dewpt, clouds, windMs);
                 if (!est) {
-                    throw new Error('Cannot estimate soil (missing temp/dewpt)');
+                    throw new Error('Cannot estimate soil (missing tMin/dewpt)');
                 }
 
                 const wbFrost = est.soilEst <= SOIL_FROST_THRESHOLD;
@@ -168,38 +189,32 @@ module.exports = async (req, res) => {
                         soilForTomorrow.push(omSoil0[i]);
                     }
                 }
+                // Overnight hours on "today" after 21:00 also matter for soil min into morning
+                for (let i = 0; i < omTimes.length; i++) {
+                    if (String(omTimes[i]).startsWith(todayStr) && omSoil0[i] != null) {
+                        const hour = parseInt(String(omTimes[i]).slice(11, 13), 10);
+                        if (hour >= 21) soilForTomorrow.push(omSoil0[i]);
+                    }
+                }
+
                 let meanTomorrow = null;
                 if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
                     const dIdx = dailyOm.time.findIndex(t => String(t).startsWith(tomorrowStr));
                     if (dIdx >= 0) meanTomorrow = dailyOm.temperature_2m_mean[dIdx];
                 }
-
-                // Also consider tonight (remaining hours of today) for OM min soil
-                const soilTonight = [];
-                for (let i = 0; i < omTimes.length; i++) {
-                    if (String(omTimes[i]).startsWith(todayStr) && omSoil0[i] != null) {
-                        const hour = parseInt(String(omTimes[i]).slice(11, 13), 10);
-                        if (hour >= 21 || hour <= 8) soilTonight.push(omSoil0[i]);
-                    }
-                }
+                // Radiation frost: positive mean day + cold night — also accept today's mean if still positive
                 let meanToday = null;
                 if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
                     const dIdx = dailyOm.time.findIndex(t => String(t).startsWith(todayStr));
                     if (dIdx >= 0) meanToday = dailyOm.temperature_2m_mean[dIdx];
                 }
+                const meanForOm = (meanTomorrow != null && meanTomorrow > 0)
+                    ? meanTomorrow
+                    : (meanToday != null && meanToday > 0 ? meanToday : meanTomorrow);
 
-                const omInfoTomorrow = getSoilFrostInfo(soilForTomorrow, meanTomorrow);
-                const omInfoTonight = getSoilFrostInfo(
-                    soilTonight.length ? soilTonight : soilForTomorrow,
-                    meanToday != null ? meanToday : meanTomorrow
-                );
-                const omFrost = omInfoTomorrow.frost || omInfoTonight.frost;
-                const omMinSoil = (() => {
-                    const vals = [];
-                    if (omInfoTomorrow.minSoil != null) vals.push(omInfoTomorrow.minSoil);
-                    if (omInfoTonight.minSoil != null) vals.push(omInfoTonight.minSoil);
-                    return vals.length ? Math.min(...vals) : null;
-                })();
+                const omInfo = getSoilFrostInfo(soilForTomorrow, meanForOm);
+                const omFrost = omInfo.frost;
+                const omMinSoil = omInfo.minSoil;
 
                 // Decide message type
                 let alertType = null; // confirm | warn | deny
@@ -210,7 +225,7 @@ module.exports = async (req, res) => {
 
                 if (!alertType) {
                     logLines.push(
-                        `• ${cityInfo.name} | T=${tempAir}° Td=${dewpt}° soil≈${est.soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
+                        `• ${cityInfo.name} | Tmin=${tMin}° Td=${dewpt}° soil≈${est.soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику під ранок`
                     );
                     await sleep(1100);
                     continue;
@@ -219,14 +234,18 @@ module.exports = async (req, res) => {
                 const soilStr = formatSoilTemp(est.soilEst);
                 const omSoilStr = formatSoilTemp(omMinSoil);
                 const kStr = String(est.k);
+                const tMinStr = Number(tMin).toFixed(1);
+                const tdStr = Number(dewpt).toFixed(1);
 
                 for (const user of cityInfo.users) {
                     const lang = user.language || 'uk';
                     const tpl = msgDict[lang]?.[alertType] || msgDict.uk[alertType];
                     const text = tpl
-                        .replace('{soil}', soilStr)
-                        .replace('{omSoil}', omSoilStr)
-                        .replace('{k}', kStr);
+                        .replace(/\{soil\}/g, soilStr)
+                        .replace(/\{omSoil\}/g, omSoilStr)
+                        .replace(/\{k\}/g, kStr)
+                        .replace(/\{tMin\}/g, tMinStr)
+                        .replace(/\{td\}/g, tdStr);
 
                     try {
                         await bot.telegram.sendMessage(user.telegramId, text, { parse_mode: 'Markdown' });
@@ -244,7 +263,8 @@ module.exports = async (req, res) => {
                             lastFrostWbAlert: {
                                 date: todayStr,
                                 type: alertType,
-                                soilEst: Math.round(est.soilEst * 10) / 10
+                                soilEst: Math.round(est.soilEst * 10) / 10,
+                                tMin: Math.round(tMin * 10) / 10
                             }
                         }
                     },
@@ -253,7 +273,7 @@ module.exports = async (req, res) => {
 
                 const typeIcon = alertType === 'confirm' ? '✅' : alertType === 'warn' ? '⚠️' : 'ℹ️';
                 logLines.push(
-                    `• ${cityInfo.name} | ${typeIcon} ${alertType} | WB soil≈${est.soilEst.toFixed(1)}° | OM ${omFrost ? omSoilStr : 'ні'}`
+                    `• ${cityInfo.name} | ${typeIcon} ${alertType} | Tmin=${tMin}° soil≈${est.soilEst.toFixed(1)}° | OM ${omFrost ? omSoilStr : 'ні'}`
                 );
 
                 await sleep(1100);
@@ -265,7 +285,7 @@ module.exports = async (req, res) => {
         }
 
         const summary = [
-            `📋 <b>Перевірка заморозку (Weatherbit)</b> — ${startTime}`,
+            `📋 <b>Перевірка заморозку під ранок (Weatherbit)</b> — ${startTime}`,
             `👥 Міст: ${Object.keys(uniqueCities).length}`,
             `🚨 Сповіщень: ${alertsTotal}`,
             `❌ Помилок: ${errorsCount}`,
