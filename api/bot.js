@@ -17,6 +17,7 @@ const {
     fetchMissingHistory
 } = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
+const { getSoilFrostInfo, frostWarningText } = require('../utils/weather');
 
 /**
  * Parasol Sentinel Bot - Core logic handler.
@@ -848,6 +849,9 @@ bot.on('callback_query', async (ctx) => {
             const useSnapshot = snapHasDay && snapHasCodes && omAge < OM_FRESH_MS;
 
             let time, temperature_2m, precipitation, precipitation_probability, wind_speed_10m, weather_code;
+            let soil_temperature_0cm = [];
+            let soil_temperature_6cm = [];
+            let dailyOm = null;
             let dataUpdatedAt = null;
 
             if (useSnapshot) {
@@ -857,10 +861,14 @@ bot.on('callback_query', async (ctx) => {
                 precipitation_probability = snapHourly.precipitation_probability || [];
                 wind_speed_10m = snapHourly.wind_speed_10m || [];
                 weather_code = snapHourly.weather_code || [];
+                soil_temperature_0cm = snapHourly.soil_temperature_0cm || [];
+                soil_temperature_6cm = snapHourly.soil_temperature_6cm || [];
+                dailyOm = snap.dailyOm || null;
                 dataUpdatedAt = snap.updatedAtOm ? new Date(snap.updatedAtOm) : null;
             } else {
                 const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
-                    `&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,weather_code` +
+                    `&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
+                    `&daily=temperature_2m_mean` +
                     `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
                 const omRes = await axios.get(omUrl);
                 if (!omRes.data || !omRes.data.hourly) {
@@ -872,7 +880,37 @@ bot.on('callback_query', async (ctx) => {
                 precipitation_probability = omRes.data.hourly.precipitation_probability;
                 wind_speed_10m = omRes.data.hourly.wind_speed_10m;
                 weather_code = omRes.data.hourly.weather_code;
+                soil_temperature_0cm = omRes.data.hourly.soil_temperature_0cm || [];
+                soil_temperature_6cm = omRes.data.hourly.soil_temperature_6cm || [];
+                dailyOm = omRes.data.daily ? {
+                    time: omRes.data.daily.time || [],
+                    temperature_2m_mean: omRes.data.daily.temperature_2m_mean || []
+                } : null;
                 dataUpdatedAt = new Date();
+            }
+
+            // If snapshot is missing soil/dailyOm, fetch them once for frost check
+            if ((!soil_temperature_0cm || soil_temperature_0cm.length === 0 || !dailyOm) && useSnapshot) {
+                try {
+                    const omFrostUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
+                        `&hourly=soil_temperature_0cm,soil_temperature_6cm` +
+                        `&daily=temperature_2m_mean` +
+                        `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
+                    const omFrostRes = await axios.get(omFrostUrl);
+                    if (omFrostRes.data?.hourly) {
+                        if (!soil_temperature_0cm?.length) soil_temperature_0cm = omFrostRes.data.hourly.soil_temperature_0cm || [];
+                        if (!soil_temperature_6cm?.length) soil_temperature_6cm = omFrostRes.data.hourly.soil_temperature_6cm || [];
+                        time = time?.length ? time : (omFrostRes.data.hourly.time || []);
+                    }
+                    if (!dailyOm && omFrostRes.data?.daily) {
+                        dailyOm = {
+                            time: omFrostRes.data.daily.time || [],
+                            temperature_2m_mean: omFrostRes.data.daily.temperature_2m_mean || []
+                        };
+                    }
+                } catch (e) {
+                    console.error('Frost soil fetch error:', e.message);
+                }
             }
 
             const getWeatherSymbol = (code) => {
@@ -956,9 +994,32 @@ bot.on('callback_query', async (ctx) => {
             const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
             const isToday = targetDateStr === todayStr;
 
+            // Soil frost: min soil_temperature_0cm for the day ≤ 0.5 AND temperature_2m_mean > 0
+            let frostPlanned = false;
+            let frostMinSoil = null;
+            try {
+                const soilForDay = dayIndices
+                    .map(i => soil_temperature_0cm?.[i])
+                    .filter(v => v != null);
+                let meanForDay = null;
+                if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
+                    const dIdx = dailyOm.time.findIndex(t => String(t).startsWith(targetDateStr));
+                    if (dIdx >= 0) meanForDay = dailyOm.temperature_2m_mean[dIdx];
+                }
+                const info = getSoilFrostInfo(soilForDay, meanForDay);
+                frostPlanned = info.frost;
+                frostMinSoil = info.minSoil;
+            } catch (e) {
+                console.error('Frost check error in hourly:', e.message);
+            }
+
             let msg = lang === 'uk'
                 ? `🌤 <b>Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`
                 : `🌤 <b>Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
+
+            if (frostPlanned) {
+                msg += `<b>${frostWarningText(lang, frostMinSoil)}</b>\n\n`;
+            }
 
             msg += lang === 'uk'
                 ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n`

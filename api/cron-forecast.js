@@ -8,7 +8,7 @@ const City = require('../models/City');
 
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 const { dayKey, daySetPaths, pruneDaysUnset, mergeHourlyFlat, getDayBaseline } = require('../utils/baseline');
@@ -225,13 +225,27 @@ module.exports = async (req, res) => {
                 let wroteHourlyPrecip = false;
                 let tomorrowHours = [];
                 let todayHoursSeed = [];
+                // Soil frost data from Open-Meteo (hourly soil + daily mean)
+                let omSoil0 = [];
+                let omSoilTimes = [];
+                let omDailyMeanTimes = [];
+                let omDailyMeanVals = [];
 
                 try {
-                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}&hourly=precipitation&timezone=auto&forecast_days=2`;
+                    const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                        `&hourly=precipitation,soil_temperature_0cm,soil_temperature_6cm` +
+                        `&daily=temperature_2m_mean` +
+                        `&timezone=auto&forecast_days=7`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
+                        omSoilTimes = allTimes;
+                        omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
+                        if (omRes.data.daily) {
+                            omDailyMeanTimes = omRes.data.daily.time || [];
+                            omDailyMeanVals = omRes.data.daily.temperature_2m_mean || [];
+                        }
 
                         for (let i = 0; i < allTimes.length; i++) {
                             const t = allTimes[i];
@@ -262,6 +276,23 @@ module.exports = async (req, res) => {
                             );
                         }
                         wroteHourlyPrecip = true;
+
+                        // Persist daily mean for frost checks. Soil stays aligned with light/full hourly.time.
+                        try {
+                            await City.findOneAndUpdate(
+                                { externalId: key },
+                                {
+                                    $set: {
+                                        'dashboardSnapshot.dailyOm': {
+                                            time: omDailyMeanTimes,
+                                            temperature_2m_mean: omDailyMeanVals
+                                        }
+                                    }
+                                }
+                            );
+                        } catch (snapErr) {
+                            console.error('Evening dailyOm snapshot update error:', snapErr.message);
+                        }
                     }
                 } catch (omErr) {
                     console.error('Open-Meteo fetch error in evening forecast:', omErr.message);
@@ -435,16 +466,50 @@ module.exports = async (req, res) => {
                         aqiPrefix += advice + '\n\n';
                     }
 
-                    let message = `${aqiPrefix}${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity)}\n\n`;
+                    // Frost risk over the days we show in the evening briefing (from tomorrow)
+                    const cityTzForDays = response.data.timezone || 'Europe/Kyiv';
+                    const tomorrowStrForMsg = getLocalDateStr(cityTzForDays, 1);
+                    const dayKeyFn = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
+                    const startIdxPre = fullResponse.findIndex(d => dayKeyFn(d) === tomorrowStrForMsg);
+                    const fromIdxPre = startIdxPre >= 0 ? startIdxPre : 1;
+                    const previewDays = fullResponse.slice(fromIdxPre, fromIdxPre + settings.daysCount);
+                    let frostAnyDay = false;
+                    let frostColdest = null; // lowest minSoil among frost days
+                    for (const day of previewDays) {
+                        const dStr = dayKeyFn(day);
+                        if (!dStr) continue;
+                        const soilForDay = [];
+                        for (let i = 0; i < omSoilTimes.length; i++) {
+                            if (String(omSoilTimes[i]).startsWith(dStr) && omSoil0[i] != null) {
+                                soilForDay.push(omSoil0[i]);
+                            }
+                        }
+                        let mean = null;
+                        const mIdx = omDailyMeanTimes.findIndex(t => String(t).startsWith(dStr));
+                        if (mIdx >= 0) mean = omDailyMeanVals[mIdx];
+                        const info = getSoilFrostInfo(soilForDay, mean);
+                        if (info.frost) {
+                            frostAnyDay = true;
+                            if (info.minSoil != null && (frostColdest == null || info.minSoil < frostColdest)) {
+                                frostColdest = info.minSoil;
+                            }
+                        }
+                    }
+
+                    let frostPrefix = '';
+                    if (frostAnyDay) {
+                        frostPrefix = `${frostWarningText(lang, frostColdest)}\n\n`;
+                    }
+
+                    let message = `${aqiPrefix}${frostPrefix}${fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity)}\n\n`;
 
                     // Show from TOMORROW (evening briefing). Index 0 is still stored in eveningState for daytime shift checks.
                     // Always resolve days by valid_date so labels never drift relative to stored baseline.
-                    const cityTzForDays = response.data.timezone || 'Europe/Kyiv';
-                    const tomorrowStr = getLocalDateStr(cityTzForDays, 1);
-                    const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
-                    const startIdx = fullResponse.findIndex(d => dayKey(d) === tomorrowStr);
-                    const fromIdx = startIdx >= 0 ? startIdx : 1;
-                    const userForecast = fullResponse.slice(fromIdx, fromIdx + settings.daysCount);
+                    const tomorrowStr = tomorrowStrForMsg;
+                    const dayKey = dayKeyFn;
+                    const startIdx = startIdxPre;
+                    const fromIdx = fromIdxPre;
+                    const userForecast = previewDays;
 
                     userForecast.forEach((day, idx) => {
                         // Prefer valid_date string to avoid UTC Date parsing shifting the weekday near midnight

@@ -5,7 +5,7 @@ const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 
@@ -249,6 +249,45 @@ module.exports = async (req, res) => {
             console.error('NOAA error:', e.message);
         }
 
+        // --- Open-Meteo soil frost (display only, no DB write) ---
+        let frostAnyDay = false;
+        let frostColdest = null;
+        try {
+            const omFrostUrl =
+                `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
+                `&hourly=soil_temperature_0cm` +
+                `&daily=temperature_2m_mean` +
+                `&timezone=auto&forecast_days=7`;
+            const omFrostRes = await axios.get(omFrostUrl, { timeout: 12000 });
+            const soilTimes = omFrostRes.data?.hourly?.time || [];
+            const soil0 = omFrostRes.data?.hourly?.soil_temperature_0cm || [];
+            const meanTimes = omFrostRes.data?.daily?.time || [];
+            const meanVals = omFrostRes.data?.daily?.temperature_2m_mean || [];
+            const testDays = fullResponse.slice(1, 1 + settings.daysCount);
+            for (const day of testDays) {
+                const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
+                if (!dStr) continue;
+                const soilForDay = [];
+                for (let i = 0; i < soilTimes.length; i++) {
+                    if (String(soilTimes[i]).startsWith(dStr) && soil0[i] != null) {
+                        soilForDay.push(soil0[i]);
+                    }
+                }
+                let mean = null;
+                const mIdx = meanTimes.findIndex(t => String(t).startsWith(dStr));
+                if (mIdx >= 0) mean = meanVals[mIdx];
+                const info = getSoilFrostInfo(soilForDay, mean);
+                if (info.frost) {
+                    frostAnyDay = true;
+                    if (info.minSoil != null && (frostColdest == null || info.minSoil < frostColdest)) {
+                        frostColdest = info.minSoil;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Test forecast frost check error:', e.message);
+        }
+
         // --- Формування повідомлення ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
         
@@ -294,7 +333,8 @@ module.exports = async (req, res) => {
             aqiPrefix += advice + '\n\n';
         }
 
-        let message = `${aqiPrefix}🧪 **ТЕСТОВИЙ прогноз на ${settings.daysCount} дн. для ${displayCity}**\n\n`;
+        let frostPrefix = frostAnyDay ? `${frostWarningText(lang, frostColdest)}\n\n` : '';
+        let message = `${aqiPrefix}${frostPrefix}🧪 **ТЕСТОВИЙ прогноз на ${settings.daysCount} дн. для ${displayCity}**\n\n`;
 
         const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 

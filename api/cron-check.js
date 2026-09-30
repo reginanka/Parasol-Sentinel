@@ -237,7 +237,8 @@ module.exports = async (req, res) => {
                 let omHourlyForSnap = null;
                 try {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                        `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code` +
+                        `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
+                        `&daily=temperature_2m_mean` +
                         `&timezone=auto&forecast_days=3`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
@@ -251,8 +252,17 @@ module.exports = async (req, res) => {
                             precipitation: allPrecip,
                             precipitation_probability: omRes.data.hourly.precipitation_probability || [],
                             surface_pressure: omRes.data.hourly.surface_pressure || [],
-                            weather_code: omRes.data.hourly.weather_code || []
+                            weather_code: omRes.data.hourly.weather_code || [],
+                            soil_temperature_0cm: omRes.data.hourly.soil_temperature_0cm || [],
+                            soil_temperature_6cm: omRes.data.hourly.soil_temperature_6cm || []
                         };
+                        // daily mean air temp for soil-frost check (stored next to hourly)
+                        if (omRes.data.daily) {
+                            omHourlyForSnap._dailyOm = {
+                                time: omRes.data.daily.time || [],
+                                temperature_2m_mean: omRes.data.daily.temperature_2m_mean || []
+                            };
+                        }
                         const dayBlPrecip = getDayBaseline(evening, todayStr, cityTimezone);
                         const oldPrecipArr = (dayBlPrecip?.hourlyPrecip?.length
                             ? dayBlPrecip.hourlyPrecip
@@ -729,8 +739,13 @@ module.exports = async (req, res) => {
                     'dashboardSnapshot.timezone': cityTimezone
                 };
                 if (omHourlyForSnap) {
+                    const dailyOmFromHourly = omHourlyForSnap._dailyOm || null;
+                    if (omHourlyForSnap._dailyOm) delete omHourlyForSnap._dailyOm;
                     snapWb['dashboardSnapshot.hourly'] = omHourlyForSnap;
                     snapWb['dashboardSnapshot.updatedAtOm'] = new Date();
+                    if (dailyOmFromHourly) {
+                        snapWb['dashboardSnapshot.dailyOm'] = dailyOmFromHourly;
+                    }
                 }
                 if (snapGeomag) snapWb['dashboardSnapshot.geomag'] = snapGeomag;
                 if (snapWaqi) snapWb['dashboardSnapshot.waqi'] = snapWaqi;

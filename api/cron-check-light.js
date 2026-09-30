@@ -66,11 +66,12 @@ module.exports = async (req, res) => {
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
                 // --- Open-Meteo: current + daily + full hourly (alerts + dashboard snapshot) ---
+                // soil_temperature_0cm/6cm + temperature_2m_mean — for soil frost check
                 const omUrl =
                     `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                     `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,apparent_temperature,wind_direction_10m,surface_pressure` +
-                    `&daily=temperature_2m_min,temperature_2m_max` +
-                    `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code` +
+                    `&daily=temperature_2m_min,temperature_2m_max,temperature_2m_mean` +
+                    `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
                     `&timezone=auto&forecast_days=3`;
 
                 const omRes = await axios.get(omUrl, { timeout: 12000 });
@@ -659,7 +660,16 @@ module.exports = async (req, res) => {
                     precipitation: om.hourly.precipitation || [],
                     precipitation_probability: om.hourly.precipitation_probability || [],
                     surface_pressure: om.hourly.surface_pressure || [],
-                    weather_code: om.hourly.weather_code || []
+                    weather_code: om.hourly.weather_code || [],
+                    soil_temperature_0cm: om.hourly.soil_temperature_0cm || [],
+                    soil_temperature_6cm: om.hourly.soil_temperature_6cm || []
+                } : null;
+
+                const dailyOmBlock = om.daily ? {
+                    time: om.daily.time || [],
+                    temperature_2m_min: om.daily.temperature_2m_min || [],
+                    temperature_2m_max: om.daily.temperature_2m_max || [],
+                    temperature_2m_mean: om.daily.temperature_2m_mean || []
                 } : null;
 
                 const omCurrentForUi = {
@@ -683,6 +693,7 @@ module.exports = async (req, res) => {
                 const snapSet = {
                     'dashboardSnapshot.updatedAtOm': new Date(),
                     'dashboardSnapshot.hourly': hourlyBlock,
+                    'dashboardSnapshot.dailyOm': dailyOmBlock,
                     'dashboardSnapshot.lat': cityInfo.lat,
                     'dashboardSnapshot.lon': cityInfo.lon,
                     'dashboardSnapshot.timezone': cityTimezone

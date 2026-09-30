@@ -145,7 +145,7 @@ module.exports = async (req, res) => {
 
         const { lat: cityLat, lon: cityLon } = currentRes.data.data[0];
 
-        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code&timezone=auto&forecast_days=3`;
+        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm&daily=temperature_2m_mean&timezone=auto&forecast_days=3`;
         const openMeteoRes = await axios.get(omUrl).catch(e => {
             console.error('Open-Meteo Hourly Error:', e.message);
             return null;
@@ -168,8 +168,14 @@ module.exports = async (req, res) => {
                 precipitation: openMeteoRes.data.hourly.precipitation,
                 precipitation_probability: openMeteoRes.data.hourly.precipitation_probability,
                 surface_pressure: openMeteoRes.data.hourly.surface_pressure,
-                weather_code: openMeteoRes.data.hourly.weather_code || []
+                weather_code: openMeteoRes.data.hourly.weather_code || [],
+                soil_temperature_0cm: openMeteoRes.data.hourly.soil_temperature_0cm || [],
+                soil_temperature_6cm: openMeteoRes.data.hourly.soil_temperature_6cm || []
             } : { time: [], temperature_2m: [] },
+            dailyOm: openMeteoRes?.data?.daily ? {
+                time: openMeteoRes.data.daily.time || [],
+                temperature_2m_mean: openMeteoRes.data.daily.temperature_2m_mean || []
+            } : null,
             daily: dailyRes.data.data.map(d => ({
                 ...d,
                 max_temp: d.max_temp,
@@ -274,6 +280,7 @@ module.exports = async (req, res) => {
                 'dashboardSnapshot.currentSource': 'weatherbit',
                 'dashboardSnapshot.hourly': responseData.hourly,
                 'dashboardSnapshot.daily': responseData.daily,
+                'dashboardSnapshot.dailyOm': responseData.dailyOm,
                 'dashboardSnapshot.dailySource': 'weatherbit',
                 'dashboardSnapshot.aqi': responseData.aqi,
                 'dashboardSnapshot.waqi': responseData.waqi,
