@@ -28,6 +28,12 @@ const CitySchema = new mongoose.Schema({
         tier: Number,
         aqi: Number
     },
+    // Weatherbit soil-frost cross-check (evening cron ~21:00 local)
+    lastFrostWbAlert: {
+        date: String,   // YYYY-MM-DD (local)
+        type: String,   // 'confirm' | 'warn' | 'deny'
+        soilEst: Number
+    },
     // Snapshot for dashboard — filled by crons; weather-data reads this first
     dashboardSnapshot: {
         updatedAtOm: Date,   // last Open-Meteo write (hourly / current OM)
