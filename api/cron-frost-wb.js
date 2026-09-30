@@ -238,13 +238,74 @@ module.exports = async (req, res) => {
                     const sample = hourlyData[0] ? Object.keys(hourlyData[0]).join(',') : 'none';
                     throw new Error(`Meteosource: no usable hour (n=${hourlyData.length}, sample keys: ${sample})`);
                 }
-                if (morning.dew_point == null || Number.isNaN(morning.dew_point)) {
-                    const sample = hourlyData[0] ? Object.keys(hourlyData[0]).join(',') : 'none';
-                    throw new Error(`Meteosource: no dew_point/humidity (hour keys: ${sample})`);
+                const tAir = morning.temperature;
+                let dewpt = morning.dew_point;
+                let dewSource = morning.dew_point != null ? 'meteosource' : null;
+
+                // --- Open-Meteo: soil + mean + dewpoint (free MS hourly has no dew_point/humidity) ---
+                let omSoil0 = cityDoc?.dashboardSnapshot?.hourly?.soil_temperature_0cm || [];
+                let omTimes = cityDoc?.dashboardSnapshot?.hourly?.time || [];
+                let dailyOm = cityDoc?.dashboardSnapshot?.dailyOm || null;
+                let omDewTimes = [];
+                let omDewVals = [];
+
+                const snapHasSoil = Array.isArray(omSoil0) && omSoil0.length > 0
+                    && Array.isArray(omTimes)
+                    && (omTimes.some(t => String(t).startsWith(tomorrowStr))
+                        || omTimes.some(t => String(t).startsWith(todayStr)));
+
+                try {
+                    const needOmDew = dewpt == null || Number.isNaN(Number(dewpt));
+                    const omUrl =
+                        `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                        `&hourly=soil_temperature_0cm,dewpoint_2m` +
+                        `&daily=temperature_2m_mean` +
+                        `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
+                    const omRes = await axios.get(omUrl, { timeout: 12000 });
+                    if (omRes.data?.hourly) {
+                        if (!snapHasSoil) {
+                            omTimes = omRes.data.hourly.time || [];
+                            omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
+                        }
+                        omDewTimes = omRes.data.hourly.time || [];
+                        omDewVals = omRes.data.hourly.dewpoint_2m || [];
+                    }
+                    if (omRes.data?.daily && !dailyOm?.temperature_2m_mean) {
+                        dailyOm = {
+                            time: omRes.data.daily.time || [],
+                            temperature_2m_mean: omRes.data.daily.temperature_2m_mean || []
+                        };
+                    }
+                } catch (omErr) {
+                    console.error('OM frost/dew fetch error:', omErr.message);
                 }
 
-                const tAir = morning.temperature;
-                const dewpt = morning.dew_point;
+                // Match OM dewpoint to the same local hour as Meteosource coldest hour
+                if ((dewpt == null || Number.isNaN(Number(dewpt))) && omDewTimes.length && omDewVals.length) {
+                    const targetPrefix = `${morning.date}T${String(morning.hour).padStart(2, '0')}`;
+                    let dIdx = omDewTimes.findIndex(t => String(t).startsWith(targetPrefix));
+                    if (dIdx < 0) {
+                        // nearest hour same calendar day in overnight window
+                        dIdx = omDewTimes.findIndex(t => {
+                            const s = String(t);
+                            return s.startsWith(morning.date) && parseInt(s.slice(11, 13), 10) === morning.hour;
+                        });
+                    }
+                    if (dIdx >= 0 && omDewVals[dIdx] != null) {
+                        dewpt = Number(omDewVals[dIdx]);
+                        dewSource = 'open-meteo';
+                    }
+                }
+
+                // Last resort: clear calm nights often near saturation — assume RH≈90%
+                if (dewpt == null || Number.isNaN(Number(dewpt))) {
+                    dewpt = dewPointFromHumidity(tAir, 90);
+                    dewSource = 'rh90-approx';
+                }
+                if (dewpt == null || Number.isNaN(Number(dewpt))) {
+                    throw new Error('No dew point available (MS free has none; OM/approx failed)');
+                }
+
                 // Avoid formula warming when Td > T at that hour
                 const tdEff = Math.min(dewpt, tAir);
 
@@ -262,39 +323,6 @@ module.exports = async (req, res) => {
                 }
 
                 const msFrost = soilEst <= SOIL_FROST_THRESHOLD;
-
-                // --- Open-Meteo frost (snapshot or live) ---
-                let omSoil0 = cityDoc?.dashboardSnapshot?.hourly?.soil_temperature_0cm || [];
-                let omTimes = cityDoc?.dashboardSnapshot?.hourly?.time || [];
-                let dailyOm = cityDoc?.dashboardSnapshot?.dailyOm || null;
-
-                const snapHasSoil = Array.isArray(omSoil0) && omSoil0.length > 0
-                    && Array.isArray(omTimes)
-                    && (omTimes.some(t => String(t).startsWith(tomorrowStr))
-                        || omTimes.some(t => String(t).startsWith(todayStr)));
-
-                if (!snapHasSoil || !dailyOm?.temperature_2m_mean) {
-                    try {
-                        const omUrl =
-                            `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                            `&hourly=soil_temperature_0cm` +
-                            `&daily=temperature_2m_mean` +
-                            `&timezone=auto&forecast_days=3`;
-                        const omRes = await axios.get(omUrl, { timeout: 12000 });
-                        if (omRes.data?.hourly) {
-                            omTimes = omRes.data.hourly.time || [];
-                            omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
-                        }
-                        if (omRes.data?.daily) {
-                            dailyOm = {
-                                time: omRes.data.daily.time || [],
-                                temperature_2m_mean: omRes.data.daily.temperature_2m_mean || []
-                            };
-                        }
-                    } catch (omErr) {
-                        console.error('OM frost fetch error:', omErr.message);
-                    }
-                }
 
                 const soilForNight = [];
                 for (let i = 0; i < omTimes.length; i++) {
@@ -330,7 +358,7 @@ module.exports = async (req, res) => {
 
                 if (!alertType) {
                     logLines.push(
-                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir}° Td=${dewpt}° soil≈${soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
+                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir}° Td=${Number(dewpt).toFixed(1)}°(${dewSource}) soil≈${soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
                     );
                     await sleep(1100);
                     continue;
