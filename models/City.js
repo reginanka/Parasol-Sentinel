@@ -35,8 +35,9 @@ const CitySchema = new mongoose.Schema({
         current: Object,       // primary current for UI (prefer Weatherbit)
         currentOm: Object,     // latest Open-Meteo current (fallback / freshness)
         currentSource: String, // 'weatherbit' | 'open-meteo'
-        hourly: Object,        // Open-Meteo hourly block for charts
+        hourly: Object,        // Open-Meteo hourly (incl. soil_temperature_0cm / 6cm)
         daily: Array,          // Weatherbit daily cards (preferred)
+        dailyOm: Object,       // Open-Meteo daily { time, temperature_2m_mean } for frost
         dailySource: String,   // 'weatherbit' | 'open-meteo'
         aqi: Object,           // Open-Meteo air-quality hourly (optional)
         waqi: Object,          // WAQI live sensors (optional)
