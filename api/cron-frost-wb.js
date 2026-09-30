@@ -1,20 +1,21 @@
 /**
- * Evening Weatherbit soil-frost cross-check (~21:00 local per city).
+ * Evening soil-frost cross-check (~21:00 local per city).
  *
- * Goal: estimate **morning** soil frost risk (plants), not current evening surface.
- *
- * Free Weatherbit has no soil temperature. We estimate morning surface (0 cm):
- *   T_soil ≈ T_min − k · (T_min − T_dew)
- * where:
- *   - T_min  = Weatherbit forecast/daily min_temp for tomorrow (night → morning)
- *   - T_dew, clouds, wind = Weatherbit current at run time (evening proxy)
- *   - k from clouds + wind (clear + calm → stronger radiative cooling)
+ * Data source: **Meteosource** hourly forecast (not Weatherbit).
+ * We take the **coldest hour** in the overnight window (local 21:00 today → 08:00
+ * tomorrow), then estimate morning soil surface:
+ *   T_soil ≈ T − k · (T − T_dew)
+ * with T, dew_point, cloud_cover, wind from that same forecast hour.
  *
  * Compared with Open-Meteo soil frost (snapshot or live):
- * - OM frost + WB frost  → confirmation
- * - no OM + WB frost     → attention warning
- * - OM frost + no WB     → WB does not see the risk
+ * - OM frost + MS frost  → confirmation
+ * - no OM + MS frost     → attention warning
+ * - OM frost + no MS     → Meteosource does not see the risk
  * - both false           → silent
+ *
+ * Env:
+ *   METEOSOURCE_KEY  — required
+ *   METEOSOURCE_TIER — optional, default "free" (url path /api/v1/{tier}/point)
  */
 require('dotenv').config();
 const axios = require('axios');
@@ -31,8 +32,67 @@ const {
     formatSoilTemp
 } = require('../utils/weather');
 
-const API_KEY = process.env.WEATHERBIT_KEY;
+const MS_KEY = process.env.METEOSOURCE_KEY;
+const MS_TIER = process.env.METEOSOURCE_TIER || 'free';
 const SOIL_FROST_THRESHOLD = 0.5; // °C — same as OM rule
+
+/** Overnight hours local: from 21 today through 08 tomorrow (inclusive). */
+function isOvernightHour(dateStr, hour, todayStr, tomorrowStr) {
+    if (dateStr === todayStr && hour >= 21) return true;
+    if (dateStr === tomorrowStr && hour <= 8) return true;
+    return false;
+}
+
+/**
+ * Pick the coldest overnight hour from Meteosource hourly.data[].
+ * Returns { temperature, dew_point, clouds, windMs, date, hour } or null.
+ */
+function pickMorningHour(hourlyData, todayStr, tomorrowStr) {
+    if (!Array.isArray(hourlyData) || hourlyData.length === 0) return null;
+
+    let best = null;
+    for (const h of hourlyData) {
+        const raw = String(h.date || '');
+        const dateStr = raw.slice(0, 10);
+        const hour = parseInt(raw.slice(11, 13), 10);
+        if (Number.isNaN(hour) || !isOvernightHour(dateStr, hour, todayStr, tomorrowStr)) {
+            continue;
+        }
+        const t = h.temperature != null ? Number(h.temperature) : null;
+        if (t == null || Number.isNaN(t)) continue;
+
+        if (!best || t < best.temperature) {
+            let clouds = 50;
+            if (h.cloud_cover != null) {
+                if (typeof h.cloud_cover === 'object' && h.cloud_cover.total != null) {
+                    clouds = Number(h.cloud_cover.total);
+                } else if (typeof h.cloud_cover === 'number') {
+                    clouds = h.cloud_cover;
+                }
+            }
+            let windMs = 2;
+            if (h.wind != null) {
+                if (typeof h.wind === 'object' && h.wind.speed != null) {
+                    windMs = Number(h.wind.speed);
+                } else if (typeof h.wind === 'number') {
+                    windMs = h.wind;
+                }
+            }
+            const dew = h.dew_point != null ? Number(h.dew_point) : null;
+            best = {
+                temperature: t,
+                dew_point: dew,
+                clouds: Number.isNaN(clouds) ? 50 : clouds,
+                windMs: Number.isNaN(windMs) ? 2 : windMs,
+                date: dateStr,
+                hour,
+                soil_temperature: h.soil_temperature != null ? Number(h.soil_temperature) : null,
+                surface_temperature: h.surface_temperature != null ? Number(h.surface_temperature) : null
+            };
+        }
+    }
+    return best;
+}
 
 module.exports = async (req, res) => {
     const LOG_CHAT_ID = process.env.LOG_CHAT_ID;
@@ -41,8 +101,8 @@ module.exports = async (req, res) => {
     if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
         return res.status(401).send('Unauthorized');
     }
-    if (!API_KEY) {
-        return res.status(500).send('WEATHERBIT_KEY is not set');
+    if (!MS_KEY) {
+        return res.status(500).send('METEOSOURCE_KEY is not set');
     }
 
     const startTime = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
@@ -73,28 +133,28 @@ module.exports = async (req, res) => {
         const msgDict = {
             uk: {
                 confirm:
-                    '✅ **Weatherbit підтвердив заморозок по ґрунту {soil} (під ранок)**\n' +
-                    'Оцінка: мін. повітря {tMin}°C, точка роси {td}°C, k={k} (хмари/вітер).\n' +
+                    '✅ **Meteosource підтвердив заморозок по ґрунту {soil} (під ранок ~{hour}:00)**\n' +
+                    'Оцінка на найхолоднішу годину ночі: повітря {t}°C, точка роси {td}°C, k={k}.\n' +
                     'Open-Meteo: мін. ґрунт {omSoil}.',
                 warn:
-                    '⚠️ **Увага! Weatherbit бачить ризик заморозку по ґрунту {soil} (під ранок)**\n' +
-                    'Open-Meteo цього не показував. Мін. повітря {tMin}°C, точка роси {td}°C, k={k}.',
+                    '⚠️ **Увага! Meteosource бачить ризик заморозку по ґрунту {soil} (під ранок ~{hour}:00)**\n' +
+                    'Open-Meteo цього не показував. Повітря {t}°C, точка роси {td}°C, k={k}.',
                 deny:
-                    'ℹ️ **Weatherbit не підтверджує ризик заморозку під ранок**\n' +
-                    'Оцінка ґрунту: **{soil}** (мін. повітря {tMin}°C, Td {td}°C, k={k}).\n' +
+                    'ℹ️ **Meteosource не підтверджує ризик заморозку під ранок**\n' +
+                    'Оцінка на ~{hour}:00: ґрунт **{soil}** (повітря {t}°C, Td {td}°C, k={k}).\n' +
                     'Open-Meteo показував заморозок (мін. ґрунт {omSoil}).'
             },
             en: {
                 confirm:
-                    '✅ **Weatherbit confirmed morning soil frost at {soil}**\n' +
-                    'Estimate: air min {tMin}°C, dew point {td}°C, k={k} (clouds/wind).\n' +
+                    '✅ **Meteosource confirmed morning soil frost at {soil} (~{hour}:00)**\n' +
+                    'Coldest overnight hour: air {t}°C, dew point {td}°C, k={k}.\n' +
                     'Open-Meteo min soil: {omSoil}.',
                 warn:
-                    '⚠️ **Attention! Weatherbit sees morning soil frost risk at {soil}**\n' +
-                    'Open-Meteo did not show this. Air min {tMin}°C, dew point {td}°C, k={k}.',
+                    '⚠️ **Attention! Meteosource sees morning soil frost risk at {soil} (~{hour}:00)**\n' +
+                    'Open-Meteo did not show this. Air {t}°C, dew point {td}°C, k={k}.',
                 deny:
-                    'ℹ️ **Weatherbit does not confirm morning frost risk**\n' +
-                    'Soil estimate: **{soil}** (air min {tMin}°C, Td {td}°C, k={k}).\n' +
+                    'ℹ️ **Meteosource does not confirm morning frost risk**\n' +
+                    'Estimate at ~{hour}:00: soil **{soil}** (air {t}°C, Td {td}°C, k={k}).\n' +
                     'Open-Meteo indicated frost (min soil {omSoil}).'
             }
         };
@@ -106,59 +166,59 @@ module.exports = async (req, res) => {
                     || cityDoc?.dashboardSnapshot?.timezone
                     || 'Europe/Kyiv';
 
-                // Target: coming night → tomorrow morning (local)
                 const todayStr = getLocalDateStr(timezone, 0);
                 const tomorrowStr = getLocalDateStr(timezone, 1);
 
-                // One alert type per city per local day
                 if (cityDoc?.lastFrostWbAlert?.date === todayStr) {
                     logLines.push(`• ${cityInfo.name} | ⏭ вже було сповіщення сьогодні`);
                     continue;
                 }
 
-                // --- Weatherbit: daily min_temp (tomorrow) + current dewpt/clouds/wind ---
-                const [wbDailyRes, wbCurRes] = await Promise.all([
-                    axios.get(
-                        `https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=3`,
-                        { timeout: 12000 }
-                    ),
-                    axios.get(
-                        `https://api.weatherbit.io/v2.0/current?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}`,
-                        { timeout: 12000 }
-                    )
-                ]);
+                // --- Meteosource hourly (metric: °C, wind m/s) ---
+                const msUrl =
+                    `https://www.meteosource.com/api/v1/${encodeURIComponent(MS_TIER)}/point` +
+                    `?lat=${cityInfo.lat}&lon=${cityInfo.lon}` +
+                    `&sections=hourly` +
+                    `&timezone=${encodeURIComponent(timezone)}` +
+                    `&language=en&units=metric` +
+                    `&key=${encodeURIComponent(MS_KEY)}`;
 
-                const dailyArr = wbDailyRes.data?.data || [];
-                const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
-                const tomorrowDaily = dailyArr.find(d => dayKey(d) === tomorrowStr) || dailyArr[1];
-                if (!tomorrowDaily || tomorrowDaily.min_temp == null) {
-                    throw new Error('Weatherbit: no min_temp for tomorrow');
+                const msRes = await axios.get(msUrl, { timeout: 15000 });
+                const hourlyData = msRes.data?.hourly?.data || [];
+                const morning = pickMorningHour(hourlyData, todayStr, tomorrowStr);
+                if (!morning || morning.dew_point == null || Number.isNaN(morning.dew_point)) {
+                    throw new Error('Meteosource: no overnight hour with temp/dew_point');
                 }
-                const tMin = Number(tomorrowDaily.min_temp);
 
-                const cur = wbCurRes.data?.data?.[0];
-                if (!cur || cur.dewpt == null) {
-                    throw new Error('Weatherbit: empty current / dewpt');
-                }
-                const dewpt = Number(cur.dewpt);
-                const clouds = cur.clouds != null ? cur.clouds : 50;
-                const windMs = cur.wind_spd != null ? cur.wind_spd : 2;
+                const tAir = morning.temperature;
+                const dewpt = morning.dew_point;
+                // Avoid formula warming when Td > T at that hour
+                const tdEff = Math.min(dewpt, tAir);
 
-                // Morning soil estimate: use forecast min air temp, not evening current temp
-                const est = estimateSoilTemp0(tMin, dewpt, clouds, windMs);
+                const est = estimateSoilTemp0(tAir, tdEff, morning.clouds, morning.windMs);
                 if (!est) {
-                    throw new Error('Cannot estimate soil (missing tMin/dewpt)');
+                    throw new Error('Cannot estimate soil from Meteosource hour');
                 }
 
-                const wbFrost = est.soilEst <= SOIL_FROST_THRESHOLD;
+                let soilEst = est.soilEst;
+                if (morning.surface_temperature != null && !Number.isNaN(morning.surface_temperature)) {
+                    soilEst = Math.min(soilEst, morning.surface_temperature);
+                }
+                if (morning.soil_temperature != null && !Number.isNaN(morning.soil_temperature)) {
+                    soilEst = Math.min(soilEst, morning.soil_temperature);
+                }
 
-                // --- Open-Meteo frost for tomorrow (snapshot or live) ---
+                const msFrost = soilEst <= SOIL_FROST_THRESHOLD;
+
+                // --- Open-Meteo frost (snapshot or live) ---
                 let omSoil0 = cityDoc?.dashboardSnapshot?.hourly?.soil_temperature_0cm || [];
                 let omTimes = cityDoc?.dashboardSnapshot?.hourly?.time || [];
                 let dailyOm = cityDoc?.dashboardSnapshot?.dailyOm || null;
 
                 const snapHasSoil = Array.isArray(omSoil0) && omSoil0.length > 0
-                    && Array.isArray(omTimes) && omTimes.some(t => String(t).startsWith(tomorrowStr));
+                    && Array.isArray(omTimes)
+                    && (omTimes.some(t => String(t).startsWith(tomorrowStr))
+                        || omTimes.some(t => String(t).startsWith(todayStr)));
 
                 if (!snapHasSoil || !dailyOm?.temperature_2m_mean) {
                     try {
@@ -183,59 +243,52 @@ module.exports = async (req, res) => {
                     }
                 }
 
-                const soilForTomorrow = [];
+                const soilForNight = [];
                 for (let i = 0; i < omTimes.length; i++) {
-                    if (String(omTimes[i]).startsWith(tomorrowStr) && omSoil0[i] != null) {
-                        soilForTomorrow.push(omSoil0[i]);
-                    }
-                }
-                // Overnight hours on "today" after 21:00 also matter for soil min into morning
-                for (let i = 0; i < omTimes.length; i++) {
-                    if (String(omTimes[i]).startsWith(todayStr) && omSoil0[i] != null) {
-                        const hour = parseInt(String(omTimes[i]).slice(11, 13), 10);
-                        if (hour >= 21) soilForTomorrow.push(omSoil0[i]);
+                    const raw = String(omTimes[i]);
+                    const d = raw.slice(0, 10);
+                    const hour = parseInt(raw.slice(11, 13), 10);
+                    if (omSoil0[i] == null || Number.isNaN(hour)) continue;
+                    if (isOvernightHour(d, hour, todayStr, tomorrowStr)) {
+                        soilForNight.push(omSoil0[i]);
                     }
                 }
 
                 let meanTomorrow = null;
-                if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
-                    const dIdx = dailyOm.time.findIndex(t => String(t).startsWith(tomorrowStr));
-                    if (dIdx >= 0) meanTomorrow = dailyOm.temperature_2m_mean[dIdx];
-                }
-                // Radiation frost: positive mean day + cold night — also accept today's mean if still positive
                 let meanToday = null;
                 if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
-                    const dIdx = dailyOm.time.findIndex(t => String(t).startsWith(todayStr));
-                    if (dIdx >= 0) meanToday = dailyOm.temperature_2m_mean[dIdx];
+                    const iTmr = dailyOm.time.findIndex(t => String(t).startsWith(tomorrowStr));
+                    const iTod = dailyOm.time.findIndex(t => String(t).startsWith(todayStr));
+                    if (iTmr >= 0) meanTomorrow = dailyOm.temperature_2m_mean[iTmr];
+                    if (iTod >= 0) meanToday = dailyOm.temperature_2m_mean[iTod];
                 }
                 const meanForOm = (meanTomorrow != null && meanTomorrow > 0)
                     ? meanTomorrow
                     : (meanToday != null && meanToday > 0 ? meanToday : meanTomorrow);
 
-                const omInfo = getSoilFrostInfo(soilForTomorrow, meanForOm);
+                const omInfo = getSoilFrostInfo(soilForNight, meanForOm);
                 const omFrost = omInfo.frost;
                 const omMinSoil = omInfo.minSoil;
 
-                // Decide message type
-                let alertType = null; // confirm | warn | deny
-                if (omFrost && wbFrost) alertType = 'confirm';
-                else if (!omFrost && wbFrost) alertType = 'warn';
-                else if (omFrost && !wbFrost) alertType = 'deny';
-                // both false → silent
+                let alertType = null;
+                if (omFrost && msFrost) alertType = 'confirm';
+                else if (!omFrost && msFrost) alertType = 'warn';
+                else if (omFrost && !msFrost) alertType = 'deny';
 
                 if (!alertType) {
                     logLines.push(
-                        `• ${cityInfo.name} | Tmin=${tMin}° Td=${dewpt}° soil≈${est.soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику під ранок`
+                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir}° Td=${dewpt}° soil≈${soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
                     );
                     await sleep(1100);
                     continue;
                 }
 
-                const soilStr = formatSoilTemp(est.soilEst);
+                const soilStr = formatSoilTemp(soilEst);
                 const omSoilStr = formatSoilTemp(omMinSoil);
                 const kStr = String(est.k);
-                const tMinStr = Number(tMin).toFixed(1);
+                const tStr = Number(tAir).toFixed(1);
                 const tdStr = Number(dewpt).toFixed(1);
+                const hourStr = String(morning.hour).padStart(2, '0');
 
                 for (const user of cityInfo.users) {
                     const lang = user.language || 'uk';
@@ -244,14 +297,15 @@ module.exports = async (req, res) => {
                         .replace(/\{soil\}/g, soilStr)
                         .replace(/\{omSoil\}/g, omSoilStr)
                         .replace(/\{k\}/g, kStr)
-                        .replace(/\{tMin\}/g, tMinStr)
-                        .replace(/\{td\}/g, tdStr);
+                        .replace(/\{t\}/g, tStr)
+                        .replace(/\{td\}/g, tdStr)
+                        .replace(/\{hour\}/g, hourStr);
 
                     try {
                         await bot.telegram.sendMessage(user.telegramId, text, { parse_mode: 'Markdown' });
                         alertsTotal++;
                     } catch (sendErr) {
-                        console.error(`Frost WB send to ${user.telegramId}:`, sendErr.message);
+                        console.error(`Frost MS send to ${user.telegramId}:`, sendErr.message);
                     }
                     await sleep(50);
                 }
@@ -263,8 +317,9 @@ module.exports = async (req, res) => {
                             lastFrostWbAlert: {
                                 date: todayStr,
                                 type: alertType,
-                                soilEst: Math.round(est.soilEst * 10) / 10,
-                                tMin: Math.round(tMin * 10) / 10
+                                soilEst: Math.round(soilEst * 10) / 10,
+                                source: 'meteosource',
+                                hour: morning.hour
                             }
                         }
                     },
@@ -273,7 +328,7 @@ module.exports = async (req, res) => {
 
                 const typeIcon = alertType === 'confirm' ? '✅' : alertType === 'warn' ? '⚠️' : 'ℹ️';
                 logLines.push(
-                    `• ${cityInfo.name} | ${typeIcon} ${alertType} | Tmin=${tMin}° soil≈${est.soilEst.toFixed(1)}° | OM ${omFrost ? omSoilStr : 'ні'}`
+                    `• ${cityInfo.name} | ${typeIcon} ${alertType} | ~${hourStr}:00 T=${tAir}° soil≈${soilEst.toFixed(1)}° | OM ${omFrost ? omSoilStr : 'ні'}`
                 );
 
                 await sleep(1100);
@@ -285,7 +340,7 @@ module.exports = async (req, res) => {
         }
 
         const summary = [
-            `📋 <b>Перевірка заморозку під ранок (Weatherbit)</b> — ${startTime}`,
+            `📋 <b>Перевірка заморозку під ранок (Meteosource)</b> — ${startTime}`,
             `👥 Міст: ${Object.keys(uniqueCities).length}`,
             `🚨 Сповіщень: ${alertsTotal}`,
             `❌ Помилок: ${errorsCount}`,
@@ -293,10 +348,10 @@ module.exports = async (req, res) => {
             ...logLines
         ].join('\n');
         await log(summary);
-        res.status(200).send('Processed (frost-wb)');
+        res.status(200).send('Processed (frost-ms)');
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Frost WB Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
+        await log(`❌ <b>Frost MS Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
         res.status(500).send('Error');
     }
 };
