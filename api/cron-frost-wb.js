@@ -1,21 +1,28 @@
 /**
  * Evening soil-frost cross-check (~21:00 local per city).
  *
- * Data source: **Meteosource** hourly forecast (not Weatherbit).
+ * Data source: **Tomorrow.io** hourly forecast (timelines API).
  * We take the **coldest hour** in the overnight window (local 21:00 today → 08:00
  * tomorrow), then estimate morning soil surface:
  *   T_soil ≈ T − k · (T − T_dew)
- * with T, dew_point, cloud_cover, wind from that same forecast hour.
+ * with T, dewPoint, cloudCover, windSpeed from that same forecast hour.
  *
- * Compared with Open-Meteo soil frost (snapshot or live):
- * - OM frost + MS frost  → confirmation
- * - no OM + MS frost     → attention warning
- * - OM frost + no MS     → Meteosource does not see the risk
- * - both false           → silent
+ * Primary frost signal (user rule):
+ *   air temp ≤ +3.0 °C  AND  dew point ≤ +2.0 °C
+ *
+ * Formula (radiation frost model) is always computed and reported.
+ *
+ * Message tiers:
+ *   full     — thresholds + formula frost  → high danger / full combo
+ *   risk     — thresholds only, formula still warm → confirmed risk, may not materialize
+ *   formula  — formula frost only (no thresholds)
+ *   deny     — Open-Meteo said frost, but neither thresholds nor formula confirm
+ *   silent   — nothing
+ *
+ * Compared with Open-Meteo soil frost (snapshot or live).
  *
  * Env:
- *   METEOSOURCE_KEY  — required
- *   METEOSOURCE_TIER — optional, default "free" (url path /api/v1/{tier}/point)
+ *   TOMORROW_IO_KEY  — required
  */
 require('dotenv').config();
 const axios = require('axios');
@@ -32,9 +39,10 @@ const {
     formatSoilTemp
 } = require('../utils/weather');
 
-const MS_KEY = process.env.METEOSOURCE_KEY;
-const MS_TIER = process.env.METEOSOURCE_TIER || 'free';
-const SOIL_FROST_THRESHOLD = 0.5; // °C — same as OM rule
+const TIO_KEY = process.env.TOMORROW_IO_KEY;
+const SOIL_FROST_THRESHOLD = 0.5; // °C — same as OM rule / formula frost
+const AIR_FROST_THRESHOLD = 3.0;  // °C — air temp ≤ this
+const DEW_FROST_THRESHOLD = 2.0;  // °C — dew point ≤ this
 
 /** Overnight hours local: from 21 today through 08 tomorrow (inclusive). */
 function isOvernightHour(dateStr, hour, todayStr, tomorrowStr) {
@@ -43,53 +51,53 @@ function isOvernightHour(dateStr, hour, todayStr, tomorrowStr) {
     return false;
 }
 
-/** Approximate dew point (°C) from air temp and RH% (Magnus). */
-function dewPointFromHumidity(tempC, rh) {
-    const T = Number(tempC);
-    const RH = Number(rh);
-    if (Number.isNaN(T) || Number.isNaN(RH) || RH <= 0) return null;
-    const a = 17.625;
-    const b = 243.04;
-    const alpha = Math.log(Math.min(100, Math.max(0.1, RH)) / 100) + (a * T) / (b + T);
-    return (b * alpha) / (a - alpha);
-}
+/**
+ * Parse one Tomorrow.io hourly interval.
+ * Response shape: { startTime: "2026-10-01T05:00:00Z", values: { temperature, dewPoint, ... } }
+ * or weather/forecast style: { time: "...", values: { ... } }
+ */
+function parseHourFields(interval, timezone) {
+    const raw = String(interval.startTime || interval.time || '');
+    if (!raw) return null;
 
-function parseHourFields(h) {
-    const raw = String(h.date || h.time || '');
-    // "2026-10-01T05:00:00" or with offset "2026-10-01T05:00:00+03:00"
-    const dateStr = raw.slice(0, 10);
-    const hour = parseInt(raw.slice(11, 13), 10);
-    const t = h.temperature != null ? Number(h.temperature) : null;
+    // Convert to local date/hour via Intl (timezone from city)
+    let dateStr;
+    let hour;
+    try {
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return null;
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            hour12: false
+        }).formatToParts(d);
+        const y = parts.find(p => p.type === 'year')?.value;
+        const m = parts.find(p => p.type === 'month')?.value;
+        const day = parts.find(p => p.type === 'day')?.value;
+        const h = parts.find(p => p.type === 'hour')?.value;
+        if (!y || !m || !day || h == null) return null;
+        dateStr = `${y}-${m}-${day}`;
+        hour = parseInt(h, 10) % 24;
+    } catch {
+        // Fallback: assume ISO local-ish
+        dateStr = raw.slice(0, 10);
+        hour = parseInt(raw.slice(11, 13), 10);
+    }
+
+    const v = interval.values || interval;
+    const t = v.temperature != null ? Number(v.temperature) : null;
     if (t == null || Number.isNaN(t) || Number.isNaN(hour) || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
         return null;
     }
 
+    const dew = v.dewPoint != null ? Number(v.dewPoint) : null;
     let clouds = 50;
-    if (h.cloud_cover != null) {
-        if (typeof h.cloud_cover === 'object' && h.cloud_cover.total != null) {
-            clouds = Number(h.cloud_cover.total);
-        } else if (typeof h.cloud_cover === 'number') {
-            clouds = h.cloud_cover;
-        }
-    }
-
+    if (v.cloudCover != null) clouds = Number(v.cloudCover);
     let windMs = 2;
-    if (h.wind != null) {
-        if (typeof h.wind === 'object' && h.wind.speed != null) {
-            windMs = Number(h.wind.speed);
-        } else if (typeof h.wind === 'number') {
-            windMs = h.wind;
-        }
-    }
-    // Some responses use wind_speed at top level
-    if ((windMs == null || Number.isNaN(windMs)) && h.wind_speed != null) {
-        windMs = Number(h.wind_speed);
-    }
-
-    let dew = h.dew_point != null ? Number(h.dew_point) : null;
-    if ((dew == null || Number.isNaN(dew)) && h.humidity != null) {
-        dew = dewPointFromHumidity(t, h.humidity);
-    }
+    if (v.windSpeed != null) windMs = Number(v.windSpeed);
 
     return {
         temperature: t,
@@ -97,23 +105,21 @@ function parseHourFields(h) {
         clouds: Number.isNaN(clouds) ? 50 : clouds,
         windMs: Number.isNaN(windMs) ? 2 : windMs,
         date: dateStr,
-        hour,
-        soil_temperature: h.soil_temperature != null ? Number(h.soil_temperature) : null,
-        surface_temperature: h.surface_temperature != null ? Number(h.surface_temperature) : null
+        hour
     };
 }
 
 /**
- * Pick the coldest overnight hour from Meteosource hourly.data[].
- * Fallback: coldest hour among all returned hours (free tier may be short).
+ * Pick the coldest overnight hour from Tomorrow.io intervals.
+ * Prefer hours that have dew_point; among those pick coldest air temp.
  */
-function pickMorningHour(hourlyData, todayStr, tomorrowStr) {
-    if (!Array.isArray(hourlyData) || hourlyData.length === 0) return null;
+function pickMorningHour(intervals, todayStr, tomorrowStr, timezone) {
+    if (!Array.isArray(intervals) || intervals.length === 0) return null;
 
     const overnight = [];
     const all = [];
-    for (const h of hourlyData) {
-        const parsed = parseHourFields(h);
+    for (const h of intervals) {
+        const parsed = parseHourFields(h, timezone);
         if (!parsed) continue;
         all.push(parsed);
         if (isOvernightHour(parsed.date, parsed.hour, todayStr, tomorrowStr)) {
@@ -124,7 +130,6 @@ function pickMorningHour(hourlyData, todayStr, tomorrowStr) {
     const pool = overnight.length > 0 ? overnight : all;
     if (pool.length === 0) return null;
 
-    // Prefer hours that have dew_point; among those (or all) pick coldest air temp
     const withDew = pool.filter(p => p.dew_point != null);
     const candidates = withDew.length > 0 ? withDew : pool;
     let best = candidates[0];
@@ -141,8 +146,8 @@ module.exports = async (req, res) => {
     if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
         return res.status(401).send('Unauthorized');
     }
-    if (!MS_KEY) {
-        return res.status(500).send('METEOSOURCE_KEY is not set');
+    if (!TIO_KEY) {
+        return res.status(500).send('TOMORROW_IO_KEY is not set');
     }
 
     const startTime = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
@@ -170,32 +175,60 @@ module.exports = async (req, res) => {
         let errorsCount = 0;
         const logLines = [];
 
+        /**
+         * Message templates.
+         * Placeholders: {soil} {omSoil} {k} {t} {td} {hour}
+         */
         const msgDict = {
             uk: {
-                confirm:
-                    '✅ **Meteosource підтвердив заморозок по ґрунту {soil} (під ранок ~{hour}:00)**\n' +
-                    'Оцінка на найхолоднішу годину ночі: повітря {t}°C, точка роси {td}°C, k={k}.\n' +
+                full:
+                    '🔴 **Високий рівень небезпеки — повне комбо**\n' +
+                    'Під ранок (~{hour}:00) підтверджено приморозок:\n' +
+                    '• повітря **{t}°C** (≤ +3.0°C)\n' +
+                    '• точка роси **{td}°C** (≤ +2.0°C)\n' +
+                    '• за формулою ґрунт ≈ **{soil}** (k={k})\n' +
+                    'Open-Meteo: мін. ґрунт {omSoil}.\n' +
+                    'Рекомендовано захист рослин (укриття, полив, димлення).',
+                risk:
+                    '⚠️ **Підтверджений ризик, але за формулою t ґрунту ще завелика**\n' +
+                    'Під ранок (~{hour}:00): повітря **{t}°C**, точка роси **{td}°C** — умови для приморозку є.\n' +
+                    'За радіаційною формулою ґрунт ≈ **{soil}** (k={k}) — вище порогу 0.5°C.\n' +
+                    'Ризик є, проте приморозок може і не реалізуватися.\n' +
                     'Open-Meteo: мін. ґрунт {omSoil}.',
-                warn:
-                    '⚠️ **Увага! Meteosource бачить ризик заморозку по ґрунту {soil} (під ранок ~{hour}:00)**\n' +
-                    'Open-Meteo цього не показував. Повітря {t}°C, точка роси {td}°C, k={k}.',
+                formula:
+                    '⚠️ **Формула бачить ризик заморозку по ґрунту {soil}** (~{hour}:00)\n' +
+                    'Повітря {t}°C, точка роси {td}°C, k={k}.\n' +
+                    'Порогові умови (T≤+3 / Td≤+2) не виконані повністю.\n' +
+                    'Open-Meteo: мін. ґрунт {omSoil}.',
                 deny:
-                    'ℹ️ **Meteosource не підтверджує ризик заморозку під ранок**\n' +
-                    'Оцінка на ~{hour}:00: ґрунт **{soil}** (повітря {t}°C, Td {td}°C, k={k}).\n' +
-                    'Open-Meteo показував заморозок (мін. ґрунт {omSoil}).'
+                    'ℹ️ **Не підтверджено**\n' +
+                    'Open-Meteo показував заморозок (мін. ґрунт {omSoil}), але перевірка не підтверджує:\n' +
+                    'оцінка на ~{hour}:00 — ґрунт **{soil}** (повітря {t}°C, Td {td}°C, k={k}).'
             },
             en: {
-                confirm:
-                    '✅ **Meteosource confirmed morning soil frost at {soil} (~{hour}:00)**\n' +
-                    'Coldest overnight hour: air {t}°C, dew point {td}°C, k={k}.\n' +
+                full:
+                    '🔴 **High danger — full combo**\n' +
+                    'Morning frost confirmed (~{hour}:00):\n' +
+                    '• air **{t}°C** (≤ +3.0°C)\n' +
+                    '• dew point **{td}°C** (≤ +2.0°C)\n' +
+                    '• formula soil ≈ **{soil}** (k={k})\n' +
+                    'Open-Meteo min soil: {omSoil}.\n' +
+                    'Protect plants (cover, watering, smoke).',
+                risk:
+                    '⚠️ **Confirmed risk, but formula soil temp is still too high**\n' +
+                    'Morning (~{hour}:00): air **{t}°C**, dew point **{td}°C** — frost conditions are present.\n' +
+                    'Radiation formula soil ≈ **{soil}** (k={k}) — above the 0.5°C threshold.\n' +
+                    'Risk exists, yet frost may not fully materialize.\n' +
                     'Open-Meteo min soil: {omSoil}.',
-                warn:
-                    '⚠️ **Attention! Meteosource sees morning soil frost risk at {soil} (~{hour}:00)**\n' +
-                    'Open-Meteo did not show this. Air {t}°C, dew point {td}°C, k={k}.',
+                formula:
+                    '⚠️ **Formula sees soil frost risk at {soil}** (~{hour}:00)\n' +
+                    'Air {t}°C, dew point {td}°C, k={k}.\n' +
+                    'Threshold conditions (T≤+3 / Td≤+2) are not fully met.\n' +
+                    'Open-Meteo min soil: {omSoil}.',
                 deny:
-                    'ℹ️ **Meteosource does not confirm morning frost risk**\n' +
-                    'Estimate at ~{hour}:00: soil **{soil}** (air {t}°C, Td {td}°C, k={k}).\n' +
-                    'Open-Meteo indicated frost (min soil {omSoil}).'
+                    'ℹ️ **Not confirmed**\n' +
+                    'Open-Meteo indicated frost (min soil {omSoil}), but the check does not confirm:\n' +
+                    'estimate at ~{hour}:00 — soil **{soil}** (air {t}°C, Td {td}°C, k={k}).'
             }
         };
 
@@ -214,40 +247,58 @@ module.exports = async (req, res) => {
                     continue;
                 }
 
-                // --- Meteosource hourly (metric: °C, wind m/s) ---
-                const msUrl =
-                    `https://www.meteosource.com/api/v1/${encodeURIComponent(MS_TIER)}/point` +
-                    `?lat=${cityInfo.lat}&lon=${cityInfo.lon}` +
-                    `&sections=hourly` +
+                // --- Tomorrow.io hourly (metric: °C, wind m/s) ---
+                // GET /v4/timelines — fields include dewPoint natively
+                const fields = ['temperature', 'dewPoint', 'cloudCover', 'windSpeed'].join(',');
+                const tioUrl =
+                    `https://api.tomorrow.io/v4/timelines` +
+                    `?location=${cityInfo.lat},${cityInfo.lon}` +
+                    `&fields=${fields}` +
+                    `&timesteps=1h` +
+                    `&units=metric` +
                     `&timezone=${encodeURIComponent(timezone)}` +
-                    `&language=en&units=metric` +
-                    `&key=${encodeURIComponent(MS_KEY)}`;
+                    `&startTime=now` +
+                    `&endTime=nowPlus18h` +
+                    `&apikey=${encodeURIComponent(TIO_KEY)}`;
 
-                const msRes = await axios.get(msUrl, { timeout: 15000 });
-                // Support both shapes: hourly.data[] (docs) and hourly[] (some wrappers)
-                const hourlyRaw = msRes.data?.hourly;
-                const hourlyData = Array.isArray(hourlyRaw?.data)
-                    ? hourlyRaw.data
-                    : (Array.isArray(hourlyRaw) ? hourlyRaw : []);
-                if (hourlyData.length === 0) {
-                    const keys = msRes.data ? Object.keys(msRes.data).join(',') : 'null';
-                    throw new Error(`Meteosource: empty hourly (response keys: ${keys})`);
+                const tioRes = await axios.get(tioUrl, { timeout: 15000 });
+                const timelines = tioRes.data?.data?.timelines || [];
+                const hourlyTimeline = timelines.find(t => t.timestep === '1h') || timelines[0];
+                const intervals = hourlyTimeline?.intervals || [];
+
+                if (intervals.length === 0) {
+                    const keys = tioRes.data ? Object.keys(tioRes.data).join(',') : 'null';
+                    throw new Error(`Tomorrow.io: empty hourly intervals (response keys: ${keys})`);
                 }
-                const morning = pickMorningHour(hourlyData, todayStr, tomorrowStr);
+
+                const morning = pickMorningHour(intervals, todayStr, tomorrowStr, timezone);
                 if (!morning) {
-                    const sample = hourlyData[0] ? Object.keys(hourlyData[0]).join(',') : 'none';
-                    throw new Error(`Meteosource: no usable hour (n=${hourlyData.length}, sample keys: ${sample})`);
+                    throw new Error(`Tomorrow.io: no usable overnight hour (n=${intervals.length})`);
                 }
+
                 const tAir = morning.temperature;
                 let dewpt = morning.dew_point;
-                let dewSource = morning.dew_point != null ? 'meteosource' : null;
 
-                // --- Open-Meteo: soil + mean + dewpoint (free MS hourly has no dew_point/humidity) ---
+                if (dewpt == null || Number.isNaN(Number(dewpt))) {
+                    throw new Error('Tomorrow.io: dewPoint missing for coldest hour');
+                }
+
+                // Avoid formula warming when Td > T at that hour
+                const tdEff = Math.min(dewpt, tAir);
+
+                const est = estimateSoilTemp0(tAir, tdEff, morning.clouds, morning.windMs);
+                if (!est) {
+                    throw new Error('Cannot estimate soil from Tomorrow.io hour');
+                }
+
+                const soilEst = est.soilEst;
+                const formulaFrost = soilEst <= SOIL_FROST_THRESHOLD;
+                const thresholdRisk = (tAir <= AIR_FROST_THRESHOLD) && (dewpt <= DEW_FROST_THRESHOLD);
+
+                // --- Open-Meteo soil + mean (for cross-check) ---
                 let omSoil0 = cityDoc?.dashboardSnapshot?.hourly?.soil_temperature_0cm || [];
                 let omTimes = cityDoc?.dashboardSnapshot?.hourly?.time || [];
                 let dailyOm = cityDoc?.dashboardSnapshot?.dailyOm || null;
-                let omDewTimes = [];
-                let omDewVals = [];
 
                 const snapHasSoil = Array.isArray(omSoil0) && omSoil0.length > 0
                     && Array.isArray(omTimes)
@@ -255,20 +306,15 @@ module.exports = async (req, res) => {
                         || omTimes.some(t => String(t).startsWith(todayStr)));
 
                 try {
-                    const needOmDew = dewpt == null || Number.isNaN(Number(dewpt));
                     const omUrl =
                         `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                        `&hourly=soil_temperature_0cm,dewpoint_2m` +
+                        `&hourly=soil_temperature_0cm` +
                         `&daily=temperature_2m_mean` +
                         `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
                     const omRes = await axios.get(omUrl, { timeout: 12000 });
-                    if (omRes.data?.hourly) {
-                        if (!snapHasSoil) {
-                            omTimes = omRes.data.hourly.time || [];
-                            omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
-                        }
-                        omDewTimes = omRes.data.hourly.time || [];
-                        omDewVals = omRes.data.hourly.dewpoint_2m || [];
+                    if (omRes.data?.hourly && !snapHasSoil) {
+                        omTimes = omRes.data.hourly.time || [];
+                        omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
                     }
                     if (omRes.data?.daily && !dailyOm?.temperature_2m_mean) {
                         dailyOm = {
@@ -277,52 +323,8 @@ module.exports = async (req, res) => {
                         };
                     }
                 } catch (omErr) {
-                    console.error('OM frost/dew fetch error:', omErr.message);
+                    console.error('OM frost fetch error:', omErr.message);
                 }
-
-                // Match OM dewpoint to the same local hour as Meteosource coldest hour
-                if ((dewpt == null || Number.isNaN(Number(dewpt))) && omDewTimes.length && omDewVals.length) {
-                    const targetPrefix = `${morning.date}T${String(morning.hour).padStart(2, '0')}`;
-                    let dIdx = omDewTimes.findIndex(t => String(t).startsWith(targetPrefix));
-                    if (dIdx < 0) {
-                        // nearest hour same calendar day in overnight window
-                        dIdx = omDewTimes.findIndex(t => {
-                            const s = String(t);
-                            return s.startsWith(morning.date) && parseInt(s.slice(11, 13), 10) === morning.hour;
-                        });
-                    }
-                    if (dIdx >= 0 && omDewVals[dIdx] != null) {
-                        dewpt = Number(omDewVals[dIdx]);
-                        dewSource = 'open-meteo';
-                    }
-                }
-
-                // Last resort: clear calm nights often near saturation — assume RH≈90%
-                if (dewpt == null || Number.isNaN(Number(dewpt))) {
-                    dewpt = dewPointFromHumidity(tAir, 90);
-                    dewSource = 'rh90-approx';
-                }
-                if (dewpt == null || Number.isNaN(Number(dewpt))) {
-                    throw new Error('No dew point available (MS free has none; OM/approx failed)');
-                }
-
-                // Avoid formula warming when Td > T at that hour
-                const tdEff = Math.min(dewpt, tAir);
-
-                const est = estimateSoilTemp0(tAir, tdEff, morning.clouds, morning.windMs);
-                if (!est) {
-                    throw new Error('Cannot estimate soil from Meteosource hour');
-                }
-
-                let soilEst = est.soilEst;
-                if (morning.surface_temperature != null && !Number.isNaN(morning.surface_temperature)) {
-                    soilEst = Math.min(soilEst, morning.surface_temperature);
-                }
-                if (morning.soil_temperature != null && !Number.isNaN(morning.soil_temperature)) {
-                    soilEst = Math.min(soilEst, morning.soil_temperature);
-                }
-
-                const msFrost = soilEst <= SOIL_FROST_THRESHOLD;
 
                 const soilForNight = [];
                 for (let i = 0; i < omTimes.length; i++) {
@@ -351,14 +353,21 @@ module.exports = async (req, res) => {
                 const omFrost = omInfo.frost;
                 const omMinSoil = omInfo.minSoil;
 
+                // --- Decide alert type ---
                 let alertType = null;
-                if (omFrost && msFrost) alertType = 'confirm';
-                else if (!omFrost && msFrost) alertType = 'warn';
-                else if (omFrost && !msFrost) alertType = 'deny';
+                if (thresholdRisk && formulaFrost) {
+                    alertType = 'full';       // high danger / full combo
+                } else if (thresholdRisk && !formulaFrost) {
+                    alertType = 'risk';       // thresholds yes, formula still warm
+                } else if (formulaFrost && !thresholdRisk) {
+                    alertType = 'formula';    // formula only
+                } else if (omFrost && !thresholdRisk && !formulaFrost) {
+                    alertType = 'deny';       // OM said yes, we say no
+                }
 
                 if (!alertType) {
                     logLines.push(
-                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir}° Td=${Number(dewpt).toFixed(1)}°(${dewSource}) soil≈${soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
+                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir.toFixed(1)}° Td=${Number(dewpt).toFixed(1)}° soil≈${soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
                     );
                     await sleep(1100);
                     continue;
@@ -386,7 +395,7 @@ module.exports = async (req, res) => {
                         await bot.telegram.sendMessage(user.telegramId, text, { parse_mode: 'Markdown' });
                         alertsTotal++;
                     } catch (sendErr) {
-                        console.error(`Frost MS send to ${user.telegramId}:`, sendErr.message);
+                        console.error(`Frost TIO send to ${user.telegramId}:`, sendErr.message);
                     }
                     await sleep(50);
                 }
@@ -399,7 +408,9 @@ module.exports = async (req, res) => {
                                 date: todayStr,
                                 type: alertType,
                                 soilEst: Math.round(soilEst * 10) / 10,
-                                source: 'meteosource',
+                                tAir: Math.round(tAir * 10) / 10,
+                                dewpt: Math.round(dewpt * 10) / 10,
+                                source: 'tomorrow.io',
                                 hour: morning.hour
                             }
                         }
@@ -407,9 +418,12 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 );
 
-                const typeIcon = alertType === 'confirm' ? '✅' : alertType === 'warn' ? '⚠️' : 'ℹ️';
+                const typeIcon = alertType === 'full' ? '🔴'
+                    : alertType === 'risk' ? '⚠️'
+                    : alertType === 'formula' ? '⚠️'
+                    : 'ℹ️';
                 logLines.push(
-                    `• ${cityInfo.name} | ${typeIcon} ${alertType} | ~${hourStr}:00 T=${tAir}° soil≈${soilEst.toFixed(1)}° | OM ${omFrost ? omSoilStr : 'ні'}`
+                    `• ${cityInfo.name} | ${typeIcon} ${alertType} | ~${hourStr}:00 T=${tStr}° Td=${tdStr}° soil≈${soilEst.toFixed(1)}° | OM ${omFrost ? omSoilStr : 'ні'}`
                 );
 
                 await sleep(1100);
@@ -421,7 +435,7 @@ module.exports = async (req, res) => {
         }
 
         const summary = [
-            `📋 <b>Перевірка заморозку під ранок (Meteosource)</b> — ${startTime}`,
+            `📋 <b>Перевірка заморозку під ранок (Tomorrow.io)</b> — ${startTime}`,
             `👥 Міст: ${Object.keys(uniqueCities).length}`,
             `🚨 Сповіщень: ${alertsTotal}`,
             `❌ Помилок: ${errorsCount}`,
@@ -429,10 +443,10 @@ module.exports = async (req, res) => {
             ...logLines
         ].join('\n');
         await log(summary);
-        res.status(200).send('Processed (frost-ms)');
+        res.status(200).send('Processed (frost-tio)');
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Frost MS Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
+        await log(`❌ <b>Frost TIO Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
         res.status(500).send('Error');
     }
 };
