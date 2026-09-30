@@ -43,53 +43,93 @@ function isOvernightHour(dateStr, hour, todayStr, tomorrowStr) {
     return false;
 }
 
+/** Approximate dew point (°C) from air temp and RH% (Magnus). */
+function dewPointFromHumidity(tempC, rh) {
+    const T = Number(tempC);
+    const RH = Number(rh);
+    if (Number.isNaN(T) || Number.isNaN(RH) || RH <= 0) return null;
+    const a = 17.625;
+    const b = 243.04;
+    const alpha = Math.log(Math.min(100, Math.max(0.1, RH)) / 100) + (a * T) / (b + T);
+    return (b * alpha) / (a - alpha);
+}
+
+function parseHourFields(h) {
+    const raw = String(h.date || h.time || '');
+    // "2026-10-01T05:00:00" or with offset "2026-10-01T05:00:00+03:00"
+    const dateStr = raw.slice(0, 10);
+    const hour = parseInt(raw.slice(11, 13), 10);
+    const t = h.temperature != null ? Number(h.temperature) : null;
+    if (t == null || Number.isNaN(t) || Number.isNaN(hour) || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return null;
+    }
+
+    let clouds = 50;
+    if (h.cloud_cover != null) {
+        if (typeof h.cloud_cover === 'object' && h.cloud_cover.total != null) {
+            clouds = Number(h.cloud_cover.total);
+        } else if (typeof h.cloud_cover === 'number') {
+            clouds = h.cloud_cover;
+        }
+    }
+
+    let windMs = 2;
+    if (h.wind != null) {
+        if (typeof h.wind === 'object' && h.wind.speed != null) {
+            windMs = Number(h.wind.speed);
+        } else if (typeof h.wind === 'number') {
+            windMs = h.wind;
+        }
+    }
+    // Some responses use wind_speed at top level
+    if ((windMs == null || Number.isNaN(windMs)) && h.wind_speed != null) {
+        windMs = Number(h.wind_speed);
+    }
+
+    let dew = h.dew_point != null ? Number(h.dew_point) : null;
+    if ((dew == null || Number.isNaN(dew)) && h.humidity != null) {
+        dew = dewPointFromHumidity(t, h.humidity);
+    }
+
+    return {
+        temperature: t,
+        dew_point: (dew != null && !Number.isNaN(dew)) ? dew : null,
+        clouds: Number.isNaN(clouds) ? 50 : clouds,
+        windMs: Number.isNaN(windMs) ? 2 : windMs,
+        date: dateStr,
+        hour,
+        soil_temperature: h.soil_temperature != null ? Number(h.soil_temperature) : null,
+        surface_temperature: h.surface_temperature != null ? Number(h.surface_temperature) : null
+    };
+}
+
 /**
  * Pick the coldest overnight hour from Meteosource hourly.data[].
- * Returns { temperature, dew_point, clouds, windMs, date, hour } or null.
+ * Fallback: coldest hour among all returned hours (free tier may be short).
  */
 function pickMorningHour(hourlyData, todayStr, tomorrowStr) {
     if (!Array.isArray(hourlyData) || hourlyData.length === 0) return null;
 
-    let best = null;
+    const overnight = [];
+    const all = [];
     for (const h of hourlyData) {
-        const raw = String(h.date || '');
-        const dateStr = raw.slice(0, 10);
-        const hour = parseInt(raw.slice(11, 13), 10);
-        if (Number.isNaN(hour) || !isOvernightHour(dateStr, hour, todayStr, tomorrowStr)) {
-            continue;
+        const parsed = parseHourFields(h);
+        if (!parsed) continue;
+        all.push(parsed);
+        if (isOvernightHour(parsed.date, parsed.hour, todayStr, tomorrowStr)) {
+            overnight.push(parsed);
         }
-        const t = h.temperature != null ? Number(h.temperature) : null;
-        if (t == null || Number.isNaN(t)) continue;
+    }
 
-        if (!best || t < best.temperature) {
-            let clouds = 50;
-            if (h.cloud_cover != null) {
-                if (typeof h.cloud_cover === 'object' && h.cloud_cover.total != null) {
-                    clouds = Number(h.cloud_cover.total);
-                } else if (typeof h.cloud_cover === 'number') {
-                    clouds = h.cloud_cover;
-                }
-            }
-            let windMs = 2;
-            if (h.wind != null) {
-                if (typeof h.wind === 'object' && h.wind.speed != null) {
-                    windMs = Number(h.wind.speed);
-                } else if (typeof h.wind === 'number') {
-                    windMs = h.wind;
-                }
-            }
-            const dew = h.dew_point != null ? Number(h.dew_point) : null;
-            best = {
-                temperature: t,
-                dew_point: dew,
-                clouds: Number.isNaN(clouds) ? 50 : clouds,
-                windMs: Number.isNaN(windMs) ? 2 : windMs,
-                date: dateStr,
-                hour,
-                soil_temperature: h.soil_temperature != null ? Number(h.soil_temperature) : null,
-                surface_temperature: h.surface_temperature != null ? Number(h.surface_temperature) : null
-            };
-        }
+    const pool = overnight.length > 0 ? overnight : all;
+    if (pool.length === 0) return null;
+
+    // Prefer hours that have dew_point; among those (or all) pick coldest air temp
+    const withDew = pool.filter(p => p.dew_point != null);
+    const candidates = withDew.length > 0 ? withDew : pool;
+    let best = candidates[0];
+    for (const p of candidates) {
+        if (p.temperature < best.temperature) best = p;
     }
     return best;
 }
@@ -184,10 +224,23 @@ module.exports = async (req, res) => {
                     `&key=${encodeURIComponent(MS_KEY)}`;
 
                 const msRes = await axios.get(msUrl, { timeout: 15000 });
-                const hourlyData = msRes.data?.hourly?.data || [];
+                // Support both shapes: hourly.data[] (docs) and hourly[] (some wrappers)
+                const hourlyRaw = msRes.data?.hourly;
+                const hourlyData = Array.isArray(hourlyRaw?.data)
+                    ? hourlyRaw.data
+                    : (Array.isArray(hourlyRaw) ? hourlyRaw : []);
+                if (hourlyData.length === 0) {
+                    const keys = msRes.data ? Object.keys(msRes.data).join(',') : 'null';
+                    throw new Error(`Meteosource: empty hourly (response keys: ${keys})`);
+                }
                 const morning = pickMorningHour(hourlyData, todayStr, tomorrowStr);
-                if (!morning || morning.dew_point == null || Number.isNaN(morning.dew_point)) {
-                    throw new Error('Meteosource: no overnight hour with temp/dew_point');
+                if (!morning) {
+                    const sample = hourlyData[0] ? Object.keys(hourlyData[0]).join(',') : 'none';
+                    throw new Error(`Meteosource: no usable hour (n=${hourlyData.length}, sample keys: ${sample})`);
+                }
+                if (morning.dew_point == null || Number.isNaN(morning.dew_point)) {
+                    const sample = hourlyData[0] ? Object.keys(hourlyData[0]).join(',') : 'none';
+                    throw new Error(`Meteosource: no dew_point/humidity (hour keys: ${sample})`);
                 }
 
                 const tAir = morning.temperature;
