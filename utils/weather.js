@@ -118,6 +118,40 @@ const frostWarningText = (lang = 'uk', minSoil = null) => {
         : '⚠️ Soil frost expected';
 };
 
+/**
+ * Estimate soil surface temperature (0 cm) from air temp, dew point, clouds and wind.
+ * Radiation-frost model: T_soil ≈ T_air − k · (T_air − T_dew)
+ *
+ * k is higher under clear skies and light wind (stronger nocturnal cooling).
+ * @param {number} tempAir - air temperature °C (2 m)
+ * @param {number} dewPoint - dew point °C
+ * @param {number} [clouds=50] - cloud cover 0–100 %
+ * @param {number} [windMs=2] - wind speed m/s
+ * @returns {{ soilEst: number, k: number } | null}
+ */
+const estimateSoilTemp0 = (tempAir, dewPoint, clouds = 50, windMs = 2) => {
+    const T = Number(tempAir);
+    const Td = Number(dewPoint);
+    if (Number.isNaN(T) || Number.isNaN(Td)) return null;
+
+    const cloudFrac = Math.min(1, Math.max(0, Number(clouds) / 100));
+    // Wind mixing: calm ~0, strong (≥8 m/s) ~1
+    const windFrac = Math.min(1, Math.max(0, Number(windMs) / 8));
+
+    // Clear + calm → k ≈ 0.95; overcast or windy → much lower
+    const k = 0.95 * (1 - 0.72 * cloudFrac) * (1 - 0.55 * windFrac);
+    const soilEst = T - k * (T - Td);
+    return { soilEst, k: Math.round(k * 100) / 100 };
+};
+
+/** Format soil temp for messages: -0.3°C / +1.2°C */
+const formatSoilTemp = (v) => {
+    if (v == null || Number.isNaN(Number(v))) return '—';
+    const n = Number(v);
+    const sign = n > 0 ? '+' : '';
+    return `${sign}${n.toFixed(1)}°C`;
+};
+
 module.exports = {
     WEATHER_CODES,
     WIND_DIRECTIONS,
@@ -127,6 +161,8 @@ module.exports = {
     getIconMapping,
     getSoilFrostInfo,
     hasSoilFrost,
-    frostWarningText
+    frostWarningText,
+    estimateSoilTemp0,
+    formatSoilTemp
 };
 
