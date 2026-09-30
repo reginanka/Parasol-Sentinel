@@ -77,12 +77,56 @@ const getIconMapping = (code) => {
     return mapping[code] || (code.startsWith('r') ? 'rain' : code.startsWith('s') ? 'snow' : code.startsWith('t') ? 'thunderstorms' : 'not-available');
 };
 
+/**
+ * Soil frost risk (radiation frost):
+ * soil_temperature_0cm ≤ 0.5 °C AND daily mean air temp (temperature_2m_mean) is positive.
+ * Returns { frost: boolean, minSoil: number|null }.
+ */
+const getSoilFrostInfo = (soil0cmValues, tempMean) => {
+    if (tempMean == null || Number.isNaN(Number(tempMean)) || Number(tempMean) <= 0) {
+        return { frost: false, minSoil: null };
+    }
+    if (!Array.isArray(soil0cmValues) || soil0cmValues.length === 0) {
+        return { frost: false, minSoil: null };
+    }
+    const nums = soil0cmValues
+        .map(v => (v == null ? null : Number(v)))
+        .filter(v => v != null && !Number.isNaN(v));
+    if (nums.length === 0) return { frost: false, minSoil: null };
+    const minSoil = Math.min(...nums);
+    return { frost: minSoil <= 0.5, minSoil };
+};
+
+const hasSoilFrost = (soil0cmValues, tempMean) => getSoilFrostInfo(soil0cmValues, tempMean).frost;
+
+/**
+ * Warning text for frost. minSoil — min soil_temperature_0cm for the day (°C).
+ * UK: «⚠️ Планується заморозок по ґрунту -5.0°C»
+ * EN: «⚠️ Soil frost expected: -5.0°C»
+ */
+const frostWarningText = (lang = 'uk', minSoil = null) => {
+    const tStr = (minSoil != null && !Number.isNaN(Number(minSoil)))
+        ? `${Number(minSoil) > 0 ? '+' : ''}${Number(minSoil).toFixed(1)}°C`
+        : null;
+    if (lang === 'uk') {
+        return tStr
+            ? `⚠️ Планується заморозок по ґрунту ${tStr}`
+            : '⚠️ Планується заморозок по ґрунту';
+    }
+    return tStr
+        ? `⚠️ Soil frost expected: ${tStr}`
+        : '⚠️ Soil frost expected';
+};
+
 module.exports = {
     WEATHER_CODES,
     WIND_DIRECTIONS,
     getWeatherDesc,
     getWindDir,
     degToCard,
-    getIconMapping
+    getIconMapping,
+    getSoilFrostInfo,
+    hasSoilFrost,
+    frostWarningText
 };
 
