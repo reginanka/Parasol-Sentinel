@@ -1046,20 +1046,29 @@ bot.on('callback_query', async (ctx) => {
             const windUnit = user.units?.wind || 'ms';
             const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
 
+            const fmtSoil = (v) => {
+                if (v == null || Number.isNaN(Number(v))) return '   -';
+                return Number(v).toFixed(1).padStart(5);
+            };
+
             const hdr1 = lang === 'uk' ? 'Час ' : 'Time';
             const hdr2 = lang === 'uk' ? 'Ст' : 'Cd';
             const hdr3 = lang === 'uk' ? 'Темп' : 'Temp';
-            const hdr4 = lang === 'uk' ? 'Опади' : 'Prec';
-            const hdr5 = lang === 'uk' ? ' % ' : ' % ';
-            const hdr6 = lang === 'uk' ? 'Вітер' : 'Wind';
-            let table = `<pre>${hdr1}|${hdr2}|${hdr3}|${hdr4}|${hdr5}|${hdr6}\n`;
-            table += `────┼───┼────┼─────┼───┼─────\n`;
+            const hdr4 = ' 0cm';
+            const hdr5 = ' 6cm';
+            const hdr6 = lang === 'uk' ? 'Опади' : ' Prec';
+            const hdr7 = lang === 'uk' ? ' % ' : ' % ';
+            const hdr8 = lang === 'uk' ? 'Вітер' : 'Wind';
+            let table = `<pre>${hdr1}|${hdr2}|${hdr3}|${hdr4}|${hdr5}|${hdr6}|${hdr7}|${hdr8}\n`;
+            table += `────┼───┼────┼─────┼─────┼─────┼───┼─────\n`;
 
             for (const idx of dayIndices) {
                 // Година з рядка OM ("YYYY-MM-DDTHH:MM"), без Date timezone-багів
                 const hStr = `${String(time[idx]).slice(11, 13)}:00`;
                 const icon = getWeatherSymbol(weather_code?.[idx]);
                 const tVal = `${Math.round(temperature_2m[idx])}°`.padStart(4);
+                const s0 = fmtSoil(soil_temperature_0cm?.[idx]);
+                const s6 = fmtSoil(soil_temperature_6cm?.[idx]);
                 const pVal = (precipitation[idx] || 0) > 0
                     ? `${Number(precipitation[idx]).toFixed(1)}`
                     : '0';
@@ -1072,18 +1081,41 @@ bot.on('callback_query', async (ctx) => {
                     : Math.round(wind_speed_10m[idx] || 0);
                 const wStr = `${wSpd}${windUnitStr}`;
 
-                table += `${hStr}| ${icon}|${tVal}|${pStr}|${prob}|${wStr}\n`;
+                table += `${hStr}| ${icon}|${tVal}|${s0}|${s6}|${pStr}|${prob}|${wStr}\n`;
             }
             table += `</pre>`;
 
             msg += table;
 
+            // Collapsible legend + data source (tap to expand)
             const asOfStr = formatLocalDateTime(dataUpdatedAt, timezone, lang);
-            if (asOfStr) {
-                msg += lang === 'uk'
-                    ? `\nℹ️ Цей погодинний прогноз береться з Open-Meteo, оновлений ${asOfStr}.`
-                    : `\nℹ️ This hourly forecast is from Open-Meteo, updated ${asOfStr}.`;
-            }
+            const legendUk =
+                `📖 Легенда заголовків:\n` +
+                `• Час — година доби\n` +
+                `• Ст — стан погоди (іконка)\n` +
+                `• Темп — температура повітря на висоті 2 м\n` +
+                `• 0cm — температура ґрунту на поверхні (0 см)\n` +
+                `• 6cm — температура ґрунту на глибині 6 см\n` +
+                `• Опади — кількість опадів, мм\n` +
+                `• % — ймовірність опадів\n` +
+                `• Вітер — швидкість вітру\n` +
+                (asOfStr
+                    ? `\nℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
+                    : `\nℹ️ Джерело: Open-Meteo.`);
+            const legendEn =
+                `📖 Column legend:\n` +
+                `• Time — hour of day\n` +
+                `• Cd — weather condition (icon)\n` +
+                `• Temp — air temperature at 2 m\n` +
+                `• 0cm — soil temperature at the surface (0 cm)\n` +
+                `• 6cm — soil temperature at 6 cm depth\n` +
+                `• Prec — precipitation amount, mm\n` +
+                `• % — precipitation probability\n` +
+                `• Wind — wind speed\n` +
+                (asOfStr
+                    ? `\nℹ️ Source: Open-Meteo, updated ${asOfStr}.`
+                    : `\nℹ️ Source: Open-Meteo.`);
+            msg += `\n<blockquote expandable>${lang === 'uk' ? legendUk : legendEn}</blockquote>`;
 
             // Button for the adjacent day (today ↔ tomorrow)
             const otherDate = new Date(targetDate);
