@@ -8,7 +8,7 @@ const City = require('../models/City');
 
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, isFrostSeason } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 const { dayKey, daySetPaths, pruneDaysUnset, mergeHourlyFlat, getDayBaseline } = require('../utils/baseline');
@@ -414,6 +414,69 @@ module.exports = async (req, res) => {
                     ).catch(e => console.error('Save forecastedKp error:', e.message));
                 }
 
+                // --- Planned soil frost (save once per city for frost-cron cross-check) ---
+                // Store the coldest frost day in the next 6 days (from tomorrow). frost-cron reads this from Mongo.
+                // Only in frost season (Mar–Jun, Aug–Nov).
+                let plannedFrost = null;
+                try {
+                    const pfTz0 = response.data.timezone || 'Europe/Kyiv';
+                    if (!isFrostSeason(new Date(), pfTz0)) {
+                        await City.findOneAndUpdate(
+                            { externalId: key },
+                            { $unset: { 'eveningState.plannedFrost': 1 } }
+                        ).catch(() => {});
+                        throw new Error('SKIP_SEASON');
+                    }
+                    const pfTz = response.data.timezone || 'Europe/Kyiv';
+                    const pfFrom = getLocalDateStr(pfTz, 1);
+                    let pfColdest = null;
+                    let pfDate = null;
+                    let pfHour = null;
+                    for (let dayOffset = 1; dayOffset <= 6; dayOffset++) {
+                        const dStr = getLocalDateStr(pfTz, dayOffset);
+                        let dayMin = null;
+                        let dayMinHour = null;
+                        for (let i = 0; i < omSoilTimes.length; i++) {
+                            const raw = String(omSoilTimes[i] || '');
+                            if (!raw.startsWith(dStr) || omSoil0[i] == null) continue;
+                            const v = Number(omSoil0[i]);
+                            if (Number.isNaN(v)) continue;
+                            const h = parseInt(raw.slice(11, 13), 10);
+                            if (dayMin == null || v < dayMin) {
+                                dayMin = v;
+                                dayMinHour = Number.isNaN(h) ? null : h;
+                            }
+                        }
+                        let mean = null;
+                        const mIdx = omDailyMeanTimes.findIndex(t => String(t).startsWith(dStr));
+                        if (mIdx >= 0) mean = omDailyMeanVals[mIdx];
+                        const info = getSoilFrostInfo(dayMin != null ? [dayMin] : [], mean);
+                        if (info.frost && info.minSoil != null) {
+                            if (pfColdest == null || info.minSoil < pfColdest) {
+                                pfColdest = info.minSoil;
+                                pfDate = dStr;
+                                pfHour = dayMinHour;
+                            }
+                        }
+                    }
+                    if (pfColdest != null && pfDate) {
+                        plannedFrost = {
+                            date: pfDate,
+                            minSoil: Math.round(pfColdest * 10) / 10,
+                            hour: pfHour,
+                            warnedAt: nowTs
+                        };
+                        await City.findOneAndUpdate(
+                            { externalId: key },
+                            { $set: { 'eveningState.plannedFrost': plannedFrost } }
+                        ).catch(e => console.error('Save plannedFrost error:', e.message));
+                    }
+                } catch (pfErr) {
+                    if (pfErr.message !== 'SKIP_SEASON') {
+                        console.error('plannedFrost compute error:', pfErr.message);
+                    }
+                }
+
                 for (const user of cityInfo.users) {
                     if (!user.notificationsEnabled || user.eveningForecastEnabled === false) continue;
                     await sleep(40);
@@ -478,16 +541,18 @@ module.exports = async (req, res) => {
                     for (const day of previewDays) {
                         const dStr = dayKeyFn(day);
                         if (!dStr) continue;
-                        const soilForDay = [];
+                        let dayMin = null;
                         for (let i = 0; i < omSoilTimes.length; i++) {
-                            if (String(omSoilTimes[i]).startsWith(dStr) && omSoil0[i] != null) {
-                                soilForDay.push(omSoil0[i]);
-                            }
+                            const raw = String(omSoilTimes[i] || '');
+                            if (!raw.startsWith(dStr) || omSoil0[i] == null) continue;
+                            const v = Number(omSoil0[i]);
+                            if (Number.isNaN(v)) continue;
+                            if (dayMin == null || v < dayMin) dayMin = v;
                         }
                         let mean = null;
                         const mIdx = omDailyMeanTimes.findIndex(t => String(t).startsWith(dStr));
                         if (mIdx >= 0) mean = omDailyMeanVals[mIdx];
-                        const info = getSoilFrostInfo(soilForDay, mean);
+                        const info = getSoilFrostInfo(dayMin != null ? [dayMin] : [], mean);
                         if (info.frost) {
                             frostAnyDay = true;
                             if (info.minSoil != null && (frostColdest == null || info.minSoil < frostColdest)) {
@@ -497,7 +562,7 @@ module.exports = async (req, res) => {
                     }
 
                     let frostPrefix = '';
-                    if (frostAnyDay) {
+                    if (frostAnyDay && isFrostSeason(new Date(), cityTzForDays)) {
                         frostPrefix = `${frostWarningText(lang, frostColdest)}\n\n`;
                     }
 

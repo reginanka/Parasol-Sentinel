@@ -17,7 +17,7 @@ const {
     fetchMissingHistory
 } = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
-const { getSoilFrostInfo, frostWarningText } = require('../utils/weather');
+const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason } = require('../utils/weather');
 
 /**
  * Parasol Sentinel Bot - Core logic handler.
@@ -997,28 +997,64 @@ bot.on('callback_query', async (ctx) => {
             // Soil frost: min soil_temperature_0cm for the day ≤ 0.5 AND temperature_2m_mean > 0
             let frostPlanned = false;
             let frostMinSoil = null;
+            let frostMinHour = null;
             try {
-                const soilForDay = dayIndices
-                    .map(i => soil_temperature_0cm?.[i])
-                    .filter(v => v != null);
+                let dayMin = null;
+                let dayMinHour = null;
+                for (const i of dayIndices) {
+                    const v = soil_temperature_0cm?.[i];
+                    if (v == null || Number.isNaN(Number(v))) continue;
+                    const n = Number(v);
+                    const raw = time?.[i] != null ? String(time[i]) : '';
+                    const h = parseInt(raw.slice(11, 13), 10);
+                    if (dayMin == null || n < dayMin) {
+                        dayMin = n;
+                        dayMinHour = Number.isNaN(h) ? null : h;
+                    }
+                }
                 let meanForDay = null;
                 if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
                     const dIdx = dailyOm.time.findIndex(t => String(t).startsWith(targetDateStr));
                     if (dIdx >= 0) meanForDay = dailyOm.temperature_2m_mean[dIdx];
                 }
-                const info = getSoilFrostInfo(soilForDay, meanForDay);
+                const info = getSoilFrostInfo(dayMin != null ? [dayMin] : [], meanForDay);
                 frostPlanned = info.frost;
                 frostMinSoil = info.minSoil;
+                frostMinHour = dayMinHour;
+
+                // Prefer hour/min saved by evening forecast (same number user was warned about)
+                const planned = cityDocForSnap?.eveningState?.plannedFrost;
+                if (planned && planned.date === targetDateStr) {
+                    if (planned.hour != null) frostMinHour = planned.hour;
+                    if (planned.minSoil != null) frostMinSoil = planned.minSoil;
+                    // If evening planned frost for this day, treat as planned even if live OM drifted
+                    frostPlanned = true;
+                }
             } catch (e) {
                 console.error('Frost check error in hourly:', e.message);
             }
+
+            // Local hour — to switch "planned" → "occurred" after frost hour has passed
+            let localHourNow = 0;
+            try {
+                const hp = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone || 'Europe/Kyiv',
+                    hour: 'numeric',
+                    hour12: false
+                }).formatToParts(new Date());
+                localHourNow = parseInt(hp.find(p => p.type === 'hour')?.value || '0', 10) % 24;
+            } catch { /* keep 0 */ }
 
             let msg = lang === 'uk'
                 ? `🌤 <b>Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`
                 : `🌤 <b>Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
 
-            if (frostPlanned) {
-                msg += `<b>${frostWarningText(lang, frostMinSoil)}</b>\n\n`;
+            if (frostPlanned && isFrostSeason(new Date(), timezone || 'Europe/Kyiv')) {
+                const frostDone = isToday && frostMinHour != null && localHourNow > frostMinHour;
+                const frostLine = frostDone
+                    ? frostOccurredText(lang, frostMinSoil, frostMinHour)
+                    : frostWarningText(lang, frostMinSoil);
+                msg += `<b>${frostLine}</b>\n\n`;
             }
 
             msg += lang === 'uk'

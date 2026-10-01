@@ -34,9 +34,9 @@ const City = require('../models/City');
 const connectDB = require('../utils/db');
 const { sleep, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const {
-    getSoilFrostInfo,
     estimateSoilTemp0,
-    formatSoilTemp
+    formatSoilTemp,
+    isFrostSeason
 } = require('../utils/weather');
 
 const TIO_KEY = process.env.TOMORROW_IO_KEY;
@@ -183,52 +183,54 @@ module.exports = async (req, res) => {
             uk: {
                 full:
                     '🔴 **Високий рівень небезпеки — повне комбо**\n' +
-                    'Під ранок (~{hour}:00) підтверджено приморозок:\n' +
-                    '• повітря **{t}°C** (≤ +3.0°C)\n' +
-                    '• точка роси **{td}°C** (≤ +2.0°C)\n' +
-                    '• за формулою ґрунт ≈ **{soil}** (k={k})\n' +
-                    'Open-Meteo: мін. ґрунт {omSoil}.\n' +
+                    'Під ранок (~{hour}:00) приморозок підтверджено:\n' +
+                    '• **Tomorrow.io:** повітря **{t}°C** (≤ +3.0°C), точка роси **{td}°C** (≤ +2.0°C)\n' +
+                    '• **Формула:** ґрунт ≈ **{soil}** (k={k})\n' +
+                    '• **Open-Meteo:** мін. ґрунт {omSoil} — теж бачив ризик\n' +
                     'Рекомендовано захист рослин (укриття, полив, димлення).',
                 risk:
                     '⚠️ **Підтверджений ризик, але за формулою t ґрунту ще завелика**\n' +
-                    'Під ранок (~{hour}:00): повітря **{t}°C**, точка роси **{td}°C** — умови для приморозку є.\n' +
-                    'За радіаційною формулою ґрунт ≈ **{soil}** (k={k}) — вище порогу 0.5°C.\n' +
-                    'Ризик є, проте приморозок може і не реалізуватися.\n' +
-                    'Open-Meteo: мін. ґрунт {omSoil}.',
+                    'Під ранок (~{hour}:00):\n' +
+                    '• **Tomorrow.io:** повітря **{t}°C**, точка роси **{td}°C** — умови для приморозку є\n' +
+                    '• **Формула:** ґрунт ≈ **{soil}** (k={k}) — вище порогу 0.5°C\n' +
+                    '• **Open-Meteo:** мін. ґрунт {omSoil}\n' +
+                    'Ризик є, проте приморозок може і не реалізуватися.',
                 formula:
-                    '⚠️ **Формула бачить ризик заморозку по ґрунту {soil}** (~{hour}:00)\n' +
-                    'Повітря {t}°C, точка роси {td}°C, k={k}.\n' +
-                    'Порогові умови (T≤+3 / Td≤+2) не виконані повністю.\n' +
-                    'Open-Meteo: мін. ґрунт {omSoil}.',
+                    '⚠️ **Формула бачить ризик заморозку по ґрунту**\n' +
+                    'Під ранок (~{hour}:00):\n' +
+                    '• **Формула:** ґрунт ≈ **{soil}** (k={k})\n' +
+                    '• **Tomorrow.io:** повітря {t}°C, точка роси {td}°C — пороги T≤+3 / Td≤+2 не виконані\n' +
+                    '• **Open-Meteo:** мін. ґрунт {omSoil}',
                 deny:
                     'ℹ️ **Не підтверджено**\n' +
-                    'Open-Meteo показував заморозок (мін. ґрунт {omSoil}), але перевірка не підтверджує:\n' +
-                    'оцінка на ~{hour}:00 — ґрунт **{soil}** (повітря {t}°C, Td {td}°C, k={k}).'
+                    '• **Open-Meteo:** показував заморозок (мін. ґрунт {omSoil})\n' +
+                    '• **Tomorrow.io + формула:** не підтверджують — на ~{hour}:00 ґрунт **{soil}** (повітря {t}°C, Td {td}°C, k={k})'
             },
             en: {
                 full:
                     '🔴 **High danger — full combo**\n' +
                     'Morning frost confirmed (~{hour}:00):\n' +
-                    '• air **{t}°C** (≤ +3.0°C)\n' +
-                    '• dew point **{td}°C** (≤ +2.0°C)\n' +
-                    '• formula soil ≈ **{soil}** (k={k})\n' +
-                    'Open-Meteo min soil: {omSoil}.\n' +
+                    '• **Tomorrow.io:** air **{t}°C** (≤ +3.0°C), dew point **{td}°C** (≤ +2.0°C)\n' +
+                    '• **Formula:** soil ≈ **{soil}** (k={k})\n' +
+                    '• **Open-Meteo:** min soil {omSoil} — also saw risk\n' +
                     'Protect plants (cover, watering, smoke).',
                 risk:
                     '⚠️ **Confirmed risk, but formula soil temp is still too high**\n' +
-                    'Morning (~{hour}:00): air **{t}°C**, dew point **{td}°C** — frost conditions are present.\n' +
-                    'Radiation formula soil ≈ **{soil}** (k={k}) — above the 0.5°C threshold.\n' +
-                    'Risk exists, yet frost may not fully materialize.\n' +
-                    'Open-Meteo min soil: {omSoil}.',
+                    'Morning (~{hour}:00):\n' +
+                    '• **Tomorrow.io:** air **{t}°C**, dew point **{td}°C** — frost conditions present\n' +
+                    '• **Formula:** soil ≈ **{soil}** (k={k}) — above 0.5°C threshold\n' +
+                    '• **Open-Meteo:** min soil {omSoil}\n' +
+                    'Risk exists, yet frost may not fully materialize.',
                 formula:
-                    '⚠️ **Formula sees soil frost risk at {soil}** (~{hour}:00)\n' +
-                    'Air {t}°C, dew point {td}°C, k={k}.\n' +
-                    'Threshold conditions (T≤+3 / Td≤+2) are not fully met.\n' +
-                    'Open-Meteo min soil: {omSoil}.',
+                    '⚠️ **Formula sees soil frost risk**\n' +
+                    'Morning (~{hour}:00):\n' +
+                    '• **Formula:** soil ≈ **{soil}** (k={k})\n' +
+                    '• **Tomorrow.io:** air {t}°C, dew point {td}°C — T≤+3 / Td≤+2 not met\n' +
+                    '• **Open-Meteo:** min soil {omSoil}',
                 deny:
                     'ℹ️ **Not confirmed**\n' +
-                    'Open-Meteo indicated frost (min soil {omSoil}), but the check does not confirm:\n' +
-                    'estimate at ~{hour}:00 — soil **{soil}** (air {t}°C, Td {td}°C, k={k}).'
+                    '• **Open-Meteo:** indicated frost (min soil {omSoil})\n' +
+                    '• **Tomorrow.io + formula:** do not confirm — at ~{hour}:00 soil **{soil}** (air {t}°C, Td {td}°C, k={k})'
             }
         };
 
@@ -244,6 +246,12 @@ module.exports = async (req, res) => {
 
                 if (cityDoc?.lastFrostWbAlert?.date === todayStr) {
                     logLines.push(`• ${cityInfo.name} | ⏭ вже було сповіщення сьогодні`);
+                    continue;
+                }
+
+                // Season gate: Mar–Jun, Aug–Nov only (no winter spam)
+                if (!isFrostSeason(new Date(), timezone)) {
+                    logLines.push(`• ${cityInfo.name} | ⏭ поза сезоном приморозків (бер–чер / сер–лист)`);
                     continue;
                 }
 
@@ -292,66 +300,58 @@ module.exports = async (req, res) => {
                 }
 
                 const soilEst = est.soilEst;
-                const formulaFrost = soilEst <= SOIL_FROST_THRESHOLD;
-                const thresholdRisk = (tAir <= AIR_FROST_THRESHOLD) && (dewpt <= DEW_FROST_THRESHOLD);
 
-                // --- Open-Meteo soil + mean (for cross-check) ---
-                let omSoil0 = cityDoc?.dashboardSnapshot?.hourly?.soil_temperature_0cm || [];
-                let omTimes = cityDoc?.dashboardSnapshot?.hourly?.time || [];
-                let dailyOm = cityDoc?.dashboardSnapshot?.dailyOm || null;
-
-                const snapHasSoil = Array.isArray(omSoil0) && omSoil0.length > 0
-                    && Array.isArray(omTimes)
-                    && (omTimes.some(t => String(t).startsWith(tomorrowStr))
-                        || omTimes.some(t => String(t).startsWith(todayStr)));
-
-                try {
-                    const omUrl =
-                        `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                        `&hourly=soil_temperature_0cm` +
-                        `&daily=temperature_2m_mean` +
-                        `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
-                    const omRes = await axios.get(omUrl, { timeout: 12000 });
-                    if (omRes.data?.hourly && !snapHasSoil) {
-                        omTimes = omRes.data.hourly.time || [];
-                        omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
-                    }
-                    if (omRes.data?.daily && !dailyOm?.temperature_2m_mean) {
-                        dailyOm = {
-                            time: omRes.data.daily.time || [],
-                            temperature_2m_mean: omRes.data.daily.temperature_2m_mean || []
-                        };
-                    }
-                } catch (omErr) {
-                    console.error('OM frost fetch error:', omErr.message);
-                }
-
-                const soilForNight = [];
-                for (let i = 0; i < omTimes.length; i++) {
-                    const raw = String(omTimes[i]);
-                    const d = raw.slice(0, 10);
-                    const hour = parseInt(raw.slice(11, 13), 10);
-                    if (omSoil0[i] == null || Number.isNaN(hour)) continue;
-                    if (isOvernightHour(d, hour, todayStr, tomorrowStr)) {
-                        soilForNight.push(omSoil0[i]);
-                    }
-                }
-
-                let meanTomorrow = null;
-                let meanToday = null;
+                // --- Daily mean > 0 required (radiation frost only; skip winter spam) ---
+                // Prefer Open-Meteo daily mean from snapshot; fallback Weatherbit day temp from evening forecast
+                let meanDay = null;
+                const dailyOm = cityDoc?.dashboardSnapshot?.dailyOm;
                 if (dailyOm?.time && dailyOm?.temperature_2m_mean) {
                     const iTmr = dailyOm.time.findIndex(t => String(t).startsWith(tomorrowStr));
                     const iTod = dailyOm.time.findIndex(t => String(t).startsWith(todayStr));
-                    if (iTmr >= 0) meanTomorrow = dailyOm.temperature_2m_mean[iTmr];
-                    if (iTod >= 0) meanToday = dailyOm.temperature_2m_mean[iTod];
+                    if (iTmr >= 0 && dailyOm.temperature_2m_mean[iTmr] != null) {
+                        meanDay = Number(dailyOm.temperature_2m_mean[iTmr]);
+                    } else if (iTod >= 0 && dailyOm.temperature_2m_mean[iTod] != null) {
+                        meanDay = Number(dailyOm.temperature_2m_mean[iTod]);
+                    }
                 }
-                const meanForOm = (meanTomorrow != null && meanTomorrow > 0)
-                    ? meanTomorrow
-                    : (meanToday != null && meanToday > 0 ? meanToday : meanTomorrow);
+                if ((meanDay == null || Number.isNaN(meanDay)) && Array.isArray(cityDoc?.eveningState?.forecast)) {
+                    const wb = cityDoc.eveningState.forecast;
+                    const dayKey = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
+                    const row = wb.find(d => dayKey(d) === tomorrowStr) || wb.find(d => dayKey(d) === todayStr);
+                    if (row) {
+                        if (row.temp != null) meanDay = Number(row.temp);
+                        else if (row.min_temp != null && row.max_temp != null) {
+                            meanDay = (Number(row.min_temp) + Number(row.max_temp)) / 2;
+                        }
+                    }
+                }
+                const meanPositive = meanDay != null && !Number.isNaN(meanDay) && meanDay > 0;
 
-                const omInfo = getSoilFrostInfo(soilForNight, meanForOm);
-                const omFrost = omInfo.frost;
-                const omMinSoil = omInfo.minSoil;
+                // Without positive daily mean — silent (winter / deep cold, not radiation frost season)
+                if (!meanPositive) {
+                    logLines.push(
+                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir.toFixed(1)}° Td=${Number(dewpt).toFixed(1)}° soil≈${soilEst.toFixed(1)}° | ⏭ mean=${meanDay == null ? '?' : meanDay.toFixed(1)}° ≤0 — без радіаційного приморозку`
+                    );
+                    await sleep(1100);
+                    continue;
+                }
+
+                const formulaFrost = soilEst <= SOIL_FROST_THRESHOLD;
+                const thresholdRisk = (tAir <= AIR_FROST_THRESHOLD) && (dewpt <= DEW_FROST_THRESHOLD);
+
+                // --- OM frost from Mongo (saved by evening forecast) — do NOT re-fetch Open-Meteo ---
+                // eveningState.plannedFrost = { date, minSoil, hour, warnedAt }
+                // date = calendar day of the frost (usually "tomorrow" from evening run)
+                const planned = cityDoc?.eveningState?.plannedFrost || null;
+                let omFrost = false;
+                let omMinSoil = null;
+                if (planned && planned.minSoil != null && !Number.isNaN(Number(planned.minSoil))) {
+                    // Match overnight target: frost for tomorrow morning, or today if still in window
+                    if (planned.date === tomorrowStr || planned.date === todayStr) {
+                        omMinSoil = Number(planned.minSoil);
+                        omFrost = omMinSoil <= SOIL_FROST_THRESHOLD;
+                    }
+                }
 
                 // --- Decide alert type ---
                 let alertType = null;
@@ -367,7 +367,7 @@ module.exports = async (req, res) => {
 
                 if (!alertType) {
                     logLines.push(
-                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir.toFixed(1)}° Td=${Number(dewpt).toFixed(1)}° soil≈${soilEst.toFixed(1)}° k=${est.k} | ✅ без ризику`
+                        `• ${cityInfo.name} | ~${String(morning.hour).padStart(2, '0')}:00 T=${tAir.toFixed(1)}° Td=${Number(dewpt).toFixed(1)}° soil≈${soilEst.toFixed(1)}° k=${est.k} mean=${meanDay.toFixed(1)}° | ✅ без ризику`
                     );
                     await sleep(1100);
                     continue;
