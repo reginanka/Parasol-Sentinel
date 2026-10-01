@@ -174,6 +174,25 @@ const formatSoilTemp = (v) => {
     return `${sign}${n.toFixed(1)}°C`;
 };
 
+/**
+ * Radiation-frost alert season (Ukraine agro):
+ * March–June and August–November (inclusive).
+ * Outside this window evening/frost-cron stay silent to avoid winter spam.
+ */
+const isFrostSeason = (date = new Date(), timezone = 'Europe/Kyiv') => {
+    try {
+        const d = date instanceof Date ? date : new Date(date);
+        const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: timezone,
+            month: 'numeric'
+        }).formatToParts(d);
+        const month = parseInt(parts.find(p => p.type === 'month')?.value || '0', 10);
+        return (month >= 3 && month <= 6) || (month >= 8 && month <= 11);
+    } catch {
+        return false;
+    }
+};
+
 module.exports = {
     WEATHER_CODES,
     WIND_DIRECTIONS,
@@ -186,5 +205,6 @@ module.exports = {
     frostWarningText,
     frostOccurredText,
     estimateSoilTemp0,
-    formatSoilTemp
+    formatSoilTemp,
+    isFrostSeason
 };
