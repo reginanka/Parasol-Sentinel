@@ -110,12 +110,12 @@ const frostWarningText = (lang = 'uk', minSoil = null) => {
         : null;
     if (lang === 'uk') {
         return tStr
-            ? `⚠️ Планується заморозок по ґрунту ${tStr}`
-            : '⚠️ Планується заморозок по ґрунту';
+            ? `⚠️ Завтра планується заморозок по ґрунту ${tStr}`
+            : '⚠️ Завтра планується заморозок по ґрунту';
     }
     return tStr
-        ? `⚠️ Soil frost expected: ${tStr}`
-        : '⚠️ Soil frost expected';
+        ? `⚠️ Tomorrow soil frost expected: ${tStr}`
+        : '⚠️ Tomorrow soil frost expected';
 };
 
 /**
