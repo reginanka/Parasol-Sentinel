@@ -252,34 +252,38 @@ module.exports = async (req, res) => {
         // --- Open-Meteo soil frost (display only, no DB write) ---
         let frostAnyDay = false;
         let frostColdest = null;
+        let soilTimes = [];
+        let soil0 = [];
+        let soil6 = [];
         try {
             const omFrostUrl =
                 `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
-                `&hourly=soil_temperature_0cm` +
+                `&hourly=soil_temperature_0cm,soil_temperature_6cm` +
                 `&daily=temperature_2m_mean` +
                 `&timezone=auto&forecast_days=7`;
             const omFrostRes = await axios.get(omFrostUrl, { timeout: 12000 });
-            const soilTimes = omFrostRes.data?.hourly?.time || [];
-            const soil0 = omFrostRes.data?.hourly?.soil_temperature_0cm || [];
+            soilTimes = omFrostRes.data?.hourly?.time || [];
+            soil0 = omFrostRes.data?.hourly?.soil_temperature_0cm || [];
+            soil6 = omFrostRes.data?.hourly?.soil_temperature_6cm || [];
             const meanTimes = omFrostRes.data?.daily?.time || [];
             const meanVals = omFrostRes.data?.daily?.temperature_2m_mean || [];
-            const testDays = fullResponse.slice(1, 1 + settings.daysCount);
-            for (const day of testDays) {
-                const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
-                if (!dStr) continue;
-                const soilForDay = [];
-                for (let i = 0; i < soilTimes.length; i++) {
-                    if (String(soilTimes[i]).startsWith(dStr) && soil0[i] != null) {
-                        soilForDay.push(soil0[i]);
+            // Frost alert — ONLY tomorrow (first day after today in Weatherbit list)
+            const tomorrowDay = fullResponse[1];
+            if (tomorrowDay) {
+                const dStr = String(tomorrowDay.valid_date || tomorrowDay.datetime || '').slice(0, 10);
+                if (dStr) {
+                    const soilForDay = [];
+                    for (let i = 0; i < soilTimes.length; i++) {
+                        if (String(soilTimes[i]).startsWith(dStr) && soil0[i] != null) {
+                            soilForDay.push(soil0[i]);
+                        }
                     }
-                }
-                let mean = null;
-                const mIdx = meanTimes.findIndex(t => String(t).startsWith(dStr));
-                if (mIdx >= 0) mean = meanVals[mIdx];
-                const info = getSoilFrostInfo(soilForDay, mean);
-                if (info.frost) {
-                    frostAnyDay = true;
-                    if (info.minSoil != null && (frostColdest == null || info.minSoil < frostColdest)) {
+                    let mean = null;
+                    const mIdx = meanTimes.findIndex(t => String(t).startsWith(dStr));
+                    if (mIdx >= 0) mean = meanVals[mIdx];
+                    const info = getSoilFrostInfo(soilForDay, mean);
+                    if (info.frost) {
+                        frostAnyDay = true;
                         frostColdest = info.minSoil;
                     }
                 }
@@ -352,6 +356,32 @@ module.exports = async (req, res) => {
             }
             if (metrics.includes('temp')) {
                 message += `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n`;
+            }
+            if (metrics.includes('soil0') || metrics.includes('soil6')) {
+                const dStrSoil = String(day.valid_date || day.datetime || '').slice(0, 10);
+                const vals0 = [], vals6 = [];
+                for (let i = 0; i < soilTimes.length; i++) {
+                    if (!String(soilTimes[i]).startsWith(dStrSoil)) continue;
+                    if (soil0[i] != null && !Number.isNaN(Number(soil0[i]))) vals0.push(Number(soil0[i]));
+                    if (soil6[i] != null && !Number.isNaN(Number(soil6[i]))) vals6.push(Number(soil6[i]));
+                }
+                const fmtSoil = (v) => {
+                    const n = Number(v);
+                    const s = n > 0 ? '+' : '';
+                    return `${s}${n.toFixed(1)}°C`;
+                };
+                if (metrics.includes('soil0') && vals0.length) {
+                    const mn = Math.min(...vals0), mx = Math.max(...vals0);
+                    message += lang === 'uk'
+                        ? `🌱 **Ґрунт 0 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
+                        : `🌱 **Soil 0 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                }
+                if (metrics.includes('soil6') && vals6.length) {
+                    const mn = Math.min(...vals6), mx = Math.max(...vals6);
+                    message += lang === 'uk'
+                        ? `🌱 **Ґрунт 6 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
+                        : `🌱 **Soil 6 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                }
             }
             if (metrics.includes('precip')) {
                 message += `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n`;

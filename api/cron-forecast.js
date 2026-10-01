@@ -227,6 +227,7 @@ module.exports = async (req, res) => {
                 let todayHoursSeed = [];
                 // Soil frost data from Open-Meteo (hourly soil + daily mean)
                 let omSoil0 = [];
+                let omSoil6 = [];
                 let omSoilTimes = [];
                 let omDailyMeanTimes = [];
                 let omDailyMeanVals = [];
@@ -242,6 +243,7 @@ module.exports = async (req, res) => {
                         const allPrecip = omRes.data.hourly.precipitation;
                         omSoilTimes = allTimes;
                         omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
+                        omSoil6 = omRes.data.hourly.soil_temperature_6cm || [];
                         if (omRes.data.daily) {
                             omDailyMeanTimes = omRes.data.daily.time || [];
                             omDailyMeanVals = omRes.data.daily.temperature_2m_mean || [];
@@ -529,36 +531,29 @@ module.exports = async (req, res) => {
                         aqiPrefix += advice + '\n\n';
                     }
 
-                    // Frost risk over the days we show in the evening briefing (from tomorrow)
+                    // Frost risk — ONLY tomorrow (evening alert is for the next night)
                     const cityTzForDays = response.data.timezone || 'Europe/Kyiv';
                     const tomorrowStrForMsg = getLocalDateStr(cityTzForDays, 1);
                     const dayKeyFn = (d) => String(d?.valid_date || d?.datetime || '').slice(0, 10);
                     const startIdxPre = fullResponse.findIndex(d => dayKeyFn(d) === tomorrowStrForMsg);
                     const fromIdxPre = startIdxPre >= 0 ? startIdxPre : 1;
                     const previewDays = fullResponse.slice(fromIdxPre, fromIdxPre + settings.daysCount);
+
                     let frostAnyDay = false;
-                    let frostColdest = null; // lowest minSoil among frost days
-                    for (const day of previewDays) {
-                        const dStr = dayKeyFn(day);
-                        if (!dStr) continue;
-                        let dayMin = null;
-                        for (let i = 0; i < omSoilTimes.length; i++) {
-                            const raw = String(omSoilTimes[i] || '');
-                            if (!raw.startsWith(dStr) || omSoil0[i] == null) continue;
-                            const v = Number(omSoil0[i]);
-                            if (Number.isNaN(v)) continue;
-                            if (dayMin == null || v < dayMin) dayMin = v;
+                    let frostColdest = null;
+                    const soilForTomorrow = [];
+                    for (let i = 0; i < omSoilTimes.length; i++) {
+                        if (String(omSoilTimes[i]).startsWith(tomorrowStrForMsg) && omSoil0[i] != null) {
+                            soilForTomorrow.push(omSoil0[i]);
                         }
-                        let mean = null;
-                        const mIdx = omDailyMeanTimes.findIndex(t => String(t).startsWith(dStr));
-                        if (mIdx >= 0) mean = omDailyMeanVals[mIdx];
-                        const info = getSoilFrostInfo(dayMin != null ? [dayMin] : [], mean);
-                        if (info.frost) {
-                            frostAnyDay = true;
-                            if (info.minSoil != null && (frostColdest == null || info.minSoil < frostColdest)) {
-                                frostColdest = info.minSoil;
-                            }
-                        }
+                    }
+                    let meanTomorrow = null;
+                    const mIdxT = omDailyMeanTimes.findIndex(t => String(t).startsWith(tomorrowStrForMsg));
+                    if (mIdxT >= 0) meanTomorrow = omDailyMeanVals[mIdxT];
+                    const frostInfo = getSoilFrostInfo(soilForTomorrow, meanTomorrow);
+                    if (frostInfo.frost) {
+                        frostAnyDay = true;
+                        frostColdest = frostInfo.minSoil;
                     }
 
                     let frostPrefix = '';
@@ -590,6 +585,32 @@ module.exports = async (req, res) => {
                         }
                         if (metrics.includes('temp')) {
                             message += `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n`;
+                        }
+                        if (metrics.includes('soil0') || metrics.includes('soil6')) {
+                            const dStrSoil = dayKeyFn(day);
+                            const vals0 = [], vals6 = [];
+                            for (let i = 0; i < omSoilTimes.length; i++) {
+                                if (!String(omSoilTimes[i]).startsWith(dStrSoil)) continue;
+                                if (omSoil0[i] != null && !Number.isNaN(Number(omSoil0[i]))) vals0.push(Number(omSoil0[i]));
+                                if (omSoil6[i] != null && !Number.isNaN(Number(omSoil6[i]))) vals6.push(Number(omSoil6[i]));
+                            }
+                            const fmtSoil = (v) => {
+                                const n = Number(v);
+                                const s = n > 0 ? '+' : '';
+                                return `${s}${n.toFixed(1)}°C`;
+                            };
+                            if (metrics.includes('soil0') && vals0.length) {
+                                const mn = Math.min(...vals0), mx = Math.max(...vals0);
+                                message += lang === 'uk'
+                                    ? `🌱 **Ґрунт 0 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
+                                    : `🌱 **Soil 0 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                            }
+                            if (metrics.includes('soil6') && vals6.length) {
+                                const mn = Math.min(...vals6), mx = Math.max(...vals6);
+                                message += lang === 'uk'
+                                    ? `🌱 **Ґрунт 6 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
+                                    : `🌱 **Soil 6 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                            }
                         }
                         if (metrics.includes('precip')) {
                             message += `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n`;
