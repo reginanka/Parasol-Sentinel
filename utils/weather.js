@@ -119,6 +119,28 @@ const frostWarningText = (lang = 'uk', minSoil = null) => {
 };
 
 /**
+ * Past-tense frost text when the planned frost hours have already passed.
+ * UK: «⚠️ Запланований заморозок по ґрунту -0.3°C відбувся в 07:00»
+ * EN: «⚠️ Planned soil frost -0.3°C occurred at 07:00»
+ */
+const frostOccurredText = (lang = 'uk', minSoil = null, hour = null) => {
+    const tStr = (minSoil != null && !Number.isNaN(Number(minSoil)))
+        ? `${Number(minSoil) > 0 ? '+' : ''}${Number(minSoil).toFixed(1)}°C`
+        : null;
+    const hStr = (hour != null && !Number.isNaN(Number(hour)))
+        ? `${String(Number(hour)).padStart(2, '0')}:00`
+        : null;
+    if (lang === 'uk') {
+        if (tStr && hStr) return `⚠️ Запланований заморозок по ґрунту ${tStr} відбувся в ${hStr}`;
+        if (tStr) return `⚠️ Запланований заморозок по ґрунту ${tStr} уже відбувся`;
+        return '⚠️ Запланований заморозок по ґрунту уже відбувся';
+    }
+    if (tStr && hStr) return `⚠️ Planned soil frost ${tStr} occurred at ${hStr}`;
+    if (tStr) return `⚠️ Planned soil frost ${tStr} has already occurred`;
+    return '⚠️ Planned soil frost has already occurred';
+};
+
+/**
  * Estimate soil surface temperature (0 cm) from air temp, dew point, clouds and wind.
  * Radiation-frost model: T_soil ≈ T_air − k · (T_air − T_dew)
  *
@@ -162,7 +184,7 @@ module.exports = {
     getSoilFrostInfo,
     hasSoilFrost,
     frostWarningText,
+    frostOccurredText,
     estimateSoilTemp0,
     formatSoilTemp
 };
-
