@@ -1137,17 +1137,17 @@ bot.on('callback_query', async (ctx) => {
 
             msg += table;
 
-            // Data source (above legend) + collapsible legend (tap to expand)
+            // Collapsible legend: source first, then legend (tap to expand)
             const asOfStr = formatLocalDateTime(dataUpdatedAt, timezone, lang);
-            const sourceLine = lang === 'uk'
-                ? (asOfStr
-                    ? `ℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
-                    : `ℹ️ Джерело: Open-Meteo.`)
-                : (asOfStr
-                    ? `ℹ️ Source: Open-Meteo, updated ${asOfStr}.`
-                    : `ℹ️ Source: Open-Meteo.`);
+            const sourceUk = asOfStr
+                ? `ℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
+                : `ℹ️ Джерело: Open-Meteo.`;
+            const sourceEn = asOfStr
+                ? `ℹ️ Source: Open-Meteo, updated ${asOfStr}.`
+                : `ℹ️ Source: Open-Meteo.`;
 
             const legendUk =
+                `${sourceUk}\n\n` +
                 `📖 Легенда заголовків:\n` +
                 `• Час — година доби\n` +
                 `• Ст — стан погоди (іконка)\n` +
@@ -1158,6 +1158,7 @@ bot.on('callback_query', async (ctx) => {
                 `• % — ймовірність опадів\n` +
                 `• Вітер — швидкість вітру`;
             const legendEn =
+                `${sourceEn}\n\n` +
                 `📖 Column legend:\n` +
                 `• Time — hour of day\n` +
                 `• Cd — weather condition (icon)\n` +
@@ -1168,7 +1169,7 @@ bot.on('callback_query', async (ctx) => {
                 `• % — precipitation probability\n` +
                 `• Wind — wind speed`;
 
-            msg += `\n${sourceLine}\n\n<blockquote expandable>${lang === 'uk' ? legendUk : legendEn}</blockquote>`;
+            msg += `\n<blockquote expandable>${lang === 'uk' ? legendUk : legendEn}</blockquote>`;
 
             // Button for the adjacent day (today ↔ tomorrow)
             const otherDate = new Date(targetDate);
