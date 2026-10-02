@@ -1137,8 +1137,16 @@ bot.on('callback_query', async (ctx) => {
 
             msg += table;
 
-            // Collapsible legend + data source (tap to expand)
+            // Data source (above legend) + collapsible legend (tap to expand)
             const asOfStr = formatLocalDateTime(dataUpdatedAt, timezone, lang);
+            const sourceLine = lang === 'uk'
+                ? (asOfStr
+                    ? `ℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
+                    : `ℹ️ Джерело: Open-Meteo.`)
+                : (asOfStr
+                    ? `ℹ️ Source: Open-Meteo, updated ${asOfStr}.`
+                    : `ℹ️ Source: Open-Meteo.`);
+
             const legendUk =
                 `📖 Легенда заголовків:\n` +
                 `• Час — година доби\n` +
@@ -1148,10 +1156,7 @@ bot.on('callback_query', async (ctx) => {
                 `• 6cm — температура ґрунту на глибині 6 см\n` +
                 `• Опади — кількість опадів, мм\n` +
                 `• % — ймовірність опадів\n` +
-                `• Вітер — швидкість вітру\n` +
-                (asOfStr
-                    ? `\nℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
-                    : `\nℹ️ Джерело: Open-Meteo.`);
+                `• Вітер — швидкість вітру`;
             const legendEn =
                 `📖 Column legend:\n` +
                 `• Time — hour of day\n` +
@@ -1161,11 +1166,9 @@ bot.on('callback_query', async (ctx) => {
                 `• 6cm — soil temperature at 6 cm depth\n` +
                 `• Prec — precipitation amount, mm\n` +
                 `• % — precipitation probability\n` +
-                `• Wind — wind speed\n` +
-                (asOfStr
-                    ? `\nℹ️ Source: Open-Meteo, updated ${asOfStr}.`
-                    : `\nℹ️ Source: Open-Meteo.`);
-            msg += `\n<blockquote expandable>${lang === 'uk' ? legendUk : legendEn}</blockquote>`;
+                `• Wind — wind speed`;
+
+            msg += `\n${sourceLine}\n\n<blockquote expandable>${lang === 'uk' ? legendUk : legendEn}</blockquote>`;
 
             // Button for the adjacent day (today ↔ tomorrow)
             const otherDate = new Date(targetDate);
