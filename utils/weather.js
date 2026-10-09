@@ -194,29 +194,77 @@ const isFrostSeason = (date = new Date(), timezone = 'Europe/Kyiv') => {
 };
 
 /**
- * Unified geomagnetic activity level from planetary Kp (0–9).
+ * Unified geomagnetic activity level from planetary Kp (0–9) / NOAA G-scale.
  * Same scale everywhere: evening forecast labels + real-time alerts.
  *
- *   Kp < 4      → quiet     (rank 0)  🟢 Спокійно
- *   4 ≤ Kp < 5  → unsettled (rank 1)  🟡 Збурення
- *   Kp ≥ 5      → storm     (rank 2)  🔴 Буря
+ * rank is monotonic so cron-check can detect escalate / de-escalate:
+ *   0  quiet      Kp < 4
+ *   1  unsettled  Kp 4–4.9
+ *   2  G1         Kp 5     Слабка буря
+ *   3  G2         Kp 6     Помірна буря
+ *   4  G3         Kp 7     Сильна буря
+ *   5  G4         Kp 8     Дуже сильна / шторм
+ *   6  G5         Kp 9     Екстремальний шторм
  */
 const getGeomagLevel = (kp) => {
     if (kp == null || Number.isNaN(Number(kp))) return null;
     const k = Number(kp);
-    const kpRounded = Math.round(k);
+    const kpRounded = Math.min(9, Math.max(0, Math.round(k)));
+
+    // Storm tiers (Kp ≥ 5) — NOAA G1–G5
     if (k >= 5) {
+        const g = Math.min(5, Math.max(1, kpRounded - 4)); // Kp5→G1 … Kp9→G5
+        const stormMeta = {
+            1: {
+                rank: 2,
+                level: 'g1',
+                badge: '🟠',
+                labelUk: `Слабка буря G1 (Kp ${kpRounded})`,
+                labelEn: `Minor storm G1 (Kp ${kpRounded})`
+            },
+            2: {
+                rank: 3,
+                level: 'g2',
+                badge: '🔴',
+                labelUk: `Помірна буря G2 (Kp ${kpRounded})`,
+                labelEn: `Moderate storm G2 (Kp ${kpRounded})`
+            },
+            3: {
+                rank: 4,
+                level: 'g3',
+                badge: '🔴',
+                labelUk: `Сильна буря G3 (Kp ${kpRounded})`,
+                labelEn: `Strong storm G3 (Kp ${kpRounded})`
+            },
+            4: {
+                rank: 5,
+                level: 'g4',
+                badge: '🟣',
+                labelUk: `Дуже сильна буря G4 (Kp ${kpRounded})`,
+                labelEn: `Severe storm G4 (Kp ${kpRounded})`
+            },
+            5: {
+                rank: 6,
+                level: 'g5',
+                badge: '⚫',
+                labelUk: `Екстремальний шторм G5 (Kp ${kpRounded})`,
+                labelEn: `Extreme storm G5 (Kp ${kpRounded})`
+            }
+        };
+        const m = stormMeta[g];
         return {
-            level: 'storm',
-            rank: 2,
-            badge: '🔴',
+            level: m.level,
+            rank: m.rank,
+            badge: m.badge,
             kp: k,
             kpRounded,
-            labelUk: `Буря (Kp ${kpRounded})`,
-            labelEn: `Storm (Kp ${kpRounded})`,
-            gScale: Math.min(5, Math.max(1, kpRounded - 4))
+            labelUk: m.labelUk,
+            labelEn: m.labelEn,
+            gScale: g,
+            isStorm: true
         };
     }
+
     if (k >= 4) {
         return {
             level: 'unsettled',
@@ -226,9 +274,11 @@ const getGeomagLevel = (kp) => {
             kpRounded,
             labelUk: `Збурення (Kp ${kpRounded})`,
             labelEn: `Unsettled (Kp ${kpRounded})`,
-            gScale: null
+            gScale: null,
+            isStorm: false
         };
     }
+
     return {
         level: 'quiet',
         rank: 0,
@@ -237,7 +287,8 @@ const getGeomagLevel = (kp) => {
         kpRounded,
         labelUk: `Спокійно (Kp ${kpRounded})`,
         labelEn: `Calm (Kp ${kpRounded})`,
-        gScale: null
+        gScale: null,
+        isStorm: false
     };
 };
 
