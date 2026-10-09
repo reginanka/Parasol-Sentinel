@@ -7,7 +7,7 @@ const User = require('../models/User');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getGeomagLevel } = require('../utils/weather');
 const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../utils/helpers');
 const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
 
@@ -117,25 +117,52 @@ module.exports = async (req, res) => {
                 `</table>`;
         };
 
-        /** Build Rich Message HTML for geomagnetic alert */
-        const htmlGeomag = (lang, { kp, isStorm }) => {
+        /**
+         * Build Rich Message HTML for geomagnetic alert / recovery.
+         * kind: 'worse_storm' | 'worse_unsettled' | 'better_unsettled' | 'better_quiet'
+         */
+        const htmlGeomag = (lang, { kp, kind, gScale }) => {
             const kpStr = Number(kp).toFixed(0);
-            if (lang === 'uk') {
-                if (isStorm) {
+            const isUk = lang === 'uk';
+
+            if (kind === 'worse_storm') {
+                if (isUk) {
                     return `<h3>🧲 Увага! Магнітна буря (Kp ${kpStr})</h3>` +
-                        `<p>Активне збурення геомагнітного поля · рівень <b>G${Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
+                        `<p>Активне збурення геомагнітного поля · рівень <b>G${gScale != null ? gScale : Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
                         `<blockquote>Метеозалежним: зменшити навантаження, пити більше води та тримати під рукою ліки.</blockquote>`;
                 }
-                return `<h3>🧲 Збурення магнітного поля (Kp ${kpStr})</h3>` +
-                    `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>`;
-            }
-            if (isStorm) {
                 return `<h3>🧲 Alert! Magnetic Storm (Kp ${kpStr})</h3>` +
-                    `<p>Active geomagnetic disturbance · level <b>G${Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
+                    `<p>Active geomagnetic disturbance · level <b>G${gScale != null ? gScale : Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
                     `<blockquote>Weather-sensitive people: reduce activity, drink more water, keep medication handy.</blockquote>`;
             }
-            return `<h3>🧲 Unsettled geomagnetic field (Kp ${kpStr})</h3>` +
-                `<p>Mild discomfort possible for weather-sensitive individuals.</p>`;
+
+            if (kind === 'worse_unsettled') {
+                if (isUk) {
+                    return `<h3>🧲 Збурення магнітного поля (Kp ${kpStr})</h3>` +
+                        `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>` +
+                        `<blockquote>Рекомендації: зменште фізичні навантаження, більше відпочивайте, пийте достатньо води.</blockquote>`;
+                }
+                return `<h3>🧲 Unsettled geomagnetic field (Kp ${kpStr})</h3>` +
+                    `<p>Mild discomfort possible for weather-sensitive individuals.</p>` +
+                    `<blockquote>Recommendations: reduce physical activity, rest more, drink enough water.</blockquote>`;
+            }
+
+            if (kind === 'better_unsettled') {
+                if (isUk) {
+                    return `<h3>🧲 Рівень збурення знизився (Kp ${kpStr})</h3>` +
+                        `<p>Умови покращилися до середнього рівня. Метеочутливим людям варто ще бути обережними.</p>`;
+                }
+                return `<h3>🧲 Disturbance level decreased (Kp ${kpStr})</h3>` +
+                    `<p>Conditions improved to unsettled. Weather-sensitive people should still be cautious.</p>`;
+            }
+
+            // better_quiet
+            if (isUk) {
+                return `<h3>🧲 Магнітне поле заспокоїлося (Kp ${kpStr})</h3>` +
+                    `<p>🟢 Умови стали сприятливими.</p>`;
+            }
+            return `<h3>🧲 Geomagnetic field has calmed (Kp ${kpStr})</h3>` +
+                `<p>🟢 Conditions are now favorable.</p>`;
         };
 
         /** Build Rich Message HTML for AQI deterioration (dynamic rows) */
@@ -589,12 +616,14 @@ module.exports = async (req, res) => {
                 }
 
                 // --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
-                // Rules:
-                // - If evening forecast already told the user about this Kp level for today
-                //   (evening enabled + geomag metric on + forecastedKp >= current) → skip for that user
-                // - If user disabled evening forecast OR disabled geomag metric, but keeps
-                //   alertTriggers.magneticStorm on → they want real-time alerts → send
-                // - Always send if Kp escalated ABOVE what was forecasted / last alerted
+                // Rules (state machine by rank):
+                // - Evening forecast does NOT write geomag state to DB
+                // - Check owns lastGeomagAlert { date, maxKp, rank, level }
+                // - Same rank today → silent (no re-send, no overwrite spam)
+                // - Rank increased → alert worse (unsettled / storm) + recommendations
+                // - Rank decreased → alert improved (to unsettled / to quiet)
+                // - First observation of the day always seeds lastGeomagAlert;
+                //   alert only if rank >= 1 (unsettled+) so we don't spam "calm" at midnight
                 let snapGeomag = null;
                 let snapWaqi = null;
                 try {
@@ -613,61 +642,75 @@ module.exports = async (req, res) => {
                             .filter(v => !isNaN(v));
 
                         const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
+                        const current = getGeomagLevel(currentMaxKp);
 
-                        if (currentMaxKp !== null) {
-                            let gBadge = '🟢';
-                            if (currentMaxKp >= 5) gBadge = '🔴';
-                            else if (currentMaxKp >= 4) gBadge = '🟡';
-                            snapGeomag = { maxKp: currentMaxKp, badge: gBadge, updatedAt: new Date() };
-                        }
+                        if (current) {
+                            snapGeomag = {
+                                maxKp: current.kp,
+                                badge: current.badge,
+                                level: current.level,
+                                rank: current.rank,
+                                updatedAt: new Date()
+                            };
 
-                        if (currentMaxKp !== null && currentMaxKp >= 4) {
-                            const lastAlertDate = cityDoc?.lastGeomagAlert?.date;
-                            const lastAlertKp = cityDoc?.lastGeomagAlert?.maxKp || 0;
+                            const last = cityDoc?.lastGeomagAlert;
+                            const lastRank = (last?.date === todayStr && last?.rank != null)
+                                ? Number(last.rank)
+                                : (last?.date === todayStr && last?.maxKp != null
+                                    ? (getGeomagLevel(last.maxKp)?.rank ?? -1)
+                                    : -1);
 
-                            // City-level: already alerted this level today → no need to process further
-                            // (unless escalated)
-                            const cityAlreadyAlerted = lastAlertDate === todayStr && currentMaxKp <= lastAlertKp;
+                            // Same level today → do nothing
+                            if (last?.date === todayStr && current.rank === lastRank) {
+                                // keep snapGeomag for dashboard only
+                            } else {
+                                let kind = null;
+                                if (current.rank > lastRank) {
+                                    // Worsened (or first non-quiet of the day)
+                                    if (current.level === 'storm') kind = 'worse_storm';
+                                    else if (current.level === 'unsettled') kind = 'worse_unsettled';
+                                    // quiet after -1 (first seed of day) → no alert
+                                } else if (current.rank < lastRank && lastRank >= 0) {
+                                    // Improved
+                                    if (current.level === 'quiet') kind = 'better_quiet';
+                                    else if (current.level === 'unsettled') kind = 'better_unsettled';
+                                }
 
-                            if (!cityAlreadyAlerted) {
-                                const isStorm = currentMaxKp >= 5;
-                                const forecastedKp = evening?.forecastedKp;
-                                const forecastedKpDate = evening?.forecastedKpDate;
                                 let anyUserAlerted = false;
-
-                                for (const user of cityInfo.users) {
-                                    if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
-
-                                    // Did this user already see this (or higher) Kp in the evening forecast for today?
-                                    const metrics = user.forecastSettings?.enabledMetrics || [];
-                                    const eveningOn = user.eveningForecastEnabled !== false;
-                                    const geomagInEvening = metrics.includes('geomag');
-                                    const eveningCoveredToday =
-                                        forecastedKpDate === todayStr &&
-                                        forecastedKp != null &&
-                                        currentMaxKp <= forecastedKp;
-
-                                    const alreadyInformed = eveningOn && geomagInEvening && eveningCoveredToday;
-
-                                    if (alreadyInformed) continue;
-
-                                    // User either didn't get evening geomag info, or Kp is worse than forecasted
-                                    const lang = user.language || 'uk';
-                                    const html = htmlGeomag(lang, { kp: currentMaxKp, isStorm });
-                                    alerts.push({ userId: user.telegramId, html, lang });
-                                    anyUserAlerted = true;
+                                if (kind) {
+                                    for (const user of cityInfo.users) {
+                                        if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
+                                        const lang = user.language || 'uk';
+                                        const html = htmlGeomag(lang, {
+                                            kp: current.kp,
+                                            kind,
+                                            gScale: current.gScale
+                                        });
+                                        alerts.push({ userId: user.telegramId, html, lang });
+                                        anyUserAlerted = true;
+                                    }
+                                    if (anyUserAlerted) {
+                                        if (kind === 'worse_storm') reasons.push('магнітна буря');
+                                        else if (kind === 'worse_unsettled') reasons.push('збурення магн. поля');
+                                        else if (kind === 'better_unsettled') reasons.push('магн. поле ↓ середнє');
+                                        else if (kind === 'better_quiet') reasons.push('магн. поле спокійно');
+                                        alertTriggered = true;
+                                    }
                                 }
 
-                                if (anyUserAlerted) {
-                                    reasons.push(isStorm ? "магнітна буря" : "збурення магн. поля");
-                                    alertTriggered = true;
-                                }
-
-                                // Always bump lastGeomagAlert so we don't re-evaluate the same level
-                                // (covers both "sent to someone" and "everyone already informed")
+                                // Always persist current level so next pass can detect change
                                 await City.findOneAndUpdate(
                                     { externalId: key },
-                                    { $set: { "lastGeomagAlert": { date: todayStr, maxKp: currentMaxKp } } }
+                                    {
+                                        $set: {
+                                            lastGeomagAlert: {
+                                                date: todayStr,
+                                                maxKp: current.kp,
+                                                rank: current.rank,
+                                                level: current.level
+                                            }
+                                        }
+                                    }
                                 );
                             }
                         }

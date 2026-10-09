@@ -8,7 +8,7 @@ const City = require('../models/City');
 
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, isFrostSeason } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, isFrostSeason, getGeomagLevel } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 const { dayKey, daySetPaths, pruneDaysUnset, mergeHourlyFlat, getDayBaseline } = require('../utils/baseline');
@@ -353,8 +353,9 @@ module.exports = async (req, res) => {
                 );
 
                 // --- FETCH NOAA Kp-index (geomagnetic forecast) ---
+                // Display only — does NOT write forecastedKp / lastGeomagAlert to DB.
+                // Real-time state & alerts are owned exclusively by cron-check (LOGIC E).
                 let geomagInfo = null;
-                let forecastedMaxKp = null;
                 try {
                     const noaaRes = await axios.get(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -375,45 +376,17 @@ module.exports = async (req, res) => {
                             : noaaRes.data.slice(0, 8).map(r => parseFloat(r.kp)).filter(v => !isNaN(v));
 
                         const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
-                        if (maxKp !== null) {
-                            forecastedMaxKp = maxKp;
-                            let badge = '🟢';
-                            let labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`;
-                            let labelEn = `Calm (Kp ${maxKp.toFixed(0)})`;
-                            if (maxKp >= 5) {
-                                badge = '🔴';
-                                labelUk = `Буря (Kp ${maxKp.toFixed(0)})`;
-                                labelEn = `Storm (Kp ${maxKp.toFixed(0)})`;
-                            } else if (maxKp >= 4) {
-                                badge = '🟡';
-                                labelUk = `Збурення (Kp ${maxKp.toFixed(0)})`;
-                                labelEn = `Unsettled (Kp ${maxKp.toFixed(0)})`;
-                            }
-                            geomagInfo = { badge, labelUk, labelEn };
+                        const level = getGeomagLevel(maxKp);
+                        if (level) {
+                            geomagInfo = {
+                                badge: level.badge,
+                                labelUk: level.labelUk,
+                                labelEn: level.labelEn
+                            };
                         }
                     }
                 } catch (noaaErr) {
                     console.error('NOAA Kp fetch error:', noaaErr.message);
-                }
-
-                // Persist forecasted Kp for the target day (tomorrow relative to send)
-                // so cron-check can avoid repeating the same alert next day
-                if (forecastedMaxKp !== null) {
-                    const cityTzForKp = response.data.timezone || 'Europe/Kyiv';
-                    const localForKp = new Date(new Date().toLocaleString('en-US', { timeZone: cityTzForKp }));
-                    const kpTarget = new Date(localForKp);
-                    kpTarget.setDate(kpTarget.getDate() + 1);
-                    const kpTargetStr = getLocalDateStr(cityTzForKp, 1);
-
-                    await City.findOneAndUpdate(
-                        { externalId: key },
-                        {
-                            $set: {
-                                'eveningState.forecastedKp': forecastedMaxKp,
-                                'eveningState.forecastedKpDate': kpTargetStr
-                            }
-                        }
-                    ).catch(e => console.error('Save forecastedKp error:', e.message));
                 }
 
                 // --- Planned soil frost (save once per city for frost-cron cross-check) ---
