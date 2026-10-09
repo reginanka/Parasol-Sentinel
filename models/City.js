@@ -16,12 +16,17 @@ const CitySchema = new mongoose.Schema({
         // Day-scoped baseline: one asOf + data per calendar day (YYYY-MM-DD)
         // { asOf, min_temp, max_temp, hourlyPrecip: [{ time, precip, prob? }] }
         days: { type: mongoose.Schema.Types.Mixed, default: {} },
-        forecastedKp: Number, // max Kp from evening forecast for target day
-        forecastedKpDate: String // YYYY-MM-DD — day that forecastedKp applies to
+        // Legacy (no longer written by evening forecast; check owns geomag state)
+        forecastedKp: Number,
+        forecastedKpDate: String
     },
+    // Geomag state owned exclusively by cron-check (LOGIC E)
+    // rank: 0 quiet | 1 unsettled | 2 storm
     lastGeomagAlert: {
-        date: String,
-        maxKp: Number
+        date: String,   // YYYY-MM-DD local
+        maxKp: Number,
+        rank: Number,   // 0 | 1 | 2
+        level: String   // 'quiet' | 'unsettled' | 'storm'
     },
     lastAqiAlert: {
         date: String,
@@ -47,7 +52,7 @@ const CitySchema = new mongoose.Schema({
         dailySource: String,   // 'weatherbit' | 'open-meteo'
         aqi: Object,           // Open-Meteo air-quality hourly (optional)
         waqi: Object,          // WAQI live sensors (optional)
-        geomag: Object,        // NOAA Kp { maxKp, badge, updatedAt }
+        geomag: Object,        // NOAA Kp { maxKp, badge, level, rank, updatedAt }
         lat: Number,
         lon: Number,
         timezone: String
