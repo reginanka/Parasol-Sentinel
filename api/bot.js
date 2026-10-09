@@ -1064,38 +1064,39 @@ bot.on("callback_query:data", async (ctx) => {
                 localHourNow = parseInt(hp.find(p => p.type === 'hour')?.value || '0', 10) % 24;
             } catch { /* keep 0 */ }
 
+            // Rich HTML: use <p>/<br/> — plain \n does not create line breaks in sendRichMessage
             let msg = lang === 'uk'
-                ? `🌤 <b>Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`
-                : `🌤 <b>Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</b>\n📍 <b>${displayCity}</b>\n\n`;
+                ? `<h3>🌤 Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate})</h3>` +
+                  `<p>📍 <b>${displayCity}</b></p>`
+                : `<h3>🌤 Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</h3>` +
+                  `<p>📍 <b>${displayCity}</b></p>`;
 
             if (frostPlanned && isFrostSeason(new Date(), timezone || 'Europe/Kyiv')) {
                 const frostDone = isToday && frostMinHour != null && localHourNow > frostMinHour;
                 const frostLine = frostDone
                     ? frostOccurredText(lang, frostMinSoil, frostMinHour)
                     : frostWarningText(lang, frostMinSoil);
-                msg += `<b>${frostLine}</b>\n\n`;
+                msg += `<p><b>${frostLine}</b></p>`;
             }
 
             msg += lang === 'uk'
-                ? `🌡 Температура: <b>${minTemp}°C ... ${maxTemp}°C</b>\n`
-                : `🌡 Temperature: <b>${minTemp}°C ... ${maxTemp}°C</b>\n`;
+                ? `<p>🌡 Температура: <b>${minTemp}°C … ${maxTemp}°C</b></p>`
+                : `<p>🌡 Temperature: <b>${minTemp}°C … ${maxTemp}°C</b></p>`;
 
             if (Number(totalPrecip) > 0 && fmtPrecipBlocks) {
                 msg += lang === 'uk'
-                    ? `💧 Дощитиме: <b>${fmtPrecipBlocks}</b>\nЗагалом опадів на день: <b>${totalPrecip} ${precipUnitStr}</b>\n`
-                    : `💧 Rain: <b>${fmtPrecipBlocks}</b>\nTotal precip for the day: <b>${totalPrecip} ${precipUnitStr}</b>\n`;
+                    ? `<p>💧 Дощитиме: <b>${fmtPrecipBlocks}</b><br/>Загалом опадів на день: <b>${totalPrecip} ${precipUnitStr}</b></p>`
+                    : `<p>💧 Rain: <b>${fmtPrecipBlocks}</b><br/>Total precip for the day: <b>${totalPrecip} ${precipUnitStr}</b></p>`;
             } else {
                 msg += lang === 'uk'
-                    ? `💧 Опадів не очікується\n`
-                    : `💧 No precipitation expected\n`;
+                    ? `<p>💧 Опадів не очікується</p>`
+                    : `<p>💧 No precipitation expected</p>`;
             }
 
             if (fmtPossibleBlocks) {
                 msg += lang === 'uk'
-                    ? `👀 Можливий дощ: <b>${fmtPossibleBlocks}</b>\n\n`
-                    : `👀 Possible rain: <b>${fmtPossibleBlocks}</b>\n\n`;
-            } else {
-                msg += `\n`;
+                    ? `<p>👀 Можливий дощ: <b>${fmtPossibleBlocks}</b></p>`
+                    : `<p>👀 Possible rain: <b>${fmtPossibleBlocks}</b></p>`;
             }
 
             const windUnit = user.units?.wind || 'ms';
@@ -1153,39 +1154,44 @@ bot.on("callback_query:data", async (ctx) => {
 
             msg += tableHtml;
 
-            // Collapsible legend: source first, then legend (tap to expand)
+            // Collapsible legend with proper list markup
             const asOfStr = formatLocalDateTime(dataUpdatedAt, timezone, lang);
-            const sourceUk = asOfStr
-                ? `ℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
-                : `ℹ️ Джерело: Open-Meteo.`;
-            const sourceEn = asOfStr
-                ? `ℹ️ Source: Open-Meteo, updated ${asOfStr}.`
-                : `ℹ️ Source: Open-Meteo.`;
+            const sourceLine = lang === 'uk'
+                ? (asOfStr
+                    ? `ℹ️ Джерело: Open-Meteo, оновлено ${asOfStr}.`
+                    : `ℹ️ Джерело: Open-Meteo.`)
+                : (asOfStr
+                    ? `ℹ️ Source: Open-Meteo, updated ${asOfStr}.`
+                    : `ℹ️ Source: Open-Meteo.`);
 
-            const legendUk =
-                `${sourceUk}\n\n` +
-                `📖 Легенда заголовків:\n` +
-                `• Час — година доби\n` +
-                `• Ст — стан погоди (іконка)\n` +
-                `• Темп — температура повітря на висоті 2 м\n` +
-                `• 0cm — температура ґрунту на поверхні (0 см)\n` +
-                `• 6cm — температура ґрунту на глибині 6 см\n` +
-                `• Опади — кількість опадів, мм\n` +
-                `• % — ймовірність опадів\n` +
-                `• Вітер — швидкість вітру`;
-            const legendEn =
-                `${sourceEn}\n\n` +
-                `📖 Column legend:\n` +
-                `• Time — hour of day\n` +
-                `• Cd — weather condition (icon)\n` +
-                `• Temp — air temperature at 2 m\n` +
-                `• 0cm — soil temperature at the surface (0 cm)\n` +
-                `• 6cm — soil temperature at 6 cm depth\n` +
-                `• Prec — precipitation amount, mm\n` +
-                `• % — precipitation probability\n` +
-                `• Wind — wind speed`;
+            const legendList = lang === 'uk'
+                ? `<ul>` +
+                  `<li><b>Час</b> — година доби</li>` +
+                  `<li><b>Ст</b> — стан погоди (іконка)</li>` +
+                  `<li><b>Темп</b> — температура повітря на висоті 2 м</li>` +
+                  `<li><b>0cm</b> — температура ґрунту на поверхні (0 см)</li>` +
+                  `<li><b>6cm</b> — температура ґрунту на глибині 6 см</li>` +
+                  `<li><b>Опади</b> — кількість опадів, мм</li>` +
+                  `<li><b>%</b> — ймовірність опадів</li>` +
+                  `<li><b>Вітер</b> — швидкість вітру</li>` +
+                  `</ul>`
+                : `<ul>` +
+                  `<li><b>Time</b> — hour of day</li>` +
+                  `<li><b>Cd</b> — weather condition (icon)</li>` +
+                  `<li><b>Temp</b> — air temperature at 2 m</li>` +
+                  `<li><b>0cm</b> — soil temperature at the surface (0 cm)</li>` +
+                  `<li><b>6cm</b> — soil temperature at 6 cm depth</li>` +
+                  `<li><b>Prec</b> — precipitation amount, mm</li>` +
+                  `<li><b>%</b> — precipitation probability</li>` +
+                  `<li><b>Wind</b> — wind speed</li>` +
+                  `</ul>`;
 
-            msg += `\n<details><summary>${lang === 'uk' ? '📖 Легенда / джерело' : '📖 Legend / source'}</summary>\n<p>${lang === 'uk' ? legendUk : legendEn}</p>\n</details>`;
+            msg += `<details>` +
+                `<summary>${lang === 'uk' ? '📖 Легенда / джерело' : '📖 Legend / source'}</summary>` +
+                `<p>${sourceLine}</p>` +
+                `<p>${lang === 'uk' ? '📖 Легенда заголовків:' : '📖 Column legend:'}</p>` +
+                legendList +
+                `</details>`;
 
             // Button for the adjacent day (today ↔ tomorrow)
             const otherDate = new Date(targetDate);
