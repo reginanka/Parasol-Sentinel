@@ -1101,46 +1101,57 @@ bot.on("callback_query:data", async (ctx) => {
             const windUnit = user.units?.wind || 'ms';
             const windUnitStr = windUnit === 'kmh' ? (lang === 'uk' ? 'км/г' : 'km/h') : (lang === 'uk' ? 'м/с' : 'm/s');
 
-            const fmtSoil = (v) => {
-                if (v == null || Number.isNaN(Number(v))) return '   -';
-                return Number(v).toFixed(1).padStart(5);
+            // Native Rich Message table (Bot API 10.1+ / grammY sendRichMessage)
+            const fmtSoilCell = (v) => {
+                if (v == null || Number.isNaN(Number(v))) return '—';
+                return Number(v).toFixed(1);
             };
 
-            const hdr1 = lang === 'uk' ? 'Час ' : 'Time';
-            const hdr2 = lang === 'uk' ? 'Ст' : 'Cd';
-            const hdr3 = lang === 'uk' ? 'Темп' : 'Temp';
-            const hdr4 = ' 0cm';
-            const hdr5 = ' 6cm';
-            const hdr6 = lang === 'uk' ? 'Опади' : ' Prec';
-            const hdr7 = lang === 'uk' ? ' % ' : ' % ';
-            const hdr8 = lang === 'uk' ? 'Вітер' : 'Wind';
-            let table = `<pre>${hdr1}|${hdr2}|${hdr3}|${hdr4}|${hdr5}|${hdr6}|${hdr7}|${hdr8}\n`;
-            table += `────┼───┼────┼─────┼─────┼─────┼───┼─────\n`;
+            const th = (text) => `<th align="center">${text}</th>`;
+            const td = (text, align = 'center') => `<td align="${align}">${text}</td>`;
+
+            let tableHtml = `<table bordered striped compact>\n<tr>`;
+            tableHtml += th(lang === 'uk' ? 'Час' : 'Time');
+            tableHtml += th(lang === 'uk' ? 'Ст' : 'Cd');
+            tableHtml += th(lang === 'uk' ? 'Темп' : 'Temp');
+            tableHtml += th('0cm');
+            tableHtml += th('6cm');
+            tableHtml += th(lang === 'uk' ? 'Опади' : 'Prec');
+            tableHtml += th('%');
+            tableHtml += th(lang === 'uk' ? 'Вітер' : 'Wind');
+            tableHtml += `</tr>\n`;
 
             for (const idx of dayIndices) {
-                // Година з рядка OM ("YYYY-MM-DDTHH:MM"), без Date timezone-багів
                 const hStr = `${String(time[idx]).slice(11, 13)}:00`;
                 const icon = getWeatherSymbol(weather_code?.[idx]);
-                const tVal = `${Math.round(temperature_2m[idx])}°`.padStart(4);
-                const s0 = fmtSoil(soil_temperature_0cm?.[idx]);
-                const s6 = fmtSoil(soil_temperature_6cm?.[idx]);
+                const tVal = `${Math.round(temperature_2m[idx])}°`;
+                const s0 = fmtSoilCell(soil_temperature_0cm?.[idx]);
+                const s6 = fmtSoilCell(soil_temperature_6cm?.[idx]);
                 const pVal = (precipitation[idx] || 0) > 0
-                    ? `${Number(precipitation[idx]).toFixed(1)}`
+                    ? Number(precipitation[idx]).toFixed(1)
                     : '0';
-                const pStr = pVal.padStart(5);
                 const prob = precipitation_probability?.[idx] != null
-                    ? `${Math.round(precipitation_probability[idx])}`.padStart(3)
-                    : '  -';
+                    ? String(Math.round(precipitation_probability[idx]))
+                    : '—';
                 const wSpd = windUnit === 'kmh'
                     ? Math.round((wind_speed_10m[idx] || 0) * 3.6)
                     : Math.round(wind_speed_10m[idx] || 0);
                 const wStr = `${wSpd}${windUnitStr}`;
 
-                table += `${hStr}| ${icon}|${tVal}|${s0}|${s6}|${pStr}|${prob}|${wStr}\n`;
+                tableHtml += `<tr>`;
+                tableHtml += td(hStr);
+                tableHtml += td(icon);
+                tableHtml += td(tVal);
+                tableHtml += td(s0);
+                tableHtml += td(s6);
+                tableHtml += td(pVal);
+                tableHtml += td(prob);
+                tableHtml += td(wStr);
+                tableHtml += `</tr>\n`;
             }
-            table += `</pre>`;
+            tableHtml += `</table>`;
 
-            msg += table;
+            msg += tableHtml;
 
             // Collapsible legend: source first, then legend (tap to expand)
             const asOfStr = formatLocalDateTime(dataUpdatedAt, timezone, lang);
@@ -1174,7 +1185,7 @@ bot.on("callback_query:data", async (ctx) => {
                 `• % — precipitation probability\n` +
                 `• Wind — wind speed`;
 
-            msg += `\n<blockquote expandable>${lang === 'uk' ? legendUk : legendEn}</blockquote>`;
+            msg += `\n<details><summary>${lang === 'uk' ? '📖 Легенда / джерело' : '📖 Legend / source'}</summary>\n<p>${lang === 'uk' ? legendUk : legendEn}</p>\n</details>`;
 
             // Button for the adjacent day (today ↔ tomorrow)
             const otherDate = new Date(targetDate);
@@ -1191,8 +1202,11 @@ bot.on("callback_query:data", async (ctx) => {
                 ? (isToday ? `➡️ На ${otherShort}` : `⬅️ На ${otherShort}`)
                 : (isToday ? `➡️ For ${otherShort}` : `⬅️ For ${otherShort}`);
 
-            await ctx.reply(msg, {
-                parse_mode: 'HTML',
+            // sendRichMessage: native table via rich_message.html (Bot API 10.1+)
+            await ctx.api.sendRichMessage(ctx.chat.id, {
+                html: msg,
+                skip_entity_detection: true
+            }, {
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: otherLabel, callback_data: `forecast_hourly|${otherDateStr}` }]
