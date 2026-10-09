@@ -1186,10 +1186,10 @@ bot.on("callback_query:data", async (ctx) => {
                   `<li><b>Wind</b> — wind speed</li>` +
                   `</ul>`;
 
+            // Source always visible; only the column legend is collapsible
+            msg += `<p>${sourceLine}</p>`;
             msg += `<details>` +
-                `<summary>${lang === 'uk' ? '📖 Легенда / джерело' : '📖 Legend / source'}</summary>` +
-                `<p>${sourceLine}</p>` +
-                `<p>${lang === 'uk' ? '📖 Легенда заголовків:' : '📖 Column legend:'}</p>` +
+                `<summary>${lang === 'uk' ? '📖 Легенда заголовків' : '📖 Column legend'}</summary>` +
                 legendList +
                 `</details>`;
 
