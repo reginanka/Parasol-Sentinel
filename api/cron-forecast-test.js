@@ -40,20 +40,19 @@ module.exports = async (req, res) => {
 
         const fDict = {
             uk: {
-                title: "🌆 **Прогноз на {days} дн. для {city}**",
-                temp: "🌡 **Темп:**",
-                precip: "💧 **Вірог. опадів:**",
-                dew: "🌡 **Точка роси:**",
-                wind: "💨 **Вітер:**",
-                press: "🧭 **Тиск:**",
-                uv: "☀️ **УФ-індекс:**",
-                vis: "👁 **Видимість:**",
-                moon: "**Місяць:**",
-                sun: "🌅 **Сонце:**",
+                title: "Прогноз на {days} дн. для {city}",
+                temp: "Темп",
+                precip: "Опади",
+                dew: "Точка роси",
+                wind: "Вітер",
+                press: "Тиск",
+                uv: "УФ",
+                vis: "Видимість",
+                moon: "Місяць",
+                sun: "Сонце",
                 pressLow: "низький",
                 pressNorm: "норма",
                 pressHigh: "високий",
-                details: "🔗 Детальний прогноз",
                 gustsTo: "пориви до",
                 unitMs: "м/с",
                 unitKmh: "км/год",
@@ -62,20 +61,19 @@ module.exports = async (req, res) => {
                 loc: 'uk-UA'
             },
             en: {
-                title: "🌆 **{days}-day forecast for {city}**",
-                temp: "🌡 **Temp:**",
-                precip: "💧 **Precip:**",
-                dew: "🌡 **Dew Point:**",
-                wind: "💨 **Wind:**",
-                press: "🧭 **Pressure:**",
-                uv: "☀️ **UV Index:**",
-                vis: "👁 **Visibility:**",
-                moon: "**Moon:**",
-                sun: "🌅 **Sun:**",
+                title: "{days}-day forecast for {city}",
+                temp: "Temp",
+                precip: "Precip",
+                dew: "Dew Point",
+                wind: "Wind",
+                press: "Pressure",
+                uv: "UV",
+                vis: "Visibility",
+                moon: "Moon",
+                sun: "Sun",
                 pressLow: "low",
                 pressNorm: "normal",
                 pressHigh: "high",
-                details: "🔗 Detailed forecast",
                 gustsTo: "gusts up to",
                 unitMs: "m/s",
                 unitKmh: "km/h",
@@ -153,6 +151,12 @@ module.exports = async (req, res) => {
             return `${icon} ${name}`;
         };
 
+        // HTML escape for rich message safety
+        const esc = (s) => String(s ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
         const lang = user.language || 'uk';
         const tempUnit = user.units?.temp || 'c';
         const settings = user.forecastSettings || {
@@ -196,8 +200,7 @@ module.exports = async (req, res) => {
             }
         }
 
-        // Target date for hourly button only (TEST does NOT write eveningState —
-        // real baseline is owned exclusively by the production evening cron)
+        // Target date for hourly button only (TEST does NOT write eveningState)
         const cityTz = user.timezone || response.data.timezone || 'Europe/Kyiv';
         const localSend = new Date(new Date().toLocaleString('en-US', { timeZone: cityTz }));
         const targetHourly = new Date(localSend);
@@ -207,7 +210,7 @@ module.exports = async (req, res) => {
             day: '2-digit', month: '2-digit'
         });
 
-        // --- NOAA Kp (geomag) — display only, no DB write ---
+        // --- NOAA Kp (geomag) — display only ---
         let geomagInfo = null;
         try {
             const noaaRes = await axios.get(
@@ -249,7 +252,7 @@ module.exports = async (req, res) => {
             console.error('NOAA error:', e.message);
         }
 
-        // --- Open-Meteo soil frost (display only, no DB write) ---
+        // --- Open-Meteo soil frost (display only) ---
         let frostAnyDay = false;
         let frostColdest = null;
         let soilTimes = [];
@@ -267,7 +270,6 @@ module.exports = async (req, res) => {
             soil6 = omFrostRes.data?.hourly?.soil_temperature_6cm || [];
             const meanTimes = omFrostRes.data?.daily?.time || [];
             const meanVals = omFrostRes.data?.daily?.temperature_2m_mean || [];
-            // Frost alert — ONLY tomorrow (first day after today in Weatherbit list)
             const tomorrowDay = fullResponse[1];
             if (tomorrowDay) {
                 const dStr = String(tomorrowDay.valid_date || tomorrowDay.datetime || '').slice(0, 10);
@@ -292,17 +294,22 @@ module.exports = async (req, res) => {
             console.error('Test forecast frost check error:', e.message);
         }
 
-        // --- Формування повідомлення ---
+        // ========== RICH MESSAGE BUILD ==========
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
-        
-        let aqiPrefix = '';
+        const isUk = lang === 'uk';
+
+        let html = '';
+
+        // Title
+        html += `<h2>🧪 ${esc(fDict[lang].title.replace('{days}', settings.daysCount).replace('{city}', displayCity))}</h2>\n`;
+
+        // AQI block (collapsible if has advice)
         if (metrics.includes('aqi') && aqiData) {
-            const aqiLabel = lang === 'uk' ? '🍃 **Якість повітря (на момент зараз):**' : '🍃 **Air Quality (current moment):**';
-            aqiPrefix = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
-            if (aqiData.pm25 != null) aqiPrefix += ` | PM2.5: ${aqiData.pm25}`;
-            if (aqiData.pm10 != null) aqiPrefix += ` | PM10: ${aqiData.pm10}`;
-            
-            const isUk = lang === 'uk';
+            const aqiLabel = isUk ? '🍃 Якість повітря (зараз)' : '🍃 Air Quality (now)';
+            let aqiBody = `${aqiData.badge} <b>AQI ${aqiData.aqi}</b>`;
+            if (aqiData.pm25 != null) aqiBody += ` · PM2.5: ${aqiData.pm25}`;
+            if (aqiData.pm10 != null) aqiBody += ` · PM10: ${aqiData.pm10}`;
+
             const issues = [];
             if (aqiData.pm25 != null && aqiData.pm25 > 25) {
                 issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
@@ -313,33 +320,40 @@ module.exports = async (req, res) => {
 
             let advice = '';
             if (aqiData.aqi > 150) {
-                advice = isUk 
-                    ? '\n🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.' 
-                    : '\n🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
+                advice = isUk
+                    ? '🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
+                    : '🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
             } else if (aqiData.aqi > 100) {
-                advice = isUk 
-                    ? '\n🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.' 
-                    : '\n🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
+                advice = isUk
+                    ? '🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
+                    : '🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
             } else if (aqiData.aqi > 50) {
-                advice = isUk 
-                    ? '\n🟡 Повітря прийнятне, але чутливим людям варто бути обережними.' 
-                    : '\n🟡 Air quality is acceptable, but sensitive groups should be cautious.';
+                advice = isUk
+                    ? '🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
+                    : '🟡 Air quality is acceptable, but sensitive groups should be cautious.';
             } else if (issues.length > 0) {
-                advice = isUk 
-                    ? '\n⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.' 
-                    : '\n⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+                advice = isUk
+                    ? '⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
+                    : '⚠️ AQI is low, but elevated levels of specific dust particles detected.';
             }
-
             if (issues.length > 0 && advice) {
                 advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
             }
-            
-            aqiPrefix += advice + '\n\n';
+
+            if (advice) {
+                html += `<details>\n<summary><b>${aqiLabel}</b> — ${aqiBody}</summary>\n${esc(advice)}\n</details>\n\n`;
+            } else {
+                html += `<p><b>${aqiLabel}</b>: ${aqiBody}</p>\n\n`;
+            }
         }
 
-        let frostPrefix = frostAnyDay ? `${frostWarningText(lang, frostColdest)}\n\n` : '';
-        let message = `${aqiPrefix}${frostPrefix}🧪 **ТЕСТОВИЙ прогноз на ${settings.daysCount} дн. для ${displayCity}**\n\n`;
+        // Frost warning
+        if (frostAnyDay) {
+            const frostText = frostWarningText(lang, frostColdest);
+            html += `<p>⚠️ ${esc(frostText)}</p>\n\n`;
+        }
 
+        // Days
         const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 
         userForecast.forEach((day, idx) => {
@@ -349,14 +363,51 @@ module.exports = async (req, res) => {
             });
             const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
 
-            message += `📅 **${capDay}**\n`;
+            html += `<h3>📅 ${esc(capDay)}</h3>\n`;
 
             if (metrics.includes('condition')) {
-                message += `${getWeatherDesc(day.weather.code, lang)}\n`;
+                html += `<p>${esc(getWeatherDesc(day.weather.code, lang))}</p>\n`;
             }
+
+            // Compact table for core metrics
+            const rows = [];
+
             if (metrics.includes('temp')) {
-                message += `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n`;
+                rows.push([fDict[lang].temp, `${formatTemp(day.min_temp, tempUnit)} … ${formatTemp(day.max_temp, tempUnit)}`]);
             }
+            if (metrics.includes('precip')) {
+                rows.push([fDict[lang].precip, `${day.pop}% (${(day.precip || 0).toFixed(1)} мм)`]);
+            }
+            if (metrics.includes('wind')) {
+                rows.push([fDict[lang].wind, formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)]);
+            }
+            if (metrics.includes('pressure')) {
+                rows.push([fDict[lang].press, formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)]);
+            }
+            if (metrics.includes('dew')) {
+                rows.push([fDict[lang].dew, formatTemp(day.dewpt, tempUnit)]);
+            }
+            if (metrics.includes('uv')) {
+                rows.push([fDict[lang].uv, formatUV(day.uv)]);
+            }
+            if (metrics.includes('visibility')) {
+                rows.push([fDict[lang].vis, `${Math.round(day.vis)} км`]);
+            }
+            if (metrics.includes('moon')) {
+                const dObj = new Date(day.valid_date || day.datetime);
+                rows.push([fDict[lang].moon, formatMoon(dObj, lang)]);
+            }
+            if (metrics.includes('sun')) {
+                const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
+                const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
+                rows.push([fDict[lang].sun, `${sunrise} | ${sunset}`]);
+            }
+            if (metrics.includes('geomag') && geomagInfo && idx === 0) {
+                const label = isUk ? geomagInfo.labelUk : geomagInfo.labelEn;
+                rows.push([isUk ? 'Магнітні бурі' : 'Magnetic Storms', `${geomagInfo.badge} ${label}`]);
+            }
+
+            // Soil
             if (metrics.includes('soil0') || metrics.includes('soil6')) {
                 const dStrSoil = String(day.valid_date || day.datetime || '').slice(0, 10);
                 const vals0 = [], vals6 = [];
@@ -372,66 +423,41 @@ module.exports = async (req, res) => {
                 };
                 if (metrics.includes('soil0') && vals0.length) {
                     const mn = Math.min(...vals0), mx = Math.max(...vals0);
-                    message += lang === 'uk'
-                        ? `🌱 **Ґрунт 0 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
-                        : `🌱 **Soil 0 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                    rows.push([isUk ? 'Ґрунт 0 см' : 'Soil 0 cm', `${fmtSoil(mn)} … ${fmtSoil(mx)}`]);
                 }
                 if (metrics.includes('soil6') && vals6.length) {
                     const mn = Math.min(...vals6), mx = Math.max(...vals6);
-                    message += lang === 'uk'
-                        ? `🌱 **Ґрунт 6 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
-                        : `🌱 **Soil 6 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                    rows.push([isUk ? 'Ґрунт 6 см' : 'Soil 6 cm', `${fmtSoil(mn)} … ${fmtSoil(mx)}`]);
                 }
             }
-            if (metrics.includes('precip')) {
-                message += `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n`;
+
+            if (rows.length > 0) {
+                html += `<table bordered striped>\n`;
+                for (const [k, v] of rows) {
+                    html += `<tr><td><b>${esc(k)}</b></td><td>${esc(v)}</td></tr>\n`;
+                }
+                html += `</table>\n`;
             }
-            if (metrics.includes('wind')) {
-                message += `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n`;
-            }
-            if (metrics.includes('pressure')) {
-                message += `${fDict[lang].press} ${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}\n`;
-            }
-            if (metrics.includes('dew')) {
-                message += `${fDict[lang].dew} ${formatTemp(day.dewpt, tempUnit)}\n`;
-            }
-            if (metrics.includes('uv')) {
-                message += `${fDict[lang].uv} ${formatUV(day.uv)}\n`;
-            }
-            if (metrics.includes('visibility')) {
-                message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
-            }
-            if (metrics.includes('moon')) {
-                const dObj = new Date(day.valid_date || day.datetime);
-                message += `${fDict[lang].moon} ${formatMoon(dObj, lang)}\n`;
-            }
-            if (metrics.includes('sun')) {
-                const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
-                const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
-                message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
-            }
-            if (metrics.includes('geomag') && geomagInfo && idx === 0) {
-                const label = lang === 'uk' ? geomagInfo.labelUk : geomagInfo.labelEn;
-                const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
-                message += `${geomagLabel} ${geomagInfo.badge} ${label}\n`;
-            }
-            message += '\n';
+
+            html += `\n`;
         });
 
-        await bot.api.sendMessage(user.telegramId, message, {
-            parse_mode: 'Markdown',
-            disable_web_page_preview: true,
+        // Send via sendRichMessage
+        await bot.api.sendRichMessage(user.telegramId, {
+            html: html
+        }, {
+            disable_notification: false,
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: lang === 'uk' ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
-                    [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
-                    [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                    [{ text: isUk ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
+                    [{ text: isUk ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
+                    [{ text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
                 ]
             }
         });
-        
-        await log(`🧪 <b>Тестовий прогноз</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
-        res.status(200).send(`Test forecast sent to ${TEST_USER_ID}`);
+
+        await log(`🧪 <b>Тестовий RICH-прогноз</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
+        res.status(200).send(`Test rich forecast sent to ${TEST_USER_ID}`);
     } catch (error) {
         console.error(error);
         await log(`❌ <b>Test forecast FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
