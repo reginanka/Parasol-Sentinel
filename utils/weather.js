@@ -193,6 +193,54 @@ const isFrostSeason = (date = new Date(), timezone = 'Europe/Kyiv') => {
     }
 };
 
+/**
+ * Unified geomagnetic activity level from planetary Kp (0–9).
+ * Same scale everywhere: evening forecast labels + real-time alerts.
+ *
+ *   Kp < 4      → quiet     (rank 0)  🟢 Спокійно
+ *   4 ≤ Kp < 5  → unsettled (rank 1)  🟡 Збурення
+ *   Kp ≥ 5      → storm     (rank 2)  🔴 Буря
+ */
+const getGeomagLevel = (kp) => {
+    if (kp == null || Number.isNaN(Number(kp))) return null;
+    const k = Number(kp);
+    const kpRounded = Math.round(k);
+    if (k >= 5) {
+        return {
+            level: 'storm',
+            rank: 2,
+            badge: '🔴',
+            kp: k,
+            kpRounded,
+            labelUk: `Буря (Kp ${kpRounded})`,
+            labelEn: `Storm (Kp ${kpRounded})`,
+            gScale: Math.min(5, Math.max(1, kpRounded - 4))
+        };
+    }
+    if (k >= 4) {
+        return {
+            level: 'unsettled',
+            rank: 1,
+            badge: '🟡',
+            kp: k,
+            kpRounded,
+            labelUk: `Збурення (Kp ${kpRounded})`,
+            labelEn: `Unsettled (Kp ${kpRounded})`,
+            gScale: null
+        };
+    }
+    return {
+        level: 'quiet',
+        rank: 0,
+        badge: '🟢',
+        kp: k,
+        kpRounded,
+        labelUk: `Спокійно (Kp ${kpRounded})`,
+        labelEn: `Calm (Kp ${kpRounded})`,
+        gScale: null
+    };
+};
+
 module.exports = {
     WEATHER_CODES,
     WIND_DIRECTIONS,
@@ -206,5 +254,6 @@ module.exports = {
     frostOccurredText,
     estimateSoilTemp0,
     formatSoilTemp,
-    isFrostSeason
+    isFrostSeason,
+    getGeomagLevel
 };
