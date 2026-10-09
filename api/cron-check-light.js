@@ -49,18 +49,118 @@ module.exports = async (req, res) => {
         const logLines = [];
 
         const alertsDict = {
-            uk: {
-                tempAnomaly: "⚠️ **Аномальна температура!**\nЗараз: {temp}, що значно {dir} ніж очікувалось на цей час (станом на {asOf}: {expected}).",
-                forecastShift: "📊 **Прогноз на сьогодні змінився!**\nОчікували (станом на {asOf}): {oldMin}..{oldMax}°C\nЗараз: {newMin}..{newMax}°C\nЗміна: ніч {minDelta}°C, день {maxDelta}°C",
-                warmer: "вище",
-                cooler: "нижче"
-            },
-            en: {
-                tempAnomaly: "⚠️ **Temperature anomaly!**\nNow: {temp}, which is {dir} than expected for this time (as of {asOf}: {expected}).",
-                forecastShift: "📊 **Today's forecast has changed!**\nExpected (as of {asOf}): {oldMin}..{oldMax}°C\nNow: {newMin}..{newMax}°C\nChange: night {minDelta}°C, day {maxDelta}°C",
-                warmer: "warmer",
-                cooler: "cooler"
+            uk: { warmer: "вище", cooler: "нижче" },
+            en: { warmer: "warmer", cooler: "cooler" }
+        };
+
+        const htmlForecastShift = (lang, { asOf, oldMin, oldMax, newMin, newMax, minDelta, maxDelta }) => {
+            if (lang === 'uk') {
+                return `<h3>📊 Прогноз температури змінився</h3>` +
+                    `<table bordered striped compact>` +
+                    `<tr><th></th><th>Ніч</th><th>День</th></tr>` +
+                    `<tr><td>Було <i>(${asOf})</i></td><td>${oldMin}°C</td><td>${oldMax}°C</td></tr>` +
+                    `<tr><td>Зараз</td><td><b>${newMin}°C</b></td><td><b>${newMax}°C</b></td></tr>` +
+                    `<tr><td>Зміна</td><td>${minDelta}°C</td><td>${maxDelta}°C</td></tr>` +
+                    `</table>`;
             }
+            return `<h3>📊 Temperature forecast changed</h3>` +
+                `<table bordered striped compact>` +
+                `<tr><th></th><th>Night</th><th>Day</th></tr>` +
+                `<tr><td>Was <i>(${asOf})</i></td><td>${oldMin}°C</td><td>${oldMax}°C</td></tr>` +
+                `<tr><td>Now</td><td><b>${newMin}°C</b></td><td><b>${newMax}°C</b></td></tr>` +
+                `<tr><td>Change</td><td>${minDelta}°C</td><td>${maxDelta}°C</td></tr>` +
+                `</table>`;
+        };
+
+        const htmlTempAnomaly = (lang, { temp, asOf, expected, dir }) => {
+            if (lang === 'uk') {
+                return `<h3>⚠️ Аномальна температура</h3>` +
+                    `<p>Зараз: <b>${temp}</b> — значно <b>${dir}</b>, ніж очікувалось на цей час.</p>` +
+                    `<p>Очікували (станом на ${asOf}): <b>${expected}</b></p>`;
+            }
+            return `<h3>⚠️ Temperature anomaly</h3>` +
+                `<p>Now: <b>${temp}</b> — significantly <b>${dir}</b> than expected for this time.</p>` +
+                `<p>Expected (as of ${asOf}): <b>${expected}</b></p>`;
+        };
+
+        const htmlPrecip = (lang, kind, { asOf, oldBlocks, oldTotal, newBlocks, newTotal }) => {
+            const was = lang === 'uk' ? 'Було' : 'Was';
+            const now = lang === 'uk' ? 'Зараз' : 'Now';
+            const colInt = lang === 'uk' ? 'Інтервал' : 'Interval';
+            const colSum = lang === 'uk' ? 'Сума' : 'Total';
+            const asOfCell = asOf ? ` <i>(${asOf})</i>` : '';
+            const oldInt = oldBlocks || '—';
+            const newInt = newBlocks || '—';
+            const oldSum = oldTotal != null ? `${Number(oldTotal).toFixed(1)} мм` : '—';
+            const newSum = newTotal != null ? `${Number(newTotal).toFixed(1)} мм` : '—';
+            const titles = {
+                uk: {
+                    canceled: '☀️ Опади скасовано',
+                    amountUp: '⚠️ Більше опадів, ніж очікувалось',
+                    longer: '🌤 Опади триватимуть довше',
+                    appeared: "⚠️ З'явилися опади",
+                    shifted: '🌤 Час опадів змістився'
+                },
+                en: {
+                    canceled: '☀️ Precipitation canceled',
+                    amountUp: '⚠️ More precipitation expected',
+                    longer: '🌤 Precipitation will last longer',
+                    appeared: '⚠️ Precipitation appeared',
+                    shifted: '🌤 Precipitation timing shifted'
+                }
+            };
+            const title = (titles[lang] || titles.uk)[kind] || titles.uk.shifted;
+            return `<h3>${title}</h3>` +
+                `<table bordered striped compact>` +
+                `<tr><th></th><th>${colInt}</th><th>${colSum}</th></tr>` +
+                `<tr><td>${was}${asOfCell}</td><td>${oldInt}</td><td>${oldSum}</td></tr>` +
+                `<tr><td>${now}</td><td><b>${newInt}</b></td><td><b>${newSum}</b></td></tr>` +
+                `</table>`;
+        };
+
+        const htmlGeomag = (lang, { kp, isStorm }) => {
+            const kpStr = Number(kp).toFixed(0);
+            if (lang === 'uk') {
+                if (isStorm) {
+                    return `<h3>🧲 Увага! Магнітна буря (Kp ${kpStr})</h3>` +
+                        `<p>Активне збурення геомагнітного поля · рівень <b>G${Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
+                        `<blockquote>Метеозалежним: зменшити навантаження, пити більше води та тримати під рукою ліки.</blockquote>`;
+                }
+                return `<h3>🧲 Збурення магнітного поля (Kp ${kpStr})</h3>` +
+                    `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>`;
+            }
+            if (isStorm) {
+                return `<h3>🧲 Alert! Magnetic Storm (Kp ${kpStr})</h3>` +
+                    `<p>Active geomagnetic disturbance · level <b>G${Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
+                    `<blockquote>Weather-sensitive people: reduce activity, drink more water, keep medication handy.</blockquote>`;
+            }
+            return `<h3>🧲 Unsettled geomagnetic field (Kp ${kpStr})</h3>` +
+                `<p>Mild discomfort possible for weather-sensitive individuals.</p>`;
+        };
+
+        const htmlAqiWorse = (lang, { aqiVal, badge, pm25, pm10, advice }) => {
+            const title = lang === 'uk' ? '🍃 Якість повітря погіршилась' : '🍃 Air quality deteriorated';
+            let rows = `<tr><td>AQI</td><td><b>${aqiVal}</b> ${badge}</td></tr>`;
+            if (pm25 != null) rows += `<tr><td>PM2.5</td><td>${pm25} µg/m³</td></tr>`;
+            if (pm10 != null) rows += `<tr><td>PM10</td><td>${pm10} µg/m³</td></tr>`;
+            const colM = lang === 'uk' ? 'Показник' : 'Metric';
+            const colV = lang === 'uk' ? 'Значення' : 'Value';
+            let html = `<h3>${title}</h3>` +
+                `<table bordered striped compact>` +
+                `<tr><th>${colM}</th><th>${colV}</th></tr>${rows}</table>`;
+            if (advice) html += `<blockquote>${advice}</blockquote>`;
+            return html;
+        };
+
+        const htmlAqiBetter = (lang, { aqiVal }) => {
+            if (lang === 'uk') {
+                return `<h3>🍃 Якість повітря покращилась</h3>` +
+                    `<p>🟢 AQI <b>${aqiVal}</b> — повітря знову в безпечній зоні.</p>` +
+                    `<p>Можна відкривати вікна та спокійно гуляти на вулиці.</p>`;
+            }
+            return `<h3>🍃 Air quality improved</h3>` +
+                `<p>🟢 AQI <b>${aqiVal}</b> — air is back in the safe zone.</p>` +
+                `<p>You can open the windows and safely go for a walk.</p>`;
         };
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
@@ -134,13 +234,16 @@ module.exports = async (req, res) => {
                             if (!user.notificationsEnabled || user.alertTriggers?.temperature === false) continue;
                             const lang = user.language || 'uk';
                             const asOf = formatLocalDateTime(dayAsOf, cityTimezone, lang);
-                            const msg = alertsDict[lang].forecastShift
-                                .replace('{asOf}', asOf)
-                                .replace('{oldMin}', oldMin).replace('{oldMax}', oldMax)
-                                .replace('{newMin}', newMin).replace('{newMax}', newMax)
-                                .replace('{minDelta}', fmtDelta(minShift))
-                                .replace('{maxDelta}', fmtDelta(maxShift));
-                            alerts.push({ userId: user.telegramId, text: msg, lang });
+                            const html = htmlForecastShift(lang, {
+                                asOf,
+                                oldMin: Math.round(oldMin),
+                                oldMax: Math.round(oldMax),
+                                newMin: Math.round(newMin),
+                                newMax: Math.round(newMax),
+                                minDelta: fmtDelta(minShift),
+                                maxDelta: fmtDelta(maxShift)
+                            });
+                            alerts.push({ userId: user.telegramId, html, lang });
                         }
                         alertTriggered = true;
 
@@ -214,12 +317,13 @@ module.exports = async (req, res) => {
                                 unit === 'f' ? `${Math.round(c * 9 / 5 + 32)}°F` : `${Math.round(c)}°C`;
                             const asOf = formatLocalDateTime(dayAsOf, cityTimezone, lang);
 
-                            const msg = alertsDict[lang].tempAnomaly
-                                .replace('{temp}', fmtTemp(curTemp))
-                                .replace('{asOf}', asOf)
-                                .replace('{expected}', fmtTemp(expectedBase))
-                                .replace('{dir}', alertsDict[lang][direction]);
-                            alerts.push({ userId: user.telegramId, text: msg, lang });
+                            const html = htmlTempAnomaly(lang, {
+                                temp: fmtTemp(curTemp),
+                                asOf,
+                                expected: fmtTemp(expectedBase),
+                                dir: alertsDict[lang][direction]
+                            });
+                            alerts.push({ userId: user.telegramId, html, lang });
                         }
                         alertTriggered = true;
                     }
@@ -409,37 +513,27 @@ module.exports = async (req, res) => {
                         const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
 
                         if (shouldAlert) {
-                            const oldAsOfUk = formatLocalDateTime(oldPrecipAsOf, cityTimezone, 'uk');
-                            const asOfSuffixUk = oldAsOfUk ? ` (станом на ${oldAsOfUk})` : '';
-
                             // Message uses FULL-day schedule; decision was future-only
-                            let alertMsg = '';
+                            let precipKind = null;
+                            if (fullyCanceled) precipKind = 'canceled';
+                            else if (significantAmountUp) precipKind = 'amountUp';
+                            else if (significantLonger) precipKind = 'longer';
+                            else if (significantShift) precipKind = (oldS.start == null) ? 'appeared' : 'shifted';
 
-                            if (fullyCanceled) {
-                                alertMsg = `☀️ Чудові новини! Усі очікувані на сьогодні опади скасовано, дощу не передбачається.\n` +
-                                    `Було${asOfSuffixUk} ~${oldSFull.total.toFixed(1)} мм → зараз 0 мм.`;
-                            } else if (significantAmountUp) {
-                                alertMsg = `⚠️ Прогноз змінився: очікується більше опадів!\n` +
-                                    `Було${asOfSuffixUk} ~${oldSFull.total.toFixed(1)} мм → зараз ~${newSFull.total.toFixed(1)} мм.\n` +
-                                    `Дощ: ${fmtBlocks(newSFull)}.`;
-                            } else if (significantLonger) {
-                                alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
-                                    `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)} (сумарно ${oldSFull.total.toFixed(1)} мм)\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
-                            } else if (significantShift) {
-                                if (oldS.start == null) {
-                                    alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
-                                        `Дощ: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
-                                } else {
-                                    alertMsg = `🌤 Час опадів змістився.\n` +
-                                        `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)} (сумарно ${oldSFull.total.toFixed(1)} мм)\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
-                                }
-                            }
-
-                            if (alertMsg) {
+                            if (precipKind) {
                                 reasons.push("зміна опадів");
                                 for (const user of cityInfo.users) {
                                     if (!user.notificationsEnabled || user.alertTriggers?.precip === false) continue;
-                                    alerts.push({ userId: user.telegramId, text: alertMsg, lang: user.language || 'uk' });
+                                    const lang = user.language || 'uk';
+                                    const asOf = formatLocalDateTime(oldPrecipAsOf, cityTimezone, lang) || '';
+                                    const html = htmlPrecip(lang, precipKind, {
+                                        asOf,
+                                        oldBlocks: fmtBlocks(oldSFull) || '—',
+                                        oldTotal: oldSFull.total,
+                                        newBlocks: precipKind === 'canceled' ? '—' : (fmtBlocks(newSFull) || '—'),
+                                        newTotal: precipKind === 'canceled' ? 0 : newSFull.total
+                                    });
+                                    alerts.push({ userId: user.telegramId, html, lang });
                                 }
                                 alertTriggered = true;
                             }
@@ -504,15 +598,8 @@ module.exports = async (req, res) => {
                                     if (eveningOn && geomagInEvening && eveningCoveredToday) continue;
 
                                     const lang = user.language || 'uk';
-                                    const isUk = lang === 'uk';
-                                    const ukMsg = isStorm
-                                        ? `🧲 **Увага! Магнітна буря (Kp ${currentMaxKp.toFixed(0)})!**\nФіксується активне збурення геомагнітного поля. Метеозалежним людям варто зменшити навантаження, пити більше води та тримати під рукою ліки.`
-                                        : `🧲 **Увага! Спостерігається збурення магнітного поля (Kp ${currentMaxKp.toFixed(0)})!**\nМожливе незначне погіршення самопочуття у метеочутливих людей.`;
-                                    const enMsg = isStorm
-                                        ? `🧲 **Alert! Magnetic Storm (Kp ${currentMaxKp.toFixed(0)})!**\nActive geomagnetic field disturbance detected. Weather-sensitive people should reduce physical activity and drink plenty of water.`
-                                        : `🧲 **Alert! Unsettled geomagnetic field (Kp ${currentMaxKp.toFixed(0)})!**\nMild discomfort possible for weather-sensitive individuals.`;
-
-                                    alerts.push({ userId: user.telegramId, text: isUk ? ukMsg : enMsg, lang });
+                                    const html = htmlGeomag(lang, { kp: currentMaxKp, isStorm });
+                                    alerts.push({ userId: user.telegramId, html, lang });
                                     anyUserAlerted = true;
                                 }
 
@@ -575,13 +662,6 @@ module.exports = async (req, res) => {
                                     const lang = user.language || 'uk';
                                     const isUk = lang === 'uk';
 
-                                    let title = isUk
-                                        ? `🍃 **Попередження: Погіршення якості повітря!**`
-                                        : `🍃 **Alert: Air Quality Deterioration!**`;
-                                    let mainBody = `${title}\n${badge} AQI ${aqiVal}`;
-                                    if (pm25 != null) mainBody += ` | PM2.5: ${pm25}`;
-                                    if (pm10 != null) mainBody += ` | PM10: ${pm10}`;
-
                                     const issues = [];
                                     if (pm25 != null && pm25 > 25) issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
                                     if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
@@ -589,21 +669,22 @@ module.exports = async (req, res) => {
                                     let advice = '';
                                     if (aqiVal > 150) {
                                         advice = isUk
-                                            ? '\n🔴 **Небезпечний рівень забруднення!** Зачиніть вікна, увімкніть очищувач повітря та утримайтесь від виходу на вулицю.'
-                                            : '\n🔴 **Dangerous air quality!** Close windows, turn on air purifiers, and refrain from going outside.';
+                                            ? '🔴 Небезпечний рівень забруднення! Зачиніть вікна, увімкніть очищувач повітря та утримайтесь від виходу на вулицю.'
+                                            : '🔴 Dangerous air quality! Close windows, turn on air purifiers, and refrain from going outside.';
                                     } else if (aqiVal > 100) {
                                         advice = isUk
-                                            ? '\n🟠 **Шкідливо для чутливих груп!** Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.'
-                                            : '\n🟠 **Unhealthy for sensitive groups!** High dust/smog level. We recommend closing windows.';
+                                            ? '🟠 Шкідливо для чутливих груп! Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.'
+                                            : '🟠 Unhealthy for sensitive groups! High dust/smog level. We recommend closing windows.';
                                     } else if (aqiVal > 50) {
                                         advice = isUk
-                                            ? '\n🟡 **Повітря помірно забруднене.** Чутливим людям варто бути обережними.'
-                                            : '\n🟡 **Moderate air pollution.** Sensitive individuals should take precautions.';
+                                            ? '🟡 Повітря помірно забруднене. Чутливим людям варто бути обережними.'
+                                            : '🟡 Moderate air pollution. Sensitive individuals should take precautions.';
                                     }
                                     if (issues.length > 0) {
-                                        advice += isUk ? `\n(Причина: ${issues.join(', ')})` : `\n(Reason: ${issues.join(', ')})`;
+                                        advice += isUk ? ` (Причина: ${issues.join(', ')})` : ` (Reason: ${issues.join(', ')})`;
                                     }
-                                    alerts.push({ userId: user.telegramId, text: `${mainBody}${advice}`, lang });
+                                    const html = htmlAqiWorse(lang, { aqiVal, badge, pm25, pm10, advice });
+                                    alerts.push({ userId: user.telegramId, html, lang });
                                 }
                                 alertTriggered = true;
                             } else if (currentTier === 0 && lastAqiTier > 0) {
@@ -612,10 +693,8 @@ module.exports = async (req, res) => {
                                     if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
                                     const lang = user.language || 'uk';
                                     const isUk = lang === 'uk';
-                                    const goodMsg = isUk
-                                        ? `🍃 **Гарні новини! Якість повітря покращилась.**\n🟢 AQI ${aqiVal} — повітря знову в безпечній зоні.\nМожна відкривати вікна та спокійно гуляти на вулиці.`
-                                        : `🍃 **Good news! Air quality has improved.**\n🟢 AQI ${aqiVal} — air is back in the safe zone.\nYou can open the windows and safely go for a walk.`;
-                                    alerts.push({ userId: user.telegramId, text: goodMsg, lang });
+                                    const html = htmlAqiBetter(lang, { aqiVal });
+                                    alerts.push({ userId: user.telegramId, html, lang });
                                 }
                                 alertTriggered = true;
                             }
@@ -625,26 +704,43 @@ module.exports = async (req, res) => {
                     }
                 }
 
-                // --- SEND ALERTS ---
+                // --- SEND ALERTS (Rich Messages) ---
                 const uniqueAlerts = {};
                 for (const a of alerts) {
-                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { texts: [], lang: a.lang || 'uk' };
-                    uniqueAlerts[a.userId].texts.push(a.text);
+                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk' };
+                    if (a.html) uniqueAlerts[a.userId].parts.push(a.html);
                 }
 
                 for (const userId of Object.keys(uniqueAlerts)) {
+                    const parts = uniqueAlerts[userId].parts;
+                    if (!parts.length) continue;
                     await sleep(50);
                     const userLang = uniqueAlerts[userId].lang || 'uk';
                     const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
-                    await bot.api.sendMessage(userId, uniqueAlerts[userId].texts.join('\n\n'), {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: btnText, callback_data: 'alert_settings' }]
-                            ]
-                        }
-                    });
-                    alertsTotal++;
+                    try {
+                        await bot.api.sendRichMessage(userId, {
+                            html: parts.join('<hr/>'),
+                            skip_entity_detection: true
+                        }, {
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: btnText, callback_data: 'alert_settings' }]
+                                ]
+                            }
+                        });
+                        alertsTotal++;
+                    } catch (sendErr) {
+                        console.error(`sendRichMessage failed for ${userId}:`, sendErr.message);
+                        const plain = parts.join('\n\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                        await bot.api.sendMessage(userId, plain, {
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: btnText, callback_data: 'alert_settings' }]
+                                ]
+                            }
+                        }).catch(() => {});
+                        alertsTotal++;
+                    }
                 }
 
                 if (cityTimezone && !cityDoc?.timezone) {
