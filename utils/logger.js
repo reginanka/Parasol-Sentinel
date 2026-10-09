@@ -12,10 +12,10 @@ async function logToTelegram(bot, chatId, text) {
 
     try {
         // Optional: Verify bot connection once or per call if debugging
-        // const me = await bot.telegram.getMe();
+        // const me = await bot.api.getMe();
         // console.log(`🤖 Log Bot Identity: @${me.username}`);
 
-        await bot.telegram.sendMessage(chatId, text, { parse_mode: 'html' });
+        await bot.api.sendMessage(chatId, text, { parse_mode: 'html' });
         console.log('✅ Log successfully sent to Telegram.');
     } catch (e) {
         console.error('❌ Log send error for Chat ID:', chatId);
@@ -29,7 +29,7 @@ async function logToTelegram(bot, chatId, text) {
         // Fallback for HTML parse errors: try to send as plain text
         if (e.message.includes('can\'t parse entities')) {
             try {
-                await bot.telegram.sendMessage(chatId, '🚨 Warning: Failed to send formatted log. Sending plain text fallback:\n\n' + text.replace(/<[^>]*>/g, ''));
+                await bot.api.sendMessage(chatId, '🚨 Warning: Failed to send formatted log. Sending plain text fallback:\n\n' + text.replace(/<[^>]*>/g, ''));
                 console.log('✅ Fallback log sent successfully.');
             } catch (fallbackErr) {
                 console.error('❌ Fallback log send failed too:', fallbackErr.message);
