@@ -424,14 +424,14 @@ module.exports = async (req, res) => {
                                     `Дощ: ${fmtBlocks(newSFull)}.`;
                             } else if (significantLonger) {
                                 alertMsg = `🌤 Опади триватимуть довше, ніж очікувалось.\n` +
-                                    `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)}\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
+                                    `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)} (сумарно ${oldSFull.total.toFixed(1)} мм)\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
                             } else if (significantShift) {
                                 if (oldS.start == null) {
                                     alertMsg = `⚠️ З'явилися опади, яких не було в прогнозі!\n` +
                                         `Дощ: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
                                 } else {
                                     alertMsg = `🌤 Час опадів змістився.\n` +
-                                        `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)}\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
+                                        `Було${asOfSuffixUk}: ${fmtBlocks(oldSFull)} (сумарно ${oldSFull.total.toFixed(1)} мм)\nЗараз: ${fmtBlocks(newSFull)} (сумарно ${newSFull.total.toFixed(1)} мм).`;
                                 }
                             }
 
