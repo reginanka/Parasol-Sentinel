@@ -1360,7 +1360,7 @@ bot.on("callback_query:data", async (ctx) => {
         }
     }
 
-    // --- Help topic callback (Rich Message) ---
+    // --- Help topic callback (Rich Message, edit in place) ---
     else if (data[0] === 'help') {
         const topic = data[1];
         const html = dict[lang][`help_${topic}_desc`];
@@ -1371,18 +1371,28 @@ bot.on("callback_query:data", async (ctx) => {
 
         try {
             await ctx.answerCallbackQuery().catch(() => { });
-            // sendRichMessage: headings, tables, details, lists (Bot API 10.1+ / grammY)
-            await ctx.api.sendRichMessage(ctx.chat.id, {
-                html,
-                skip_entity_detection: true
-            }, {
+            // editMessageText + rich_message: updates the same message (Bot API 10.1+)
+            await ctx.api.raw.editMessageText({
+                chat_id: ctx.chat.id,
+                message_id: ctx.callbackQuery.message.message_id,
+                rich_message: {
+                    html,
+                    skip_entity_detection: true
+                },
                 reply_markup: buildHelpKeyboard(lang, topic)
             });
         } catch (e) {
-            console.error('Help Rich Message Error:', e.message);
-            // Fallback: plain HTML message if rich is unavailable
+            // Same topic twice → "message is not modified"
+            if (e.message && e.message.includes('message is not modified')) {
+                return;
+            }
+            console.error('Help Rich Edit Error:', e.message);
+            // Fallback: send new rich message if edit fails (e.g. old plain message edge case)
             try {
-                await ctx.reply(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(), {
+                await ctx.api.sendRichMessage(ctx.chat.id, {
+                    html,
+                    skip_entity_detection: true
+                }, {
                     reply_markup: buildHelpKeyboard(lang, topic)
                 });
             } catch (e2) {
