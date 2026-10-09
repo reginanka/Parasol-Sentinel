@@ -692,7 +692,7 @@ module.exports = async (req, res) => {
                     await sleep(50);
                     const userLang = uniqueAlerts[userId].lang || 'uk';
                     const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
-                    await bot.telegram.sendMessage(userId, uniqueAlerts[userId].texts.join('\n\n'), {
+                    await bot.api.sendMessage(userId, uniqueAlerts[userId].texts.join('\n\n'), {
                         parse_mode: 'Markdown',
                         reply_markup: {
                             inline_keyboard: [

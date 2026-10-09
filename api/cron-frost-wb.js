@@ -392,7 +392,7 @@ module.exports = async (req, res) => {
                         .replace(/\{hour\}/g, hourStr);
 
                     try {
-                        await bot.telegram.sendMessage(user.telegramId, text, { parse_mode: 'Markdown' });
+                        await bot.api.sendMessage(user.telegramId, text, { parse_mode: 'Markdown' });
                         alertsTotal++;
                     } catch (sendErr) {
                         console.error(`Frost TIO send to ${user.telegramId}:`, sendErr.message);

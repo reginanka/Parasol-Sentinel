@@ -418,7 +418,7 @@ module.exports = async (req, res) => {
             message += '\n';
         });
 
-        await bot.telegram.sendMessage(user.telegramId, message, {
+        await bot.api.sendMessage(user.telegramId, message, {
             parse_mode: 'Markdown',
             disable_web_page_preview: true,
             reply_markup: {

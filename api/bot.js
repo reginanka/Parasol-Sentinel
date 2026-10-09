@@ -22,6 +22,7 @@ const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason } =
 /**
  * Parasol Sentinel Bot - Core logic handler.
  * Design Choice: Using a hybrid approach (Serverless Webhook + Polling for Local Dev).
+ * Migrated from Telegraf to grammY.
  */
 
 const dict = {
@@ -427,7 +428,7 @@ const getLang = (ctx) => (ctx.from?.language_code === 'uk' || ctx.from?.language
 
 // Global command registration (runs once on startup/import)
 if (process.env.TG_TOKEN) {
-    bot.telegram.setMyCommands([
+    bot.api.setMyCommands([
         { command: 'start', description: 'Запустити бота / Start' },
         { command: 'settings', description: 'Налаштування / Settings' },
         { command: 'help', description: 'Допомога / Help' }
@@ -458,7 +459,7 @@ module.exports = async (req, res) => {
 }
 
 // /start command
-bot.start(async (ctx) => {
+bot.command("start", async (ctx) => {
     console.log('Start command from:', ctx.from.id);
     const lang = getLang(ctx);
     await connectDB();
@@ -472,24 +473,22 @@ bot.start(async (ctx) => {
         resize_keyboard: true
     };
 
-    await ctx.replyWithMarkdown(dict[lang].welcome, {
-        reply_markup: keyboard
-    });
+    await ctx.reply(dict[lang].welcome, { parse_mode: 'Markdown', reply_markup: keyboard });
 
     // Register commands for the user
     try {
-        await ctx.setMyCommands([
+        await ctx.api.setMyCommands([
             { command: 'start', description: lang === 'uk' ? 'Запустити бота' : 'Start the bot' },
             { command: 'settings', description: lang === 'uk' ? 'Налаштування' : 'Settings' },
             { command: 'help', description: lang === 'uk' ? 'Допомога' : 'Help' }
         ]);
 
         // Set WebApp menu button (this will be on the left of the input field)
-        await ctx.setChatMenuButton({
+        await ctx.api.setChatMenuButton({ menu_button: {
             type: 'web_app',
             text: dict[lang].dashboard,
             web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
-        });
+        } });
     } catch (e) {
         console.error('Error setting commands/menu:', e.message);
     }
@@ -501,14 +500,12 @@ bot.command('settings', async (ctx) => {
     await connectDB();
     const user = await User.findOne({ telegramId: ctx.from.id });
     if (!user) {
-        return ctx.replyWithMarkdown(lang === 'uk'
+        return ctx.reply(lang === 'uk'
             ? '❌ Спочатку встановіть місто, надіславши його назву.'
-            : '❌ Please set your city first by sending its name.');
+            : '❌ Please set your city first by sending its name.', { parse_mode: 'Markdown' });
     }
-    await ctx.replyWithMarkdown(
-        dict[lang].settings,
-        { reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) }
-    );
+    await ctx.reply(
+        dict[lang].settings, { parse_mode: 'Markdown', reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) });
 });
 
 // Help menu logic
@@ -524,7 +521,7 @@ const sendHelpMenu = async (ctx) => {
 bot.command('help', sendHelpMenu);
 
 // Handle text messages (City search or Menu buttons)
-bot.on('text', async (ctx) => {
+bot.on("message:text", async (ctx) => {
     const query = ctx.message.text.trim();
     const lang = getLang(ctx);
 
@@ -535,9 +532,7 @@ bot.on('text', async (ctx) => {
         if (!user) {
             return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
         }
-        return ctx.replyWithMarkdown(dict[lang].settings, {
-            reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false)
-        });
+        return ctx.reply(dict[lang].settings, { parse_mode: 'Markdown', reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) });
     }
 
     const isHelp = query.includes(dict.uk.helpBtn) || query.includes(dict.en.helpBtn);
@@ -672,25 +667,25 @@ bot.on('text', async (ctx) => {
                 reply_markup: { inline_keyboard: buttons }
             });
         } else {
-            await ctx.replyWithMarkdown(dict[lang].notFound);
+            await ctx.reply(dict[lang].notFound, { parse_mode: 'Markdown' });
         }
     } catch (error) {
         console.error('Search Error:', error.message);
-        await ctx.replyWithMarkdown(dict[lang].errorSearch);
+        await ctx.reply(dict[lang].errorSearch, { parse_mode: 'Markdown' });
     }
 });
 
-bot.on('callback_query', async (ctx) => {
+bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data.split('|');
     const lang = getLang(ctx);
 
     if (data[0] === 'open_help') {
-        await ctx.answerCbQuery().catch(() => { });
+        await ctx.answerCallbackQuery().catch(() => { });
         return sendHelpMenu(ctx);
     }
 
     if (data[0] === 'agro_forecast_menu') {
-        await ctx.answerCbQuery().catch(() => { });
+        await ctx.answerCallbackQuery().catch(() => { });
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
         const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
@@ -701,7 +696,7 @@ bot.on('callback_query', async (ctx) => {
     }
 
     if (data[0] === 'agro_archive_menu') {
-        await ctx.answerCbQuery().catch(() => { });
+        await ctx.answerCallbackQuery().catch(() => { });
         return ctx.editMessageText(lang === 'uk' ? '📊 Оберіть період для аналізу:' : '📊 Select period for analysis:', {
             reply_markup: buildArchiveKeyboard(lang)
         });
@@ -755,7 +750,7 @@ bot.on('callback_query', async (ctx) => {
             const sig = generateSignature(ctx.from.id, process.env.CRON_SECRET);
             const dashboardUrl = formatUrl(process.env.DOMAIN || 'localhost', `/?user=${ctx.from.id}&sig=${sig}`);
 
-            await ctx.answerCbQuery(dict[lang].citySet.replace('{city}', weather.city_name));
+            await ctx.answerCallbackQuery(dict[lang].citySet.replace('{city}', weather.city_name));
 
             const messageText = dict[lang].citySetFull
                 .replace('{city}', weather.city_name)
@@ -780,21 +775,21 @@ bot.on('callback_query', async (ctx) => {
             );
 
             // Set WebApp menu button after successful city selection
-            await ctx.setChatMenuButton({
+            await ctx.api.setChatMenuButton({ menu_button: {
                 type: 'web_app',
                 text: dict[lang].dashboard,
                 web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
-            }).catch(e => console.error('Menu button error:', e.message));
+            } }).catch(e => console.error('Menu button error:', e.message));
 
         } catch (error) {
-            await ctx.replyWithMarkdown(dict[lang].saveError);
+            await ctx.reply(dict[lang].saveError, { parse_mode: 'Markdown' });
         }
     }
 
     // --- Detailed hourly forecast callback (supports date: forecast_hourly|YYYY-MM-DD or legacy forecast_tomorrow) ---
     else if (data[0] === 'forecast_hourly' || data[0] === 'forecast_tomorrow') {
         try {
-            await ctx.answerCbQuery().catch(() => { });
+            await ctx.answerCallbackQuery().catch(() => { });
             await connectDB();
 
             const user = await User.findOne({ telegramId: ctx.from.id });
@@ -1203,7 +1198,7 @@ bot.on('callback_query', async (ctx) => {
     // --- Agro recommendations callback ---
     else if (data[0] === 'agro_tomorrow') {
         try {
-            await ctx.answerCbQuery().catch(() => { });
+            await ctx.answerCallbackQuery().catch(() => { });
             await connectDB();
 
             const user = await User.findOne({ telegramId: ctx.from.id });
@@ -1246,7 +1241,7 @@ bot.on('callback_query', async (ctx) => {
 
     // --- Crops main categories callback ---
     else if (data[0] === 'crops_main') {
-        await ctx.answerCbQuery();
+        await ctx.answerCallbackQuery();
         await ctx.editMessageText(dict[lang].cropsSelectCat, {
             reply_markup: buildCropsCategoriesKeyboard(lang)
         });
@@ -1258,7 +1253,7 @@ bot.on('callback_query', async (ctx) => {
         const user = await User.findOne({ telegramId: ctx.from.id });
         const label = CROPS_DATA[categoryKey].label[lang];
 
-        await ctx.answerCbQuery();
+        await ctx.answerCallbackQuery();
         await ctx.editMessageText(dict[lang].cropsSelectItem.replace('{cat}', label), {
             reply_markup: buildCropsItemsKeyboard(lang, categoryKey, user?.crops || [])
         });
@@ -1270,7 +1265,7 @@ bot.on('callback_query', async (ctx) => {
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
-            if (!user) return ctx.answerCbQuery('❌ Error');
+            if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const hasCrop = user.crops.includes(plantId);
             const update = hasCrop
@@ -1283,22 +1278,20 @@ bot.on('callback_query', async (ctx) => {
                 { new: true }
             );
 
-            await ctx.answerCbQuery(hasCrop ? '❌ Видалено' : '✅ Додано');
+            await ctx.answerCallbackQuery(hasCrop ? '❌ Видалено' : '✅ Додано');
 
             // Update the sub-items keyboard to reflect the change
             const label = CROPS_DATA[categoryKey].label[lang];
-            await ctx.editMessageReplyMarkup(
-                buildCropsItemsKeyboard(lang, categoryKey, updatedUser.crops)
-            );
+            await ctx.editMessageReplyMarkup({ reply_markup: buildCropsItemsKeyboard(lang, categoryKey, updatedUser.crops) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
     // --- Agro schedule only callback ---
     else if (data[0] === 'agro_schedule_only') {
         try {
-            await ctx.answerCbQuery();
+            await ctx.answerCallbackQuery();
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
@@ -1319,7 +1312,7 @@ bot.on('callback_query', async (ctx) => {
     // --- Agro 5-day forecast callback ---
     else if (data[0] === 'agro_5day') {
         try {
-            await ctx.answerCbQuery();
+            await ctx.answerCallbackQuery();
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
@@ -1355,7 +1348,7 @@ bot.on('callback_query', async (ctx) => {
         text = text.replace(/__(.*?)__/g, '<i>$1</i>');
 
         try {
-            await ctx.answerCbQuery();
+            await ctx.answerCallbackQuery();
             await ctx.editMessageText(text, {
                 parse_mode: 'HTML',
                 reply_markup: buildHelpKeyboard(lang, topic)
@@ -1373,8 +1366,8 @@ bot.on('callback_query', async (ctx) => {
     else if (data[0] === 'alert_settings') {
         await connectDB();
         const user = await User.findOne({ telegramId: ctx.from.id });
-        if (!user) return ctx.answerCbQuery('❌ Error');
-        await ctx.answerCbQuery();
+        if (!user) return ctx.answerCallbackQuery('❌ Error');
+        await ctx.answerCallbackQuery();
 
         const text = `${dict[lang].alertSettingsTitle}\n\n${dict[lang].alertSettingsDesc}`;
         const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers);
@@ -1385,7 +1378,7 @@ bot.on('callback_query', async (ctx) => {
                 reply_markup: markup
             });
         } catch (e) {
-            await ctx.replyWithMarkdown(text, { reply_markup: markup });
+            await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: markup });
         }
     }
 
@@ -1395,7 +1388,7 @@ bot.on('callback_query', async (ctx) => {
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
-            if (!user) return ctx.answerCbQuery('❌ Error');
+            if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const currentTriggers = user.alertTriggers || {};
             const currentValue = currentTriggers[key] !== false;
@@ -1407,12 +1400,10 @@ bot.on('callback_query', async (ctx) => {
                 { new: true }
             );
 
-            await ctx.answerCbQuery(dict[lang].settingsSaved);
-            await ctx.editMessageReplyMarkup(
-                buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers)
-            );
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
@@ -1433,12 +1424,10 @@ bot.on('callback_query', async (ctx) => {
                 },
                 { new: true }
             );
-            await ctx.answerCbQuery(dict[lang].settingsSaved);
-            await ctx.editMessageReplyMarkup(
-                buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers)
-            );
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
@@ -1447,7 +1436,7 @@ bot.on('callback_query', async (ctx) => {
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
-            if (!user) return ctx.answerCbQuery('❌ Error');
+            if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const currentVal = user.eveningForecastEnabled !== false;
             const updatedUser = await User.findOneAndUpdate(
@@ -1456,20 +1445,18 @@ bot.on('callback_query', async (ctx) => {
                 { new: true }
             );
 
-            await ctx.answerCbQuery(dict[lang].settingsSaved);
-            await ctx.editMessageReplyMarkup(
-                buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings, updatedUser.eveningForecastEnabled !== false)
-            );
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup({ reply_markup: buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings, updatedUser.eveningForecastEnabled !== false) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
     // --- Forecast settings menu callback ---
     else if (data[0] === 'forecast_menu') {
         const user = await User.findOne({ telegramId: ctx.from.id });
-        if (!user) return ctx.answerCbQuery('❌ Error');
-        await ctx.answerCbQuery();
+        if (!user) return ctx.answerCallbackQuery('❌ Error');
+        await ctx.answerCallbackQuery();
 
         const text = dict[lang].forecastSettingsTitle;
         const markup = buildForecastSettingsKeyboard(lang, user.forecastSettings, user.eveningForecastEnabled !== false);
@@ -1488,7 +1475,7 @@ bot.on('callback_query', async (ctx) => {
                                msgText.includes('Air Quality');
 
         if (isFromForecast) {
-            await ctx.replyWithMarkdown(text, { reply_markup: markup });
+            await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: markup });
         } else {
             try {
                 await ctx.editMessageText(text, {
@@ -1496,7 +1483,7 @@ bot.on('callback_query', async (ctx) => {
                     reply_markup: markup
                 });
             } catch (e) {
-                await ctx.replyWithMarkdown(text, { reply_markup: markup });
+                await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: markup });
             }
         }
     }
@@ -1524,20 +1511,18 @@ bot.on('callback_query', async (ctx) => {
                 { new: true }
             );
 
-            await ctx.answerCbQuery(dict[lang].settingsSaved);
-            await ctx.editMessageReplyMarkup(
-                buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings, updatedUser.eveningForecastEnabled !== false)
-            );
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup({ reply_markup: buildForecastSettingsKeyboard(lang, updatedUser.forecastSettings, updatedUser.eveningForecastEnabled !== false) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
     // --- Open Settings manual callback ---
     else if (data[0] === 'open_settings') {
         const user = await User.findOne({ telegramId: ctx.from.id });
-        if (!user) return ctx.answerCbQuery('❌ Error');
-        await ctx.answerCbQuery();
+        if (!user) return ctx.answerCallbackQuery('❌ Error');
+        await ctx.answerCallbackQuery();
 
         // Use editMessageText if coming from another menu, or reply if new
         const text = dict[lang].settings;
@@ -1546,7 +1531,7 @@ bot.on('callback_query', async (ctx) => {
         try {
             await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: markup });
         } catch (e) {
-            await ctx.replyWithMarkdown(text, { reply_markup: markup });
+            await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: markup });
         }
     }
 
@@ -1561,19 +1546,17 @@ bot.on('callback_query', async (ctx) => {
                 { $set: { [updateField]: value } },
                 { new: true }
             );
-            await ctx.answerCbQuery(dict[lang].settingsSaved);
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
             // Refresh the settings keyboard to show the new checkmark
-            await ctx.editMessageReplyMarkup(
-                buildSettingsKeyboard(lang, user?.units, user?.notificationsEnabled !== false)
-            );
+            await ctx.editMessageReplyMarkup({ reply_markup: buildSettingsKeyboard(lang, user?.units, user?.notificationsEnabled !== false) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error saving');
+            await ctx.answerCallbackQuery('❌ Error saving');
         }
     }
 
     // --- Change city callback ---
     else if (data[0] === 'change_city') {
-        await ctx.answerCbQuery();
+        await ctx.answerCallbackQuery();
         await ctx.reply(lang === 'uk'
             ? '📍 Надішліть назву нового міста:'
             : '📍 Send the name of the new city:');
@@ -1587,10 +1570,10 @@ bot.on('callback_query', async (ctx) => {
                 { telegramId: ctx.from.id },
                 { $unset: { city: '', lat: '', lon: '', timezone: '', lastState: '' } }
             );
-            await ctx.answerCbQuery();
+            await ctx.answerCallbackQuery();
             await ctx.reply(dict[lang].cityDeleted);
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
@@ -1599,7 +1582,7 @@ bot.on('callback_query', async (ctx) => {
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
-            if (!user) return ctx.answerCbQuery('❌ Error');
+            if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const newValue = user.notificationsEnabled === false ? true : false;
             await User.findOneAndUpdate(
@@ -1607,13 +1590,11 @@ bot.on('callback_query', async (ctx) => {
                 { $set: { notificationsEnabled: newValue } }
             );
 
-            await ctx.answerCbQuery(newValue ? dict[lang].notifEnabled : dict[lang].notifDisabled);
+            await ctx.answerCallbackQuery(newValue ? dict[lang].notifEnabled : dict[lang].notifDisabled);
             // Refresh keyboard to toggle button label
-            await ctx.editMessageReplyMarkup(
-                buildSettingsKeyboard(lang, user.units, newValue)
-            );
+            await ctx.editMessageReplyMarkup({ reply_markup: buildSettingsKeyboard(lang, user.units, newValue) });
         } catch (error) {
-            await ctx.answerCbQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error');
         }
     }
 
@@ -1624,11 +1605,11 @@ bot.on('callback_query', async (ctx) => {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
             if (!user || !user.lat) {
-                return ctx.answerCbQuery(lang === 'uk' ? '❌ Спочатку встановіть місто' : '❌ Please set city first');
+                return ctx.answerCallbackQuery(lang === 'uk' ? '❌ Спочатку встановіть місто' : '❌ Please set city first');
             }
 
             if (mode === 'custom') {
-                await ctx.answerCbQuery().catch(() => { });
+                await ctx.answerCallbackQuery().catch(() => { });
                 return ctx.reply(lang === 'uk'
                     ? '🗓 Введіть дату або період у форматі:\n`01.05.2024` або `01.05.2024-10.05.2024`'
                     : '🗓 Enter date or period in format:\n`01.05.2024` or `01.05.2024-10.05.2024`', { parse_mode: 'Markdown' });
@@ -1669,7 +1650,7 @@ bot.on('callback_query', async (ctx) => {
 
             const report = await generateHistoricalReport(history, lang, user.crops || [], cityKey);
 
-            await ctx.answerCbQuery().catch(() => { });
+            await ctx.answerCallbackQuery().catch(() => { });
             // Send as a new message as requested by the user
             await ctx.reply(report, {
                 parse_mode: 'HTML',
@@ -1677,7 +1658,7 @@ bot.on('callback_query', async (ctx) => {
             });
         } catch (error) {
             console.error('Archive error:', error);
-            await ctx.answerCbQuery('❌ Помилка').catch(() => { });
+            await ctx.answerCallbackQuery('❌ Помилка').catch(() => { });
             await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }
@@ -1691,7 +1672,7 @@ if (require.main === module) {
         try {
             console.log('🚀 Launching Parasol Sentinel in POLLING mode (Local Dev)...');
             await connectDB();
-            await bot.launch();
+            await bot.start();
             console.log('✅ Bot is active and polling.');
         } catch (e) {
             console.error('❌ Failed to launch bot locally:', e.message);
