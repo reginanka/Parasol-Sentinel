@@ -36,9 +36,14 @@ module.exports = async (req, res) => {
     try {
         // ── Hardcoded rich HTML samples (all alert types in one message) ──
         // Values are fictional — only for visual QA. Nothing is persisted.
+        // Unified style for every alert:
+        //   <h3>emoji + title</h3>
+        //   <table bordered striped compact>  (Було / Зараз where applicable)
+        //   optional short advice paragraph
+        //   <p><i>станом на …</i></p>
         const richHtml = `
 <h3>🧪 Тест алертів (візуал)</h3>
-<p>Нижче — зразки всіх типів сповіщень у форматі Rich Message. Дані вигадані.</p>
+<p>Усі зразки в одному стилі. Дані вигадані.</p>
 
 <hr/>
 
@@ -62,7 +67,7 @@ module.exports = async (req, res) => {
 
 <hr/>
 
-<h3>⚠️ Зʼявилися опади</h3>
+<h3>⚠️ З'явилися опади</h3>
 <table bordered striped compact>
   <tr><th></th><th>Інтервал</th><th>Сума</th></tr>
   <tr><td>Було</td><td>—</td><td>0 мм</td></tr>
@@ -73,15 +78,19 @@ module.exports = async (req, res) => {
 <hr/>
 
 <h3>☀️ Опади скасовано</h3>
-<p>Гарні новини! Опади на сьогодні <b>скасовано</b>.</p>
-<p>Було (станом на 09.10, 10:00): <b>12:00–17:00</b> · сумарно 3.1 мм</p>
+<table bordered striped compact>
+  <tr><th></th><th>Інтервал</th><th>Сума</th></tr>
+  <tr><td>Було</td><td>12:00–17:00</td><td>3.1 мм</td></tr>
+  <tr><td>Зараз</td><td><b>—</b></td><td><b>0 мм</b></td></tr>
+</table>
+<p><i>станом на 09.10, 10:00</i></p>
 
 <hr/>
 
 <h3>📊 Прогноз температури змінився</h3>
 <table bordered striped compact>
   <tr><th></th><th>Ніч</th><th>День</th></tr>
-  <tr><td>Очікували</td><td>8°C</td><td>14°C</td></tr>
+  <tr><td>Було</td><td>8°C</td><td>14°C</td></tr>
   <tr><td>Зараз</td><td><b>5°C</b></td><td><b>11°C</b></td></tr>
   <tr><td>Зміна</td><td>−3°C</td><td>−3°C</td></tr>
 </table>
@@ -90,21 +99,34 @@ module.exports = async (req, res) => {
 <hr/>
 
 <h3>⚠️ Аномальна температура</h3>
-<p>Зараз: <b>+18°C</b> — значно <b>вище</b>, ніж очікувалось на цей час.</p>
-<p>Очікували (станом на 09.10, 11:00): <b>10…13°C</b></p>
+<table bordered striped compact>
+  <tr><th></th><th>Значення</th></tr>
+  <tr><td>Очікували</td><td>10…13°C</td></tr>
+  <tr><td>Зараз</td><td><b>+18°C</b> (вище)</td></tr>
+</table>
+<p><i>станом на 09.10, 11:00</i></p>
 
 <hr/>
 
-<h3>🧲 Увага! Магнітна буря (Kp 6)</h3>
-<p>Активне збурення геомагнітного поля · рівень <b>G2</b> (помірна).</p>
-<blockquote>
-Метеозалежним: зменшити навантаження, пити більше води та тримати під рукою ліки.
-</blockquote>
+<h3>🧲 Магнітна буря (Kp 6 · G2)</h3>
+<table bordered striped compact>
+  <tr><th>Показник</th><th>Значення</th></tr>
+  <tr><td>Kp</td><td><b>6</b></td></tr>
+  <tr><td>Рівень</td><td><b>G2</b> · помірна</td></tr>
+</table>
+<p>Метеозалежним: менше навантаження, більше води, ліки під рукою.</p>
+<p><i>станом на 09.10, 09:06</i></p>
 
 <hr/>
 
 <h3>🧲 Збурення магнітного поля (Kp 4)</h3>
-<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>
+<table bordered striped compact>
+  <tr><th>Показник</th><th>Значення</th></tr>
+  <tr><td>Kp</td><td><b>4</b></td></tr>
+  <tr><td>Рівень</td><td>збурення</td></tr>
+</table>
+<p>Можливе незначне погіршення самопочуття у метеочутливих.</p>
+<p><i>станом на 09.10, 15:00</i></p>
 
 <hr/>
 
@@ -115,13 +137,19 @@ module.exports = async (req, res) => {
   <tr><td>PM2.5</td><td>48 µg/m³</td></tr>
   <tr><td>PM10</td><td>72 µg/m³</td></tr>
 </table>
-<p>Шкідливо для чутливих груп. Краще зачинити вікна та обмежити тривалі прогулянки.</p>
+<p>Шкідливо для чутливих груп. Краще зачинити вікна.</p>
+<p><i>станом на 09.10, 14:00</i></p>
 
 <hr/>
 
 <h3>🍃 Якість повітря покращилась</h3>
-<p>🟢 AQI <b>42</b> — повітря знову в безпечній зоні.</p>
+<table bordered striped compact>
+  <tr><th>Показник</th><th>Значення</th></tr>
+  <tr><td>AQI</td><td><b>42</b> 🟢</td></tr>
+  <tr><td>Статус</td><td>безпечна зона</td></tr>
+</table>
 <p>Можна провітрювати та спокійно гуляти.</p>
+<p><i>станом на 09.10, 16:30</i></p>
 `.trim();
 
         const btnText = '⚙️ Налаштувати сповіщення';
