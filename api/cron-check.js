@@ -119,50 +119,87 @@ module.exports = async (req, res) => {
 
         /**
          * Build Rich Message HTML for geomagnetic alert / recovery.
-         * kind: 'worse_storm' | 'worse_unsettled' | 'better_unsettled' | 'better_quiet'
+         * Uses full NOAA G-scale labels from getGeomagLevel.
+         * kind: 'worse' | 'better'
+         * levelInfo: return value of getGeomagLevel (labelUk/En, gScale, badge, level, …)
          */
-        const htmlGeomag = (lang, { kp, kind, gScale }) => {
-            const kpStr = Number(kp).toFixed(0);
+        const htmlGeomag = (lang, { kind, levelInfo }) => {
             const isUk = lang === 'uk';
+            const kpStr = String(levelInfo.kpRounded);
+            const label = isUk ? levelInfo.labelUk : levelInfo.labelEn;
+            const g = levelInfo.gScale;
 
-            if (kind === 'worse_storm') {
-                if (isUk) {
-                    return `<h3>🧲 Увага! Магнітна буря (Kp ${kpStr})</h3>` +
-                        `<p>Активне збурення геомагнітного поля · рівень <b>G${gScale != null ? gScale : Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
-                        `<blockquote>Метеозалежним: зменшити навантаження, пити більше води та тримати під рукою ліки.</blockquote>`;
+            // --- Worsening / new disturbance ---
+            if (kind === 'worse') {
+                // Quiet should never alert as worse
+                if (levelInfo.level === 'quiet') return null;
+
+                if (levelInfo.level === 'unsettled') {
+                    if (isUk) {
+                        return `<h3>🧲 ${label}</h3>` +
+                            `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>` +
+                            `<blockquote>Рекомендації: зменште фізичні навантаження, більше відпочивайте, пийте достатньо води.</blockquote>`;
+                    }
+                    return `<h3>🧲 ${label}</h3>` +
+                        `<p>Mild discomfort possible for weather-sensitive individuals.</p>` +
+                        `<blockquote>Recommendations: reduce physical activity, rest more, drink enough water.</blockquote>`;
                 }
-                return `<h3>🧲 Alert! Magnetic Storm (Kp ${kpStr})</h3>` +
-                    `<p>Active geomagnetic disturbance · level <b>G${gScale != null ? gScale : Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
-                    `<blockquote>Weather-sensitive people: reduce activity, drink more water, keep medication handy.</blockquote>`;
+
+                // Storm tiers G1–G5
+                const stormAdviceUk = {
+                    1: 'Зменште фізичні навантаження, пийте більше води, уникайте стресу. Метеозалежним — тримайте під рукою ліки.',
+                    2: 'Обмежте активність на вулиці, більше відпочивайте, контролюйте тиск. Пийте воду, уникайте кави та алкоголю.',
+                    3: 'Максимально зменште навантаження. Відпочинок, гідратація, ліки під рукою. Уникайте поїздок і стресових ситуацій.',
+                    4: 'Сильне збурення. Залишайтесь у спокої, обмежте будь-яку зайву активність. Слідкуйте за самопочуттям і тиском.',
+                    5: 'Екстремальний рівень. Уникайте будь-яких навантажень. При погіршенні самопочуття — зверніться по медичну допомогу.'
+                };
+                const stormAdviceEn = {
+                    1: 'Reduce physical activity, drink more water, avoid stress. Keep medication handy if weather-sensitive.',
+                    2: 'Limit outdoor activity, rest more, monitor blood pressure. Stay hydrated; avoid coffee and alcohol.',
+                    3: 'Minimize strain. Rest, hydrate, keep medication ready. Avoid travel and stressful situations.',
+                    4: 'Severe disturbance. Stay calm, limit all extra activity. Monitor how you feel and your blood pressure.',
+                    5: 'Extreme level. Avoid any physical strain. Seek medical help if you feel unwell.'
+                };
+                const advice = isUk
+                    ? (stormAdviceUk[g] || stormAdviceUk[1])
+                    : (stormAdviceEn[g] || stormAdviceEn[1]);
+
+                if (isUk) {
+                    return `<h3>🧲 Увага! ${label}</h3>` +
+                        `<p>Активне збурення геомагнітного поля · рівень <b>G${g}</b>.</p>` +
+                        `<blockquote>${advice}</blockquote>`;
+                }
+                return `<h3>🧲 Alert! ${label}</h3>` +
+                    `<p>Active geomagnetic disturbance · level <b>G${g}</b>.</p>` +
+                    `<blockquote>${advice}</blockquote>`;
             }
 
-            if (kind === 'worse_unsettled') {
+            // --- Improvement ---
+            if (levelInfo.level === 'quiet') {
                 if (isUk) {
-                    return `<h3>🧲 Збурення магнітного поля (Kp ${kpStr})</h3>` +
-                        `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>` +
-                        `<blockquote>Рекомендації: зменште фізичні навантаження, більше відпочивайте, пийте достатньо води.</blockquote>`;
+                    return `<h3>🧲 Магнітне поле заспокоїлося (Kp ${kpStr})</h3>` +
+                        `<p>🟢 Умови стали сприятливими.</p>`;
                 }
-                return `<h3>🧲 Unsettled geomagnetic field (Kp ${kpStr})</h3>` +
-                    `<p>Mild discomfort possible for weather-sensitive individuals.</p>` +
-                    `<blockquote>Recommendations: reduce physical activity, rest more, drink enough water.</blockquote>`;
+                return `<h3>🧲 Geomagnetic field has calmed (Kp ${kpStr})</h3>` +
+                    `<p>🟢 Conditions are now favorable.</p>`;
             }
 
-            if (kind === 'better_unsettled') {
+            if (levelInfo.level === 'unsettled') {
                 if (isUk) {
-                    return `<h3>🧲 Рівень збурення знизився (Kp ${kpStr})</h3>` +
-                        `<p>Умови покращилися до середнього рівня. Метеочутливим людям варто ще бути обережними.</p>`;
+                    return `<h3>🧲 Рівень знизився: ${label}</h3>` +
+                        `<p>Умови покращилися. Метеочутливим людям варто ще бути обережними.</p>`;
                 }
-                return `<h3>🧲 Disturbance level decreased (Kp ${kpStr})</h3>` +
-                    `<p>Conditions improved to unsettled. Weather-sensitive people should still be cautious.</p>`;
+                return `<h3>🧲 Level decreased: ${label}</h3>` +
+                    `<p>Conditions improved. Weather-sensitive people should still be cautious.</p>`;
             }
 
-            // better_quiet
+            // Improved but still in a storm tier (e.g. G3 → G1)
             if (isUk) {
-                return `<h3>🧲 Магнітне поле заспокоїлося (Kp ${kpStr})</h3>` +
-                    `<p>🟢 Умови стали сприятливими.</p>`;
+                return `<h3>🧲 Інтенсивність знизилась: ${label}</h3>` +
+                    `<p>Буря ослабла, але поле ще збурене. Продовжуйте стежити за самопочуттям.</p>`;
             }
-            return `<h3>🧲 Geomagnetic field has calmed (Kp ${kpStr})</h3>` +
-                `<p>🟢 Conditions are now favorable.</p>`;
+            return `<h3>🧲 Intensity decreased: ${label}</h3>` +
+                `<p>The storm has weakened, but the field is still disturbed. Keep monitoring how you feel.</p>`;
         };
 
         /** Build Rich Message HTML for AQI deterioration (dynamic rows) */
@@ -660,20 +697,17 @@ module.exports = async (req, res) => {
                                     ? (getGeomagLevel(last.maxKp)?.rank ?? -1)
                                     : -1);
 
-                            // Same level today → do nothing
+                            // Same rank today → silent (dashboard snap only)
                             if (last?.date === todayStr && current.rank === lastRank) {
-                                // keep snapGeomag for dashboard only
+                                // no-op
                             } else {
+                                // kind: 'worse' | 'better' | null
+                                // rank 0 (quiet) on first seed of day → no alert
                                 let kind = null;
-                                if (current.rank > lastRank) {
-                                    // Worsened (or first non-quiet of the day)
-                                    if (current.level === 'storm') kind = 'worse_storm';
-                                    else if (current.level === 'unsettled') kind = 'worse_unsettled';
-                                    // quiet after -1 (first seed of day) → no alert
+                                if (current.rank > lastRank && current.rank >= 1) {
+                                    kind = 'worse';
                                 } else if (current.rank < lastRank && lastRank >= 0) {
-                                    // Improved
-                                    if (current.level === 'quiet') kind = 'better_quiet';
-                                    else if (current.level === 'unsettled') kind = 'better_unsettled';
+                                    kind = 'better';
                                 }
 
                                 let anyUserAlerted = false;
@@ -681,19 +715,18 @@ module.exports = async (req, res) => {
                                     for (const user of cityInfo.users) {
                                         if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
                                         const lang = user.language || 'uk';
-                                        const html = htmlGeomag(lang, {
-                                            kp: current.kp,
-                                            kind,
-                                            gScale: current.gScale
-                                        });
+                                        const html = htmlGeomag(lang, { kind, levelInfo: current });
+                                        if (!html) continue;
                                         alerts.push({ userId: user.telegramId, html, lang });
                                         anyUserAlerted = true;
                                     }
                                     if (anyUserAlerted) {
-                                        if (kind === 'worse_storm') reasons.push('магнітна буря');
-                                        else if (kind === 'worse_unsettled') reasons.push('збурення магн. поля');
-                                        else if (kind === 'better_unsettled') reasons.push('магн. поле ↓ середнє');
-                                        else if (kind === 'better_quiet') reasons.push('магн. поле спокійно');
+                                        if (kind === 'worse') {
+                                            if (current.gScale) reasons.push(`магн. буря G${current.gScale}`);
+                                            else reasons.push('збурення магн. поля');
+                                        } else {
+                                            reasons.push(current.rank === 0 ? 'магн. поле спокійно' : `магн. поле ↓ ${current.level}`);
+                                        }
                                         alertTriggered = true;
                                     }
                                 }

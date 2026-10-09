@@ -9,6 +9,7 @@ const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../utils/helpers');
 const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
+const { getGeomagLevel } = require('../utils/weather');
 
 /**
  * Light weather check cron — identical alert logic to cron-check.js
@@ -118,24 +119,84 @@ module.exports = async (req, res) => {
                 `</table>`;
         };
 
-        const htmlGeomag = (lang, { kp, isStorm }) => {
-            const kpStr = Number(kp).toFixed(0);
-            if (lang === 'uk') {
-                if (isStorm) {
-                    return `<h3>🧲 Увага! Магнітна буря (Kp ${kpStr})</h3>` +
-                        `<p>Активне збурення геомагнітного поля · рівень <b>G${Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
-                        `<blockquote>Метеозалежним: зменшити навантаження, пити більше води та тримати під рукою ліки.</blockquote>`;
+        /**
+         * Build Rich Message HTML for geomagnetic alert / recovery.
+         * Same as cron-check.js — full NOAA G1–G5 labels + recommendations.
+         * kind: 'worse' | 'better'
+         * levelInfo: return value of getGeomagLevel
+         */
+        const htmlGeomag = (lang, { kind, levelInfo }) => {
+            const isUk = lang === 'uk';
+            const kpStr = String(levelInfo.kpRounded);
+            const label = isUk ? levelInfo.labelUk : levelInfo.labelEn;
+            const g = levelInfo.gScale;
+
+            if (kind === 'worse') {
+                if (levelInfo.level === 'quiet') return null;
+
+                if (levelInfo.level === 'unsettled') {
+                    if (isUk) {
+                        return `<h3>🧲 ${label}</h3>` +
+                            `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>` +
+                            `<blockquote>Рекомендації: зменште фізичні навантаження, більше відпочивайте, пийте достатньо води.</blockquote>`;
+                    }
+                    return `<h3>🧲 ${label}</h3>` +
+                        `<p>Mild discomfort possible for weather-sensitive individuals.</p>` +
+                        `<blockquote>Recommendations: reduce physical activity, rest more, drink enough water.</blockquote>`;
                 }
-                return `<h3>🧲 Збурення магнітного поля (Kp ${kpStr})</h3>` +
-                    `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>`;
+
+                const stormAdviceUk = {
+                    1: 'Зменште фізичні навантаження, пийте більше води, уникайте стресу. Метеозалежним — тримайте під рукою ліки.',
+                    2: 'Обмежте активність на вулиці, більше відпочивайте, контролюйте тиск. Пийте воду, уникайте кави та алкоголю.',
+                    3: 'Максимально зменште навантаження. Відпочинок, гідратація, ліки під рукою. Уникайте поїздок і стресових ситуацій.',
+                    4: 'Сильне збурення. Залишайтесь у спокої, обмежте будь-яку зайву активність. Слідкуйте за самопочуттям і тиском.',
+                    5: 'Екстремальний рівень. Уникайте будь-яких навантажень. При погіршенні самопочуття — зверніться по медичну допомогу.'
+                };
+                const stormAdviceEn = {
+                    1: 'Reduce physical activity, drink more water, avoid stress. Keep medication handy if weather-sensitive.',
+                    2: 'Limit outdoor activity, rest more, monitor blood pressure. Stay hydrated; avoid coffee and alcohol.',
+                    3: 'Minimize strain. Rest, hydrate, keep medication ready. Avoid travel and stressful situations.',
+                    4: 'Severe disturbance. Stay calm, limit all extra activity. Monitor how you feel and your blood pressure.',
+                    5: 'Extreme level. Avoid any physical strain. Seek medical help if you feel unwell.'
+                };
+                const advice = isUk
+                    ? (stormAdviceUk[g] || stormAdviceUk[1])
+                    : (stormAdviceEn[g] || stormAdviceEn[1]);
+
+                if (isUk) {
+                    return `<h3>🧲 Увага! ${label}</h3>` +
+                        `<p>Активне збурення геомагнітного поля · рівень <b>G${g}</b>.</p>` +
+                        `<blockquote>${advice}</blockquote>`;
+                }
+                return `<h3>🧲 Alert! ${label}</h3>` +
+                    `<p>Active geomagnetic disturbance · level <b>G${g}</b>.</p>` +
+                    `<blockquote>${advice}</blockquote>`;
             }
-            if (isStorm) {
-                return `<h3>🧲 Alert! Magnetic Storm (Kp ${kpStr})</h3>` +
-                    `<p>Active geomagnetic disturbance · level <b>G${Math.min(5, Math.max(1, Number(kpStr) - 4))}</b>.</p>` +
-                    `<blockquote>Weather-sensitive people: reduce activity, drink more water, keep medication handy.</blockquote>`;
+
+            if (levelInfo.level === 'quiet') {
+                if (isUk) {
+                    return `<h3>🧲 Магнітне поле заспокоїлося (Kp ${kpStr})</h3>` +
+                        `<p>🟢 Умови стали сприятливими.</p>`;
+                }
+                return `<h3>🧲 Geomagnetic field has calmed (Kp ${kpStr})</h3>` +
+                    `<p>🟢 Conditions are now favorable.</p>`;
             }
-            return `<h3>🧲 Unsettled geomagnetic field (Kp ${kpStr})</h3>` +
-                `<p>Mild discomfort possible for weather-sensitive individuals.</p>`;
+
+            if (levelInfo.level === 'unsettled') {
+                if (isUk) {
+                    return `<h3>🧲 Рівень знизився: ${label}</h3>` +
+                        `<p>Умови покращилися. Метеочутливим людям варто ще бути обережними.</p>`;
+                }
+                return `<h3>🧲 Level decreased: ${label}</h3>` +
+                    `<p>Conditions improved. Weather-sensitive people should still be cautious.</p>`;
+            }
+
+            if (isUk) {
+                return `<h3>🧲 Інтенсивність знизилась: ${label}</h3>` +
+                    `<p>Буря ослабла, але поле ще збурене. Продовжуйте стежити за самопочуттям.</p>`;
+            }
+            return `<h3>🧲 Intensity decreased: ${label}</h3>` +
+                `<p>The storm has weakened, but the field is still disturbed. Keep monitoring how you feel.</p>`;
         };
 
         const htmlAqiWorse = (lang, { aqiVal, badge, pm25, pm10, advice }) => {
@@ -546,7 +607,10 @@ module.exports = async (req, res) => {
                     console.error('Open-Meteo precip logic error in light check:', omErr.message);
                 }
 
-                // --- LOGIC E: Geomagnetic (same as main cron-check) ---
+                // --- LOGIC E: Geomagnetic (identical state machine to cron-check.js) ---
+                // Evening forecast does NOT write geomag state.
+                // Check owns lastGeomagAlert { date, maxKp, rank, level }.
+                // Rank 0–6: quiet → unsettled → G1 → G2 → G3 → G4 → G5
                 let snapGeomag = null;
                 let snapWaqi = null;
                 try {
@@ -565,52 +629,67 @@ module.exports = async (req, res) => {
                             .filter(v => !isNaN(v));
 
                         const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
+                        const current = getGeomagLevel(currentMaxKp);
 
-                        if (currentMaxKp !== null) {
-                            let gBadge = '🟢';
-                            if (currentMaxKp >= 5) gBadge = '🔴';
-                            else if (currentMaxKp >= 4) gBadge = '🟡';
-                            snapGeomag = { maxKp: currentMaxKp, badge: gBadge, updatedAt: new Date() };
-                        }
+                        if (current) {
+                            snapGeomag = {
+                                maxKp: current.kp,
+                                badge: current.badge,
+                                level: current.level,
+                                rank: current.rank,
+                                updatedAt: new Date()
+                            };
 
-                        if (currentMaxKp !== null && currentMaxKp >= 4) {
-                            const lastAlertDate = cityDoc?.lastGeomagAlert?.date;
-                            const lastAlertKp = cityDoc?.lastGeomagAlert?.maxKp || 0;
-                            const cityAlreadyAlerted = lastAlertDate === todayStr && currentMaxKp <= lastAlertKp;
+                            const last = cityDoc?.lastGeomagAlert;
+                            const lastRank = (last?.date === todayStr && last?.rank != null)
+                                ? Number(last.rank)
+                                : (last?.date === todayStr && last?.maxKp != null
+                                    ? (getGeomagLevel(last.maxKp)?.rank ?? -1)
+                                    : -1);
 
-                            if (!cityAlreadyAlerted) {
-                                const isStorm = currentMaxKp >= 5;
-                                const forecastedKp = evening?.forecastedKp;
-                                const forecastedKpDate = evening?.forecastedKpDate;
-                                let anyUserAlerted = false;
-
-                                for (const user of cityInfo.users) {
-                                    if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
-
-                                    const metrics = user.forecastSettings?.enabledMetrics || [];
-                                    const eveningOn = user.eveningForecastEnabled !== false;
-                                    const geomagInEvening = metrics.includes('geomag');
-                                    const eveningCoveredToday =
-                                        forecastedKpDate === todayStr &&
-                                        forecastedKp != null &&
-                                        currentMaxKp <= forecastedKp;
-
-                                    if (eveningOn && geomagInEvening && eveningCoveredToday) continue;
-
-                                    const lang = user.language || 'uk';
-                                    const html = htmlGeomag(lang, { kp: currentMaxKp, isStorm });
-                                    alerts.push({ userId: user.telegramId, html, lang });
-                                    anyUserAlerted = true;
+                            if (last?.date === todayStr && current.rank === lastRank) {
+                                // same rank today → silent
+                            } else {
+                                let kind = null;
+                                if (current.rank > lastRank && current.rank >= 1) {
+                                    kind = 'worse';
+                                } else if (current.rank < lastRank && lastRank >= 0) {
+                                    kind = 'better';
                                 }
 
-                                if (anyUserAlerted) {
-                                    reasons.push(isStorm ? "магнітна буря" : "збурення магн. поля");
-                                    alertTriggered = true;
+                                let anyUserAlerted = false;
+                                if (kind) {
+                                    for (const user of cityInfo.users) {
+                                        if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
+                                        const lang = user.language || 'uk';
+                                        const html = htmlGeomag(lang, { kind, levelInfo: current });
+                                        if (!html) continue;
+                                        alerts.push({ userId: user.telegramId, html, lang });
+                                        anyUserAlerted = true;
+                                    }
+                                    if (anyUserAlerted) {
+                                        if (kind === 'worse') {
+                                            if (current.gScale) reasons.push(`магн. буря G${current.gScale}`);
+                                            else reasons.push('збурення магн. поля');
+                                        } else {
+                                            reasons.push(current.rank === 0 ? 'магн. поле спокійно' : `магн. поле ↓ ${current.level}`);
+                                        }
+                                        alertTriggered = true;
+                                    }
                                 }
 
                                 await City.findOneAndUpdate(
                                     { externalId: key },
-                                    { $set: { "lastGeomagAlert": { date: todayStr, maxKp: currentMaxKp } } }
+                                    {
+                                        $set: {
+                                            lastGeomagAlert: {
+                                                date: todayStr,
+                                                maxKp: current.kp,
+                                                rank: current.rank,
+                                                level: current.level
+                                            }
+                                        }
+                                    }
                                 );
                             }
                         }
