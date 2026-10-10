@@ -146,7 +146,7 @@ module.exports = async (req, res) => {
 
         const { lat: cityLat, lon: cityLon } = currentRes.data.data[0];
 
-        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm&daily=temperature_2m_mean&timezone=auto&forecast_days=3`;
+        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityLat}&longitude=${cityLon}&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm&daily=temperature_2m_mean&timezone=auto&forecast_days=7`;
         const openMeteoRes = await axios.get(omUrl).catch(e => {
             console.error('Open-Meteo Hourly Error:', e.message);
             return null;
@@ -228,7 +228,8 @@ module.exports = async (req, res) => {
             }
         }
 
-        // NOAA planetary Kp (geomagnetic — CURRENT 3h slot only for badge + full series for chart)
+        // NOAA planetary Kp — 3h forecast (~3 days) + 27-day outlook for remaining days
+        // Same merge logic as cron-forecast.js so dashboard matches evening bot messages.
         // time_tag is UTC; append Z so Node/Vercel never treat it as local.
         const parseNoaaTime = (timeTag) => {
             if (!timeTag) return NaN;
@@ -238,40 +239,90 @@ module.exports = async (req, res) => {
             return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z').getTime();
         };
         try {
-            const noaaRes = await axios.get(
-                'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
-                { timeout: 10000 }
-            );
-            if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
-                const series = noaaRes.data
-                    .map(r => ({
-                        // Store with Z so clients always parse as UTC
-                        time: (r.time_tag && !/[zZ]$/.test(String(r.time_tag)))
-                            ? String(r.time_tag).trim() + 'Z'
-                            : r.time_tag,
-                        kp: parseFloat(r.kp != null ? r.kp : r.Kp),
-                        observed: r.observed || null,
-                        scale: r.noaa_scale || null
-                    }))
-                    .filter(r => !isNaN(r.kp));
+            let series = [];
+            const datesCovered = new Set();
+
+            try {
+                const noaaRes = await axios.get(
+                    'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
+                    { timeout: 10000 }
+                );
+                if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
+                    series = noaaRes.data
+                        .map(r => ({
+                            time: (r.time_tag && !/[zZ]$/.test(String(r.time_tag)))
+                                ? String(r.time_tag).trim() + 'Z'
+                                : r.time_tag,
+                            kp: parseFloat(r.kp != null ? r.kp : r.Kp),
+                            observed: r.observed || null,
+                            scale: r.noaa_scale || null
+                        }))
+                        .filter(r => !isNaN(r.kp));
+                    for (const r of series) {
+                        const ds = String(r.time || '').slice(0, 10);
+                        if (ds.length >= 10) datesCovered.add(ds);
+                    }
+                }
+            } catch (e3h) {
+                console.error('NOAA 3h Kp Error:', e3h.message);
+            }
+
+            // Extend with 27-day outlook (daily max Kp) for dates not in 3h series
+            try {
+                const outlookRes = await axios.get(
+                    'https://services.swpc.noaa.gov/text/27-day-outlook.txt',
+                    { timeout: 10000 }
+                );
+                const months = {
+                    Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+                    Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
+                };
+                for (const line of String(outlookRes.data || '').split('\n')) {
+                    // e.g. "2026 Oct 11      90          10          3"
+                    const m = line.match(/^(\d{4})\s+(\w{3})\s+(\d{1,2})\s+\d+\s+\d+\s+(\d+)/);
+                    if (!m) continue;
+                    const [, year, mon, day, kpStr] = m;
+                    const month = months[mon];
+                    if (!month) continue;
+                    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const kp = parseFloat(kpStr);
+                    if (isNaN(kp)) continue;
+                    if (datesCovered.has(dateStr)) continue; // keep precise 3h max
+                    // Synthetic 3h slots so existing chart logic works for days 4–27
+                    for (let h = 0; h < 24; h += 3) {
+                        series.push({
+                            time: `${dateStr}T${String(h).padStart(2, '0')}:00:00Z`,
+                            kp,
+                            observed: 'outlook',
+                            scale: null
+                        });
+                    }
+                    datesCovered.add(dateStr);
+                }
+            } catch (outlookErr) {
+                console.error('NOAA 27-day outlook Error:', outlookErr.message);
+            }
+
+            if (series.length > 0) {
+                series.sort((a, b) => parseNoaaTime(a.time) - parseNoaaTime(b.time));
                 responseData.geomagSeries = series;
 
                 // Badge = current 3h bin only (not max of forecast window)
                 const nowMs = Date.now();
                 let currentPt = series.find(r => {
                     const t = parseNoaaTime(r.time);
-                    return t <= nowMs && nowMs < t + 3 * 3600 * 1000;
+                    return t <= nowMs && nowMs < t + 3 * 3600 * 1000 && r.observed !== 'outlook';
                 });
-                if (!currentPt || currentPt.observed === 'predicted') {
+                if (!currentPt || currentPt.observed === 'predicted' || currentPt.observed === 'outlook') {
                     const past = series
                         .filter(r => {
                             const t = parseNoaaTime(r.time);
-                            return t <= nowMs && r.observed !== 'predicted';
+                            return t <= nowMs && r.observed !== 'predicted' && r.observed !== 'outlook';
                         })
                         .sort((a, b) => parseNoaaTime(b.time) - parseNoaaTime(a.time));
                     currentPt = past[0] || null;
                 }
-                if (currentPt && currentPt.observed !== 'predicted') {
+                if (currentPt && currentPt.observed !== 'predicted' && currentPt.observed !== 'outlook') {
                     const maxKp = currentPt.kp;
                     let badge = '🟢';
                     if (maxKp >= 5) badge = '🔴';
