@@ -229,6 +229,14 @@ module.exports = async (req, res) => {
         }
 
         // NOAA planetary Kp (geomagnetic — CURRENT 3h slot only for badge + full series for chart)
+        // time_tag is UTC; append Z so Node/Vercel never treat it as local.
+        const parseNoaaTime = (timeTag) => {
+            if (!timeTag) return NaN;
+            const s = String(timeTag).trim();
+            if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) return new Date(s).getTime();
+            const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+            return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z').getTime();
+        };
         try {
             const noaaRes = await axios.get(
                 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -237,7 +245,10 @@ module.exports = async (req, res) => {
             if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
                 const series = noaaRes.data
                     .map(r => ({
-                        time: r.time_tag,
+                        // Store with Z so clients always parse as UTC
+                        time: (r.time_tag && !/[zZ]$/.test(String(r.time_tag)))
+                            ? String(r.time_tag).trim() + 'Z'
+                            : r.time_tag,
                         kp: parseFloat(r.kp != null ? r.kp : r.Kp),
                         observed: r.observed || null,
                         scale: r.noaa_scale || null
@@ -248,16 +259,16 @@ module.exports = async (req, res) => {
                 // Badge = current 3h bin only (not max of forecast window)
                 const nowMs = Date.now();
                 let currentPt = series.find(r => {
-                    const t = new Date(r.time).getTime();
+                    const t = parseNoaaTime(r.time);
                     return t <= nowMs && nowMs < t + 3 * 3600 * 1000;
                 });
                 if (!currentPt || currentPt.observed === 'predicted') {
                     const past = series
                         .filter(r => {
-                            const t = new Date(r.time).getTime();
+                            const t = parseNoaaTime(r.time);
                             return t <= nowMs && r.observed !== 'predicted';
                         })
-                        .sort((a, b) => new Date(b.time) - new Date(a.time));
+                        .sort((a, b) => parseNoaaTime(b.time) - parseNoaaTime(a.time));
                     currentPt = past[0] || null;
                 }
                 if (currentPt && currentPt.observed !== 'predicted') {

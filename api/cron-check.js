@@ -710,11 +710,19 @@ module.exports = async (req, res) => {
                     );
                     if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
                         const now = Date.now();
+                        // NOAA time_tag is UTC; force Z so Node never treats it as local
+                        const parseNoaaTime = (timeTag) => {
+                            if (!timeTag) return NaN;
+                            const s = String(timeTag).trim();
+                            if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) return new Date(s).getTime();
+                            const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+                            return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z').getTime();
+                        };
                         // Current 3h bin: time_tag <= now < time_tag + 3h (NOAA bins start on the hour)
                         // Prefer observed/estimated; pure predicted for "now" is ignored.
                         let currentRow = null;
                         for (const r of noaaRes.data) {
-                            const t = new Date(r.time_tag).getTime();
+                            const t = parseNoaaTime(r.time_tag);
                             if (isNaN(t)) continue;
                             if (t <= now && now < t + 3 * 3600 * 1000) {
                                 currentRow = r;
@@ -724,7 +732,7 @@ module.exports = async (req, res) => {
                         // Fallback: latest non-future observed/estimated point
                         if (!currentRow) {
                             const past = noaaRes.data
-                                .map(r => ({ r, t: new Date(r.time_tag).getTime() }))
+                                .map(r => ({ r, t: parseNoaaTime(r.time_tag) }))
                                 .filter(({ r, t }) => !isNaN(t) && t <= now && r.observed !== 'predicted')
                                 .sort((a, b) => b.t - a.t);
                             if (past.length) currentRow = past[0].r;
