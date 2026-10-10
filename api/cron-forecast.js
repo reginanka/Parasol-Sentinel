@@ -352,41 +352,57 @@ module.exports = async (req, res) => {
                     { upsert: true }
                 );
 
-                // --- FETCH NOAA Kp-index (geomagnetic forecast) ---
-                // Display only — does NOT write forecastedKp / lastGeomagAlert to DB.
+                // --- FETCH NOAA Kp per day (display only) ---
+                // Does NOT write forecastedKp / lastGeomagAlert to DB.
                 // Real-time state & alerts are owned exclusively by cron-check (LOGIC E).
-                let geomagInfo = null;
+                // geomagByDate: { 'YYYY-MM-DD': maxKp }
+                // 3-hourly JSON covers ~2–3 days; 27-day outlook fills the rest.
+                const geomagByDate = {};
                 try {
                     const noaaRes = await axios.get(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
                         { timeout: 10000 }
                     );
-                    if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
-                        const now = Date.now();
-                        const next24h = noaaRes.data
-                            .filter(r => {
-                                const t = new Date(r.time_tag).getTime();
-                                return t >= now - 3 * 3600 * 1000 && t <= now + 24 * 3600 * 1000;
-                            })
-                            .map(r => parseFloat(r.kp))
-                            .filter(v => !isNaN(v));
-
-                        const kpValues = next24h.length > 0
-                            ? next24h
-                            : noaaRes.data.slice(0, 8).map(r => parseFloat(r.kp)).filter(v => !isNaN(v));
-
-                        const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
-                        const level = getGeomagLevel(maxKp);
-                        if (level) {
-                            geomagInfo = {
-                                badge: level.badge,
-                                labelUk: level.labelUk,
-                                labelEn: level.labelEn
-                            };
+                    if (Array.isArray(noaaRes.data)) {
+                        for (const r of noaaRes.data) {
+                            const kp = parseFloat(r.kp);
+                            if (isNaN(kp)) continue;
+                            const dateStr = String(r.time_tag || '').slice(0, 10);
+                            if (!dateStr || dateStr.length < 10) continue;
+                            if (geomagByDate[dateStr] == null || kp > geomagByDate[dateStr]) {
+                                geomagByDate[dateStr] = kp;
+                            }
                         }
                     }
                 } catch (noaaErr) {
-                    console.error('NOAA Kp fetch error:', noaaErr.message);
+                    console.error('NOAA Kp forecast error:', noaaErr.message);
+                }
+                try {
+                    const outlookRes = await axios.get(
+                        'https://services.swpc.noaa.gov/text/27-day-outlook.txt',
+                        { timeout: 10000 }
+                    );
+                    const months = {
+                        Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+                        Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
+                    };
+                    for (const line of String(outlookRes.data || '').split('\n')) {
+                        // e.g. "2026 Oct 11      90          10          3"
+                        const m = line.match(/^(\d{4})\s+(\w{3})\s+(\d{1,2})\s+\d+\s+\d+\s+(\d+)/);
+                        if (!m) continue;
+                        const [, year, mon, day, kpStr] = m;
+                        const month = months[mon];
+                        if (!month) continue;
+                        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const kp = parseFloat(kpStr);
+                        if (isNaN(kp)) continue;
+                        // do not overwrite more precise 3-hourly max
+                        if (geomagByDate[dateStr] == null) {
+                            geomagByDate[dateStr] = kp;
+                        }
+                    }
+                } catch (outlookErr) {
+                    console.error('NOAA 27-day outlook error:', outlookErr.message);
                 }
 
                 // --- Planned soil frost (save once per city for frost-cron cross-check) ---
@@ -612,10 +628,16 @@ module.exports = async (req, res) => {
                             const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                             message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
                         }
-                        if (metrics.includes('geomag') && geomagInfo && idx === 0) {
-                            const label = lang === 'uk' ? geomagInfo.labelUk : geomagInfo.labelEn;
-                            const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
-                            message += `${geomagLabel} ${geomagInfo.badge} ${label}\n`;
+                        // Geomag: max Kp for THIS calendar day (not only idx === 0)
+                        if (metrics.includes('geomag')) {
+                            const dayDate = dayKeyFn(day);
+                            const kp = geomagByDate[dayDate];
+                            const level = getGeomagLevel(kp);
+                            if (level) {
+                                const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
+                                const label = lang === 'uk' ? level.labelUk : level.labelEn;
+                                message += `${geomagLabel} ${level.badge} ${label}\n`;
+                            }
                         }
 
                         message += '\n';
