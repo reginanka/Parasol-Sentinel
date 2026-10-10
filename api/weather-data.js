@@ -228,7 +228,7 @@ module.exports = async (req, res) => {
             }
         }
 
-        // NOAA planetary Kp (geomagnetic — global, relevant "now" + full series for chart)
+        // NOAA planetary Kp (geomagnetic — CURRENT 3h slot only for badge + full series for chart)
         try {
             const noaaRes = await axios.get(
                 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -245,18 +245,23 @@ module.exports = async (req, res) => {
                     .filter(r => !isNaN(r.kp));
                 responseData.geomagSeries = series;
 
+                // Badge = current 3h bin only (not max of forecast window)
                 const nowMs = Date.now();
-                const next24h = series
-                    .filter(r => {
-                        const t = new Date(r.time).getTime();
-                        return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
-                    })
-                    .map(r => r.kp);
-                const kpValues = next24h.length > 0
-                    ? next24h
-                    : series.slice(0, 8).map(r => r.kp);
-                const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
-                if (maxKp !== null) {
+                let currentPt = series.find(r => {
+                    const t = new Date(r.time).getTime();
+                    return t <= nowMs && nowMs < t + 3 * 3600 * 1000;
+                });
+                if (!currentPt || currentPt.observed === 'predicted') {
+                    const past = series
+                        .filter(r => {
+                            const t = new Date(r.time).getTime();
+                            return t <= nowMs && r.observed !== 'predicted';
+                        })
+                        .sort((a, b) => new Date(b.time) - new Date(a.time));
+                    currentPt = past[0] || null;
+                }
+                if (currentPt && currentPt.observed !== 'predicted') {
+                    const maxKp = currentPt.kp;
                     let badge = '🟢';
                     if (maxKp >= 5) badge = '🔴';
                     else if (maxKp >= 4) badge = '🟡';

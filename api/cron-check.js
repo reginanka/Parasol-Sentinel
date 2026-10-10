@@ -692,6 +692,8 @@ module.exports = async (req, res) => {
 
                 // --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
                 // Rules (state machine by rank):
+                // - Alert ONLY on the CURRENT 3-hour Kp slot (observed/estimated "now"),
+                //   never on future forecast peaks within +12h (that misled users).
                 // - Evening forecast does NOT write geomag state to DB
                 // - Check owns lastGeomagAlert { date, maxKp, rank, level }
                 // - Same rank today → silent (no re-send, no overwrite spam)
@@ -708,19 +710,34 @@ module.exports = async (req, res) => {
                     );
                     if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
                         const now = Date.now();
-                        const next12h = noaaRes.data
-                            .filter(r => {
-                                const t = new Date(r.time_tag).getTime();
-                                return t >= now - 2 * 3600 * 1000 && t <= now + 12 * 3600 * 1000;
-                            })
-                            .map(r => parseFloat(r.kp))
-                            .filter(v => !isNaN(v));
-
-                        const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
+                        // Current 3h bin: time_tag <= now < time_tag + 3h (NOAA bins start on the hour)
+                        // Prefer observed/estimated; pure predicted for "now" is ignored.
+                        let currentRow = null;
+                        for (const r of noaaRes.data) {
+                            const t = new Date(r.time_tag).getTime();
+                            if (isNaN(t)) continue;
+                            if (t <= now && now < t + 3 * 3600 * 1000) {
+                                currentRow = r;
+                                break;
+                            }
+                        }
+                        // Fallback: latest non-future observed/estimated point
+                        if (!currentRow) {
+                            const past = noaaRes.data
+                                .map(r => ({ r, t: new Date(r.time_tag).getTime() }))
+                                .filter(({ r, t }) => !isNaN(t) && t <= now && r.observed !== 'predicted')
+                                .sort((a, b) => b.t - a.t);
+                            if (past.length) currentRow = past[0].r;
+                        }
+                        // Pure "predicted" never counts as current — only observed/estimated
+                        const rawKp = (currentRow && currentRow.observed !== 'predicted')
+                            ? parseFloat(currentRow.kp != null ? currentRow.kp : currentRow.Kp)
+                            : null;
+                        const currentKp = (rawKp != null && !isNaN(rawKp)) ? rawKp : null;
                         // Classify by rounded Kp so "Kp 5" in the header always maps to G1 advice
                         // (raw 4.5–4.9 would otherwise stay "unsettled" while displaying Kp 5).
                         const current = getGeomagLevel(
-                            currentMaxKp == null ? null : Math.round(Number(currentMaxKp))
+                            currentKp == null ? null : Math.round(Number(currentKp))
                         );
 
                         if (current) {
