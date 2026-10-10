@@ -395,6 +395,48 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
 }
 
 /** Load full NOAA Kp series (observed + forecast) for the Mag chart if missing. */
+/** Current 3h Kp point (observed/estimated only — never pure forecast). */
+function pickCurrentGeomagPoint(series) {
+    if (!Array.isArray(series) || !series.length) return null;
+    const nowMs = Date.now();
+    let currentPt = series.find(r => {
+        const t = new Date(r.time).getTime();
+        return t <= nowMs && nowMs < t + 3 * 3600 * 1000;
+    });
+    if (!currentPt || currentPt.observed === 'predicted') {
+        const past = series
+            .filter(r => {
+                const t = new Date(r.time).getTime();
+                return t <= nowMs && r.observed !== 'predicted';
+            })
+            .sort((a, b) => new Date(b.time) - new Date(a.time));
+        currentPt = past[0] || null;
+    }
+    if (currentPt && currentPt.observed === 'predicted') return null;
+    return currentPt || null;
+}
+
+function geomagBadgeFromKp(kp) {
+    if (kp == null || isNaN(kp)) return null;
+    let badge = '🟢';
+    if (kp >= 5) badge = '🔴';
+    else if (kp >= 4) badge = '🟡';
+    return badge;
+}
+
+/** Honest status label for a Kp point relative to "now". */
+function geomagPointStatus(pt) {
+    if (!pt) return 'forecast';
+    const t = new Date(pt.time).getTime();
+    const nowMs = Date.now();
+    const isCurrent = t <= nowMs && nowMs < t + 3 * 3600 * 1000;
+    if (pt.observed === 'observed') return 'observed';
+    if (pt.observed === 'estimated') return isCurrent ? 'now' : (t < nowMs ? 'estimated' : 'forecast');
+    if (isCurrent) return 'now';
+    if (t < nowMs) return 'estimated';
+    return 'forecast';
+}
+
 async function ensureGeomagSeries() {
     if (!weatherData) return;
     if (Array.isArray(weatherData.geomagSeries) && weatherData.geomagSeries.length > 0) return;
@@ -413,19 +455,10 @@ async function ensureGeomagSeries() {
             .filter(r => !isNaN(r.kp));
         weatherData.geomagSeries = series;
         if (!weatherData.geomag || weatherData.geomag.maxKp == null) {
-            const nowMs = Date.now();
-            const vals = series
-                .filter(r => {
-                    const t = new Date(r.time).getTime();
-                    return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
-                })
-                .map(r => r.kp);
-            const maxKp = vals.length ? Math.max(...vals) : null;
-            if (maxKp != null) {
-                let badge = '🟢';
-                if (maxKp >= 5) badge = '🔴';
-                else if (maxKp >= 4) badge = '🟡';
-                weatherData.geomag = { maxKp, badge };
+            const currentPt = pickCurrentGeomagPoint(series);
+            if (currentPt) {
+                const maxKp = currentPt.kp;
+                weatherData.geomag = { maxKp, badge: geomagBadgeFromKp(maxKp) };
             }
         }
     } catch (e) {
@@ -463,19 +496,10 @@ async function fetchOpenMeteo(lat, lon, name) {
                         }))
                         .filter(r => !isNaN(r.kp));
                     weatherData.geomagSeries = series;
-                    const nowMs = Date.now();
-                    const vals = series
-                        .filter(r => {
-                            const t = new Date(r.time).getTime();
-                            return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
-                        })
-                        .map(r => r.kp);
-                    const maxKp = vals.length ? Math.max(...vals) : null;
-                    if (maxKp != null) {
-                        let badge = '🟢';
-                        if (maxKp >= 5) badge = '🔴';
-                        else if (maxKp >= 4) badge = '🟡';
-                        weatherData.geomag = { maxKp, badge };
+                    const currentPt = pickCurrentGeomagPoint(series);
+                    if (currentPt) {
+                        const maxKp = currentPt.kp;
+                        weatherData.geomag = { maxKp, badge: geomagBadgeFromKp(maxKp) };
                     }
                 }
             }
@@ -856,16 +880,24 @@ function renderChart(dayOffset = 0) {
                     borderWidth: 3,
                     tension: 0.35,
                     fill: true,
-                    pointRadius: 4,
+                    pointRadius: points.map(pt => geomagPointStatus(pt) === 'now' ? 6 : 4),
                     pointHitRadius: 16,
-                    pointHoverRadius: 6,
-                    pointBackgroundColor: datasetData.map(kp => {
+                    pointHoverRadius: 7,
+                    pointBackgroundColor: datasetData.map((kp, i) => {
+                        const st = geomagPointStatus(points[i]);
+                        // Forecast points stay muted; fact/now use intensity color
+                        if (st === 'forecast') return 'rgba(255,255,255,0.35)';
                         if (kp >= 5) return '#ef4444';
                         if (kp >= 4) return '#fbbf24';
                         return '#00F260';
                     }),
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 1
+                    pointBorderColor: points.map(pt => {
+                        const st = geomagPointStatus(pt);
+                        if (st === 'now') return '#fff';
+                        if (st === 'observed') return 'rgba(255,255,255,0.9)';
+                        return 'rgba(255,255,255,0.4)';
+                    }),
+                    pointBorderWidth: points.map(pt => geomagPointStatus(pt) === 'now' ? 2 : 1)
                 }]
             },
             options: {
@@ -892,9 +924,17 @@ function renderChart(dayOffset = 0) {
                                 let tag = '';
                                 if (y >= 5) tag = ` · G${Math.min(5, Math.round(y) - 4)}`;
                                 else if (y >= 4) tag = currentLang === 'uk' ? ' · Збурення' : ' · Unsettled';
-                                const obs = pt?.observed === 'observed'
-                                    ? (currentLang === 'uk' ? ' (факт)' : ' (obs)')
-                                    : (currentLang === 'uk' ? ' (прогноз)' : ' (fcst)');
+                                const st = geomagPointStatus(pt);
+                                let obs;
+                                if (st === 'observed') {
+                                    obs = currentLang === 'uk' ? ' (факт)' : ' (obs)';
+                                } else if (st === 'now') {
+                                    obs = currentLang === 'uk' ? ' (зараз)' : ' (now)';
+                                } else if (st === 'estimated') {
+                                    obs = currentLang === 'uk' ? ' (оцінка)' : ' (est)';
+                                } else {
+                                    obs = currentLang === 'uk' ? ' (прогноз)' : ' (fcst)';
+                                }
                                 return ` Kp ${y.toFixed(2)}${tag}${obs}`;
                             }
                         }
