@@ -11,6 +11,93 @@ const { getLunarPhase } = require('../utils/agro');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 
+/** Kp → badge + labels (UK/EN) */
+const getGeomagLevel = (kp) => {
+    if (kp == null || isNaN(Number(kp))) return null;
+    const k = Number(kp);
+    const kpStr = k.toFixed(0);
+    if (k >= 5) {
+        return {
+            badge: '🔴',
+            labelUk: `Буря (Kp ${kpStr})`,
+            labelEn: `Storm (Kp ${kpStr})`
+        };
+    }
+    if (k >= 4) {
+        return {
+            badge: '🟡',
+            labelUk: `Збурення (Kp ${kpStr})`,
+            labelEn: `Unsettled (Kp ${kpStr})`
+        };
+    }
+    return {
+        badge: '🟢',
+        labelUk: `Спокійно (Kp ${kpStr})`,
+        labelEn: `Calm (Kp ${kpStr})`
+    };
+};
+
+/**
+ * Build { 'YYYY-MM-DD': maxKp } from NOAA 3-hourly forecast + 27-day outlook.
+ * 3-hourly values take priority; outlook fills missing days.
+ */
+const fetchGeomagByDate = async () => {
+    const byDate = {};
+
+    // 1) Detailed 3-hourly Kp (~2–3 days)
+    try {
+        const noaaRes = await axios.get(
+            'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
+            { timeout: 10000 }
+        );
+        if (Array.isArray(noaaRes.data)) {
+            for (const r of noaaRes.data) {
+                const kp = parseFloat(r.kp);
+                if (isNaN(kp)) continue;
+                const dateStr = String(r.time_tag || '').slice(0, 10);
+                if (!dateStr || dateStr.length < 10) continue;
+                if (byDate[dateStr] == null || kp > byDate[dateStr]) {
+                    byDate[dateStr] = kp;
+                }
+            }
+        }
+    } catch (e) {
+        console.error('NOAA Kp forecast error:', e.message);
+    }
+
+    // 2) 27-day outlook — daily max Kp (fills days beyond ~3)
+    try {
+        const outlookRes = await axios.get(
+            'https://services.swpc.noaa.gov/text/27-day-outlook.txt',
+            { timeout: 10000 }
+        );
+        const months = {
+            Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+            Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
+        };
+        const lines = String(outlookRes.data || '').split('\n');
+        for (const line of lines) {
+            // e.g. "2026 Oct 11      90          10          3"
+            const m = line.match(/^(\d{4})\s+(\w{3})\s+(\d{1,2})\s+\d+\s+\d+\s+(\d+)/);
+            if (!m) continue;
+            const [, year, mon, day, kpStr] = m;
+            const month = months[mon];
+            if (!month) continue;
+            const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const kp = parseFloat(kpStr);
+            if (isNaN(kp)) continue;
+            // do not overwrite more precise 3-hourly max
+            if (byDate[dateStr] == null) {
+                byDate[dateStr] = kp;
+            }
+        }
+    } catch (e) {
+        console.error('NOAA 27-day outlook error:', e.message);
+    }
+
+    return byDate;
+};
+
 module.exports = async (req, res) => {
     const LOG_CHAT_ID = process.env.LOG_CHAT_ID;
     const log = (text) => logToTelegram(bot, LOG_CHAT_ID, text);
@@ -207,47 +294,9 @@ module.exports = async (req, res) => {
             day: '2-digit', month: '2-digit'
         });
 
-        // --- NOAA Kp (geomag) — display only, no DB write ---
-        let geomagInfo = null;
-        try {
-            const noaaRes = await axios.get(
-                'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
-                { timeout: 10000 }
-            );
-            if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
-                const now = Date.now();
-                const next24h = noaaRes.data
-                    .filter(r => {
-                        const t = new Date(r.time_tag).getTime();
-                        return t >= now - 3 * 3600 * 1000 && t <= now + 24 * 3600 * 1000;
-                    })
-                    .map(r => parseFloat(r.kp))
-                    .filter(v => !isNaN(v));
-
-                const kpValues = next24h.length > 0
-                    ? next24h
-                    : noaaRes.data.slice(0, 8).map(r => parseFloat(r.kp)).filter(v => !isNaN(v));
-
-                const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
-                if (maxKp !== null) {
-                    let badge = '🟢';
-                    let labelUk = `Спокійно (Kp ${maxKp.toFixed(0)})`;
-                    let labelEn = `Calm (Kp ${maxKp.toFixed(0)})`;
-                    if (maxKp >= 5) {
-                        badge = '🔴';
-                        labelUk = `Буря (Kp ${maxKp.toFixed(0)})`;
-                        labelEn = `Storm (Kp ${maxKp.toFixed(0)})`;
-                    } else if (maxKp >= 4) {
-                        badge = '🟡';
-                        labelUk = `Збурення (Kp ${maxKp.toFixed(0)})`;
-                        labelEn = `Unsettled (Kp ${maxKp.toFixed(0)})`;
-                    }
-                    geomagInfo = { badge, labelUk, labelEn };
-                }
-            }
-        } catch (e) {
-            console.error('NOAA error:', e.message);
-        }
+        // --- NOAA Kp per day (display only, no DB write) ---
+        // geomagByDate: { 'YYYY-MM-DD': maxKp }
+        const geomagByDate = await fetchGeomagByDate();
 
         // --- Open-Meteo soil frost (display only, no DB write) ---
         let frostAnyDay = false;
@@ -294,14 +343,14 @@ module.exports = async (req, res) => {
 
         // --- Формування повідомлення ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
-        
+
         let aqiPrefix = '';
         if (metrics.includes('aqi') && aqiData) {
             const aqiLabel = lang === 'uk' ? '🍃 **Якість повітря (на момент зараз):**' : '🍃 **Air Quality (current moment):**';
             aqiPrefix = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
             if (aqiData.pm25 != null) aqiPrefix += ` | PM2.5: ${aqiData.pm25}`;
             if (aqiData.pm10 != null) aqiPrefix += ` | PM10: ${aqiData.pm10}`;
-            
+
             const isUk = lang === 'uk';
             const issues = [];
             if (aqiData.pm25 != null && aqiData.pm25 > 25) {
@@ -313,27 +362,27 @@ module.exports = async (req, res) => {
 
             let advice = '';
             if (aqiData.aqi > 150) {
-                advice = isUk 
-                    ? '\n🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.' 
+                advice = isUk
+                    ? '\n🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
                     : '\n🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
             } else if (aqiData.aqi > 100) {
-                advice = isUk 
-                    ? '\n🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.' 
+                advice = isUk
+                    ? '\n🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
                     : '\n🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
             } else if (aqiData.aqi > 50) {
-                advice = isUk 
-                    ? '\n🟡 Повітря прийнятне, але чутливим людям варто бути обережними.' 
+                advice = isUk
+                    ? '\n🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
                     : '\n🟡 Air quality is acceptable, but sensitive groups should be cautious.';
             } else if (issues.length > 0) {
-                advice = isUk 
-                    ? '\n⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.' 
+                advice = isUk
+                    ? '\n⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
                     : '\n⚠️ AQI is low, but elevated levels of specific dust particles detected.';
             }
 
             if (issues.length > 0 && advice) {
                 advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
             }
-            
+
             aqiPrefix += advice + '\n\n';
         }
 
@@ -342,7 +391,7 @@ module.exports = async (req, res) => {
 
         const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 
-        userForecast.forEach((day, idx) => {
+        userForecast.forEach((day) => {
             const dateObj = new Date(day.valid_date || day.datetime);
             const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, {
                 weekday: 'short', day: 'numeric', month: 'short'
@@ -410,10 +459,16 @@ module.exports = async (req, res) => {
                 const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
                 message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
             }
-            if (metrics.includes('geomag') && geomagInfo && idx === 0) {
-                const label = lang === 'uk' ? geomagInfo.labelUk : geomagInfo.labelEn;
-                const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
-                message += `${geomagLabel} ${geomagInfo.badge} ${label}\n`;
+            // Geomag: max Kp for THIS day (not only idx === 0)
+            if (metrics.includes('geomag')) {
+                const dayDate = String(day.valid_date || day.datetime || '').slice(0, 10);
+                const kp = geomagByDate[dayDate];
+                const level = getGeomagLevel(kp);
+                if (level) {
+                    const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
+                    const label = lang === 'uk' ? level.labelUk : level.labelEn;
+                    message += `${geomagLabel} ${level.badge} ${label}\n`;
+                }
             }
             message += '\n';
         });
@@ -429,7 +484,7 @@ module.exports = async (req, res) => {
                 ]
             }
         });
-        
+
         await log(`🧪 <b>Тестовий прогноз</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
         res.status(200).send(`Test forecast sent to ${TEST_USER_ID}`);
     } catch (error) {
