@@ -366,6 +366,8 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             accessType.textContent = i18n[currentLang][currentStatusKey];
             // Ensure full Kp time series for the Mag tab (API may only send maxKp)
             await ensureGeomagSeries();
+            // Always recompute pill from current 3h slot (snapshot may still hold old max-window Kp)
+            syncGeomagBadgeFromSeries();
             prunePastDays();
             updateUI(findTodayIndex());
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
@@ -395,21 +397,30 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
 }
 
 /** Load full NOAA Kp series (observed + forecast) for the Mag chart if missing. */
+/** NOAA time_tag is UTC but often lacks "Z" — force UTC parse. */
+function parseNoaaTime(timeTag) {
+    if (!timeTag) return NaN;
+    const s = String(timeTag).trim();
+    if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) return new Date(s).getTime();
+    const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+    return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z').getTime();
+}
+
 /** Current 3h Kp point (observed/estimated only — never pure forecast). */
 function pickCurrentGeomagPoint(series) {
     if (!Array.isArray(series) || !series.length) return null;
     const nowMs = Date.now();
     let currentPt = series.find(r => {
-        const t = new Date(r.time).getTime();
+        const t = parseNoaaTime(r.time);
         return t <= nowMs && nowMs < t + 3 * 3600 * 1000;
     });
     if (!currentPt || currentPt.observed === 'predicted') {
         const past = series
             .filter(r => {
-                const t = new Date(r.time).getTime();
+                const t = parseNoaaTime(r.time);
                 return t <= nowMs && r.observed !== 'predicted';
             })
-            .sort((a, b) => new Date(b.time) - new Date(a.time));
+            .sort((a, b) => parseNoaaTime(b.time) - parseNoaaTime(a.time));
         currentPt = past[0] || null;
     }
     if (currentPt && currentPt.observed === 'predicted') return null;
@@ -427,14 +438,26 @@ function geomagBadgeFromKp(kp) {
 /** Honest status label for a Kp point relative to "now". */
 function geomagPointStatus(pt) {
     if (!pt) return 'forecast';
-    const t = new Date(pt.time).getTime();
+    const t = parseNoaaTime(pt.time);
     const nowMs = Date.now();
     const isCurrent = t <= nowMs && nowMs < t + 3 * 3600 * 1000;
-    if (pt.observed === 'observed') return 'observed';
+    if (pt.observed === 'observed') return isCurrent ? 'now' : 'observed';
     if (pt.observed === 'estimated') return isCurrent ? 'now' : (t < nowMs ? 'estimated' : 'forecast');
     if (isCurrent) return 'now';
     if (t < nowMs) return 'estimated';
     return 'forecast';
+}
+
+/** Always sync pill from current 3h slot (ignore stale snapshot maxKp). */
+function syncGeomagBadgeFromSeries() {
+    if (!weatherData?.geomagSeries?.length) return;
+    const currentPt = pickCurrentGeomagPoint(weatherData.geomagSeries);
+    if (currentPt) {
+        weatherData.geomag = {
+            maxKp: currentPt.kp,
+            badge: geomagBadgeFromKp(currentPt.kp)
+        };
+    }
 }
 
 async function ensureGeomagSeries() {
@@ -454,13 +477,7 @@ async function ensureGeomagSeries() {
             }))
             .filter(r => !isNaN(r.kp));
         weatherData.geomagSeries = series;
-        if (!weatherData.geomag || weatherData.geomag.maxKp == null) {
-            const currentPt = pickCurrentGeomagPoint(series);
-            if (currentPt) {
-                const maxKp = currentPt.kp;
-                weatherData.geomag = { maxKp, badge: geomagBadgeFromKp(maxKp) };
-            }
-        }
+        syncGeomagBadgeFromSeries();
     } catch (e) {
         console.warn('ensureGeomagSeries failed:', e.message);
     }
@@ -496,11 +513,7 @@ async function fetchOpenMeteo(lat, lon, name) {
                         }))
                         .filter(r => !isNaN(r.kp));
                     weatherData.geomagSeries = series;
-                    const currentPt = pickCurrentGeomagPoint(series);
-                    if (currentPt) {
-                        const maxKp = currentPt.kp;
-                        weatherData.geomag = { maxKp, badge: geomagBadgeFromKp(maxKp) };
-                    }
+                    syncGeomagBadgeFromSeries();
                 }
             }
         } catch (extraErr) {
@@ -826,20 +839,23 @@ function renderChart(dayOffset = 0) {
         }
 
         // Filter Kp points that fall on the selected local calendar day.
-        // NOAA times are UTC; convert each point to local date for matching.
+        // NOAA times are UTC (parsed via parseNoaaTime); convert to local date for matching.
         let points = series.filter(r => {
-            const d = new Date(r.time);
-            if (isNaN(d.getTime())) return false;
+            const ms = parseNoaaTime(r.time);
+            if (isNaN(ms)) return false;
+            const d = new Date(ms);
             const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             return localDate === targetDateStr;
         });
 
-        // Fallback: if no points for that exact day (e.g. far forecast / gap),
-        // try UTC date match so we still show something useful.
+        // Fallback: UTC calendar date match
         if (!points.length && targetDateStr) {
             points = series.filter(r => {
-                const t = (r.time || '').substring(0, 10);
-                return t === targetDateStr;
+                const ms = parseNoaaTime(r.time);
+                if (isNaN(ms)) return false;
+                const d = new Date(ms);
+                const utcDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+                return utcDate === targetDateStr;
             });
         }
 
@@ -855,9 +871,9 @@ function renderChart(dayOffset = 0) {
         }
 
         const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
-        // One day → show only time on the axis (cleaner)
+        // One day → local time on the axis (NOAA UTC → device local)
         const labels = points.map(r => {
-            const d = new Date(r.time);
+            const d = new Date(parseNoaaTime(r.time));
             return d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
         });
         const datasetData = points.map(r => r.kp);
