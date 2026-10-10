@@ -1125,8 +1125,9 @@ function renderChart(dayOffset = 0) {
                         ticks: {
                             color: 'rgba(255, 255, 255, 0.4)',
                             font: { size: 10 },
-                            maxRotation: 0,
-                            // Same idea as wind/gusts: ~every 2h labels, all hourly points still tappable
+                            // Same style as temp/wind/pressure (diagonal hour labels)
+                            maxRotation: 45,
+                            minRotation: 45,
                             autoSkip: true,
                             maxTicksLimit: 12
                         }
