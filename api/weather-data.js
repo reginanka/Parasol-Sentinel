@@ -99,6 +99,7 @@ module.exports = async (req, res) => {
                         aqi: snap.aqi || null,
                         waqi: snap.waqi || null,
                         geomag: snap.geomag || null,
+                        geomagSeries: snap.geomagSeries || null,
                         lat: snap.lat ?? lat,
                         lon: snap.lon ?? lon,
                         units: unitsToReturn,
@@ -227,24 +228,33 @@ module.exports = async (req, res) => {
             }
         }
 
-        // NOAA planetary Kp (geomagnetic — global, relevant "now")
+        // NOAA planetary Kp (geomagnetic — global, relevant "now" + full series for chart)
         try {
             const noaaRes = await axios.get(
                 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
                 { timeout: 10000 }
             );
             if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
+                const series = noaaRes.data
+                    .map(r => ({
+                        time: r.time_tag,
+                        kp: parseFloat(r.kp != null ? r.kp : r.Kp),
+                        observed: r.observed || null,
+                        scale: r.noaa_scale || null
+                    }))
+                    .filter(r => !isNaN(r.kp));
+                responseData.geomagSeries = series;
+
                 const nowMs = Date.now();
-                const next24h = noaaRes.data
+                const next24h = series
                     .filter(r => {
-                        const t = new Date(r.time_tag).getTime();
+                        const t = new Date(r.time).getTime();
                         return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
                     })
-                    .map(r => parseFloat(r.kp))
-                    .filter(v => !isNaN(v));
+                    .map(r => r.kp);
                 const kpValues = next24h.length > 0
                     ? next24h
-                    : noaaRes.data.slice(0, 8).map(r => parseFloat(r.kp)).filter(v => !isNaN(v));
+                    : series.slice(0, 8).map(r => r.kp);
                 const maxKp = kpValues.length > 0 ? Math.max(...kpValues) : null;
                 if (maxKp !== null) {
                     let badge = '🟢';
@@ -285,6 +295,7 @@ module.exports = async (req, res) => {
                 'dashboardSnapshot.aqi': responseData.aqi,
                 'dashboardSnapshot.waqi': responseData.waqi,
                 'dashboardSnapshot.geomag': responseData.geomag || null,
+                'dashboardSnapshot.geomagSeries': responseData.geomagSeries || null,
                 'dashboardSnapshot.lat': cityLat,
                 'dashboardSnapshot.lon': cityLon,
                 'dashboardSnapshot.timezone': currentRaw.timezone
