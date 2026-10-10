@@ -1126,7 +1126,9 @@ function renderChart(dayOffset = 0) {
                             color: 'rgba(255, 255, 255, 0.4)',
                             font: { size: 10 },
                             maxRotation: 0,
-                            autoSkip: false
+                            // Same idea as wind/gusts: ~every 2h labels, all hourly points still tappable
+                            autoSkip: true,
+                            maxTicksLimit: 12
                         }
                     }
                 }
