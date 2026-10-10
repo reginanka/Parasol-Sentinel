@@ -777,7 +777,7 @@ function renderChart(dayOffset = 0) {
     const ctx = document.getElementById('weatherChart').getContext('2d');
     if (weatherChart) weatherChart.destroy();
 
-    // ── Geomagnetic Kp chart (global, independent of city / day) ──
+    // ── Geomagnetic Kp chart — same day logic as other tabs ──
     if (currentMode === 'geomag') {
         const series = weatherData?.geomagSeries;
         if (!series || !series.length) {
@@ -790,20 +790,54 @@ function renderChart(dayOffset = 0) {
             );
             return;
         }
-        // Show roughly last 2 days observed + ~3 days forecast (~40 points max)
-        const nowMs = Date.now();
-        const windowed = series.filter(r => {
-            const t = new Date(r.time).getTime();
-            return t >= nowMs - 48 * 3600 * 1000 && t <= nowMs + 72 * 3600 * 1000;
+
+        // Resolve the selected day's calendar date (same approach as hourly charts)
+        const targetDay = weatherData.daily?.[dayOffset];
+        let targetDateStr = '';
+        if (dayOffset === 0) {
+            const now = new Date();
+            targetDateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        } else if (targetDay) {
+            targetDateStr = (targetDay.valid_date || '').substring(0, 10);
+        }
+
+        // Filter Kp points that fall on the selected local calendar day.
+        // NOAA times are UTC; convert each point to local date for matching.
+        let points = series.filter(r => {
+            const d = new Date(r.time);
+            if (isNaN(d.getTime())) return false;
+            const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            return localDate === targetDateStr;
         });
-        const points = windowed.length ? windowed : series.slice(-32);
+
+        // Fallback: if no points for that exact day (e.g. far forecast / gap),
+        // try UTC date match so we still show something useful.
+        if (!points.length && targetDateStr) {
+            points = series.filter(r => {
+                const t = (r.time || '').substring(0, 10);
+                return t === targetDateStr;
+            });
+        }
+
+        if (!points.length) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+            ctx.textAlign = 'center';
+            ctx.font = "14px 'Oswald', system-ui, sans-serif";
+            ctx.fillText(
+                i18n[currentLang].chartGeomagNoData || 'Geomagnetic data unavailable',
+                ctx.canvas.width / 2, ctx.canvas.height / 2
+            );
+            return;
+        }
+
         const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
+        // One day → show only time on the axis (cleaner)
         const labels = points.map(r => {
             const d = new Date(r.time);
-            return d.toLocaleString(loc, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+            return d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
         });
         const datasetData = points.map(r => r.kp);
-        // Color by peak intensity in the visible window
+        // Color by peak intensity for the selected day
         const peak = Math.max(...datasetData);
         let color = '#00F260'; // calm
         if (peak >= 5) color = '#ef4444';
@@ -822,7 +856,7 @@ function renderChart(dayOffset = 0) {
                     borderWidth: 3,
                     tension: 0.35,
                     fill: true,
-                    pointRadius: 3,
+                    pointRadius: 4,
                     pointHitRadius: 16,
                     pointHoverRadius: 6,
                     pointBackgroundColor: datasetData.map(kp => {
@@ -881,10 +915,9 @@ function renderChart(dayOffset = 0) {
                         grid: { display: false },
                         ticks: {
                             color: 'rgba(255, 255, 255, 0.4)',
-                            font: { size: 9 },
-                            maxRotation: 45,
-                            autoSkip: true,
-                            maxTicksLimit: 10
+                            font: { size: 10 },
+                            maxRotation: 0,
+                            autoSkip: false
                         }
                     }
                 }
