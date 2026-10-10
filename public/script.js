@@ -535,20 +535,21 @@ function interpolateKpAt(series3h, atMs = Date.now()) {
 function pickCurrentGeomagPoint(series) {
     if (!Array.isArray(series) || !series.length) return null;
     const nowMs = Date.now();
+    const isForecastOnly = (o) => o === 'predicted' || o === 'outlook';
     let currentPt = series.find(r => {
         const t = parseNoaaTime(r.time);
-        return t <= nowMs && nowMs < t + 3 * 3600 * 1000;
+        return t <= nowMs && nowMs < t + 3 * 3600 * 1000 && !isForecastOnly(r.observed);
     });
-    if (!currentPt || currentPt.observed === 'predicted') {
+    if (!currentPt || isForecastOnly(currentPt.observed)) {
         const past = series
             .filter(r => {
                 const t = parseNoaaTime(r.time);
-                return t <= nowMs && r.observed !== 'predicted';
+                return t <= nowMs && !isForecastOnly(r.observed);
             })
             .sort((a, b) => parseNoaaTime(b.time) - parseNoaaTime(a.time));
         currentPt = past[0] || null;
     }
-    if (currentPt && currentPt.observed === 'predicted') return null;
+    if (currentPt && isForecastOnly(currentPt.observed)) return null;
     return currentPt || null;
 }
 
@@ -560,7 +561,8 @@ function geomagPointStatus(pt) {
     // "now" = closest hour mark within ±45 min, or exact current interpolate marker
     if (pt.isNow) return 'now';
     const isNearNow = Math.abs(t - nowMs) < 45 * 60 * 1000;
-    if (pt.observed === 'predicted') return 'forecast';
+    // 27-day outlook & predicted 3h slots are always "forecast"
+    if (pt.observed === 'predicted' || pt.observed === 'outlook') return 'forecast';
     if (isNearNow) return 'now';
     if (pt.observed === 'observed' && t < nowMs) return 'observed';
     if (t < nowMs) return pt.observed === 'estimated' ? 'estimated' : 'observed';
@@ -571,7 +573,7 @@ function geomagPointStatus(pt) {
 function syncGeomagBadgeFromSeries() {
     if (!weatherData?.geomagSeries?.length) return;
     const at = interpolateKpAt(weatherData.geomagSeries, Date.now());
-    if (at && at.observed !== 'predicted') {
+    if (at && at.observed !== 'predicted' && at.observed !== 'outlook') {
         weatherData.geomag = {
             maxKp: at.kp,
             badge: geomagBadgeFromKp(at.kp)
@@ -587,24 +589,82 @@ function syncGeomagBadgeFromSeries() {
     }
 }
 
+/**
+ * Merge NOAA 27-day outlook (daily max Kp) into geomagSeries for dates
+ * not already covered by the 3-hourly product. Same logic as cron-forecast.js.
+ */
+async function extendGeomagWith27DayOutlook(series) {
+    const out = Array.isArray(series) ? [...series] : [];
+    const datesCovered = new Set();
+    for (const r of out) {
+        const ds = String(r.time || '').slice(0, 10);
+        if (ds.length >= 10) datesCovered.add(ds);
+    }
+    try {
+        const outlookRes = await fetch('https://services.swpc.noaa.gov/text/27-day-outlook.txt');
+        if (!outlookRes.ok) return out;
+        const text = await outlookRes.text();
+        const months = {
+            Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+            Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
+        };
+        for (const line of text.split('\n')) {
+            // e.g. "2026 Oct 11      90          10          3"
+            const m = line.match(/^(\d{4})\s+(\w{3})\s+(\d{1,2})\s+\d+\s+\d+\s+(\d+)/);
+            if (!m) continue;
+            const [, year, mon, day, kpStr] = m;
+            const month = months[mon];
+            if (!month) continue;
+            const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const kp = parseFloat(kpStr);
+            if (isNaN(kp)) continue;
+            if (datesCovered.has(dateStr)) continue;
+            for (let h = 0; h < 24; h += 3) {
+                out.push({
+                    time: `${dateStr}T${String(h).padStart(2, '0')}:00:00Z`,
+                    kp,
+                    observed: 'outlook',
+                    scale: null
+                });
+            }
+            datesCovered.add(dateStr);
+        }
+    } catch (e) {
+        console.warn('27-day outlook extend failed:', e.message);
+    }
+    out.sort((a, b) => parseNoaaTime(a.time) - parseNoaaTime(b.time));
+    return out;
+}
+
 async function ensureGeomagSeries() {
     if (!weatherData) return;
-    if (Array.isArray(weatherData.geomagSeries) && weatherData.geomagSeries.length > 0) return;
     try {
-        const noaaRes = await fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json');
-        if (!noaaRes.ok) return;
-        const noaaData = await noaaRes.json();
-        if (!Array.isArray(noaaData) || noaaData.length === 0) return;
-        const series = noaaData
-            .map(r => ({
-                time: r.time_tag,
-                kp: parseFloat(r.kp != null ? r.kp : r.Kp),
-                observed: r.observed || null,
-                scale: r.noaa_scale || null
-            }))
-            .filter(r => !isNaN(r.kp));
-        weatherData.geomagSeries = series;
-        syncGeomagBadgeFromSeries();
+        let series = Array.isArray(weatherData.geomagSeries) ? weatherData.geomagSeries : [];
+        if (!series.length) {
+            const noaaRes = await fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json');
+            if (noaaRes.ok) {
+                const noaaData = await noaaRes.json();
+                if (Array.isArray(noaaData) && noaaData.length > 0) {
+                    series = noaaData
+                        .map(r => ({
+                            time: r.time_tag,
+                            kp: parseFloat(r.kp != null ? r.kp : r.Kp),
+                            observed: r.observed || null,
+                            scale: r.noaa_scale || null
+                        }))
+                        .filter(r => !isNaN(r.kp));
+                }
+            }
+        }
+        // Always try to extend with 27-day outlook (skip if already merged)
+        const hasOutlook = series.some(r => r.observed === 'outlook');
+        if (!hasOutlook) {
+            series = await extendGeomagWith27DayOutlook(series);
+        }
+        if (series.length) {
+            weatherData.geomagSeries = series;
+            syncGeomagBadgeFromSeries();
+        }
     } catch (e) {
         console.warn('ensureGeomagSeries failed:', e.message);
     }
@@ -631,7 +691,7 @@ async function fetchOpenMeteo(lat, lon, name) {
             if (noaaRes.ok) {
                 const noaaData = await noaaRes.json();
                 if (Array.isArray(noaaData) && noaaData.length > 0) {
-                    const series = noaaData
+                    let series = noaaData
                         .map(r => ({
                             time: r.time_tag,
                             kp: parseFloat(r.kp != null ? r.kp : r.Kp),
@@ -639,6 +699,7 @@ async function fetchOpenMeteo(lat, lon, name) {
                             scale: r.noaa_scale || null
                         }))
                         .filter(r => !isNaN(r.kp));
+                    series = await extendGeomagWith27DayOutlook(series);
                     weatherData.geomagSeries = series;
                     syncGeomagBadgeFromSeries();
                 }
