@@ -121,9 +121,7 @@ module.exports = async (req, res) => {
 
         /**
          * Build Rich Message HTML for geomagnetic alert / recovery.
-         * Same as cron-check.js — full NOAA G1–G5 labels + recommendations.
-         * kind: 'worse' | 'better'
-         * levelInfo: return value of getGeomagLevel
+         * Same texts as cron-check.js. Level classified by rounded Kp in LOGIC E.
          */
         const htmlGeomag = (lang, { kind, levelInfo }) => {
             const isUk = lang === 'uk';
@@ -131,55 +129,77 @@ module.exports = async (req, res) => {
             const label = isUk ? levelInfo.labelUk : levelInfo.labelEn;
             const g = levelInfo.gScale;
 
+            const copy = {
+                unsettled: {
+                    descUk: 'Невеликі геомагнітні збурення. Метеочутливі люди можуть відчувати легку втому або сонливість.',
+                    descEn: 'Minor geomagnetic disturbances. Weather-sensitive people may feel mild fatigue or drowsiness.',
+                    adviceUk: 'Намагайтеся не перевтомлюватися, пийте достатньо чистої води та приділіть трохи більше часу відпочинку ввечері.',
+                    adviceEn: 'Try not to overexert yourself, drink enough clean water, and allow a bit more rest in the evening.'
+                },
+                g1: {
+                    descUk: 'Слабка магнітна буря. Можливі незначні коливання самопочуття, легкий головний біль чи перепади настрою у чутливих людей.',
+                    descEn: 'Minor magnetic storm. Sensitive people may notice mild discomfort, a light headache, or mood swings.',
+                    adviceUk: 'Зменште інтенсивні фізичні навантаження, уникайте стресів. Корисні прогулянки на свіжому повітрі та повноцінний сон.',
+                    adviceEn: 'Reduce intense physical activity and avoid stress. Fresh-air walks and a full night\'s sleep help.'
+                },
+                g2: {
+                    descUk: 'Помірна геомагнітна буря. Може спостерігатися погіршення самопочуття, втома або зниження концентрації.',
+                    descEn: 'Moderate geomagnetic storm. You may feel worse overall, more tired, or less focused.',
+                    adviceUk: 'Тримайте під рукою необхідні звичні ліки, уникайте важкої їжі та зайвої кави. Бажано зменшити темп роботи і більше відпочивати.',
+                    adviceEn: 'Keep your usual medication handy, avoid heavy food and excess coffee. Ease your work pace and rest more.'
+                },
+                g3: {
+                    descUk: 'Сильна геомагнітна буря. Багато метеочутливих людей можуть відчувати втому, апатію або головний біль.',
+                    descEn: 'Strong geomagnetic storm. Many weather-sensitive people may feel fatigue, apathy, or a headache.',
+                    adviceUk: 'Уникайте важкої праці та стресових ситуацій. Прислухайтеся до свого організму, за потреби робіть паузи в роботі та проведіть вечір у тиші.',
+                    adviceEn: 'Avoid heavy work and stressful situations. Listen to your body, take breaks if needed, and keep the evening quiet.'
+                },
+                g4: {
+                    descUk: 'Дуже сильна геомагнітна буря. Може суттєво позначитися на самопочутті та рівні енергії.',
+                    descEn: 'Severe geomagnetic storm. It can noticeably affect how you feel and your energy level.',
+                    adviceUk: 'Постарайтеся провести день у спокійному режимі. Уникайте навантажень, пийте заспокійливі трав\'яні чаї. Якщо самопочуття помітно погіршилось — варто звернутися до лікаря.',
+                    adviceEn: 'Try to keep the day calm. Avoid strain and drink soothing herbal tea. If you feel significantly worse, consider seeing a doctor.'
+                },
+                g5: {
+                    descUk: 'Екстремальний геомагнітний шторм. Потужний вплив на самопочуття та загальний тонус організму.',
+                    descEn: 'Extreme geomagnetic storm. Strong impact on well-being and overall energy.',
+                    adviceUk: 'Максимально знизьте активність, залишайтеся вдома у затишку та уникайте будь-яких стресів. За необхідності обов\'язково звертайтеся по медичну допомогу.',
+                    adviceEn: 'Minimize activity, stay home in a calm setting, and avoid stress. Seek medical help if you need it.'
+                },
+                quiet: {
+                    descUk: 'Магнітне поле Землі заспокоїлось.',
+                    descEn: 'Earth\'s magnetic field has calmed.',
+                    adviceUk: 'Ідеальний час для активностей! Можна сміливо планувати прогулянки на свіжому повітрі, спорт і не хвилюватися про самопочуття — насолоджуйтеся днем на повну.',
+                    adviceEn: 'A great time to be active! Plan outdoor walks or sport and enjoy the day without worrying about how you feel.'
+                }
+            };
+
             if (kind === 'worse') {
                 if (levelInfo.level === 'quiet') return null;
 
                 if (levelInfo.level === 'unsettled') {
-                    if (isUk) {
-                        return `<h3>🧲 ${label}</h3>` +
-                            `<p>Можливе незначне погіршення самопочуття у метеочутливих людей.</p>` +
-                            `<blockquote>Рекомендації: зменште фізичні навантаження, більше відпочивайте, пийте достатньо води.</blockquote>`;
-                    }
+                    const c = copy.unsettled;
                     return `<h3>🧲 ${label}</h3>` +
-                        `<p>Mild discomfort possible for weather-sensitive individuals.</p>` +
-                        `<blockquote>Recommendations: reduce physical activity, rest more, drink enough water.</blockquote>`;
+                        `<p>${isUk ? c.descUk : c.descEn}</p>` +
+                        `<blockquote>${isUk ? 'Рекомендації' : 'Recommendations'}: ${isUk ? c.adviceUk : c.adviceEn}</blockquote>`;
                 }
 
-                const stormAdviceUk = {
-                    1: 'Зменште фізичні навантаження, пийте більше води, уникайте стресу. Метеозалежним — тримайте під рукою ліки.',
-                    2: 'Обмежте активність на вулиці, більше відпочивайте, контролюйте тиск. Пийте воду, уникайте кави та алкоголю.',
-                    3: 'Максимально зменште навантаження. Відпочинок, гідратація, ліки під рукою. Уникайте поїздок і стресових ситуацій.',
-                    4: 'Сильне збурення. Залишайтесь у спокої, обмежте будь-яку зайву активність. Слідкуйте за самопочуттям і тиском.',
-                    5: 'Екстремальний рівень. Уникайте будь-яких навантажень. При погіршенні самопочуття — зверніться по медичну допомогу.'
-                };
-                const stormAdviceEn = {
-                    1: 'Reduce physical activity, drink more water, avoid stress. Keep medication handy if weather-sensitive.',
-                    2: 'Limit outdoor activity, rest more, monitor blood pressure. Stay hydrated; avoid coffee and alcohol.',
-                    3: 'Minimize strain. Rest, hydrate, keep medication ready. Avoid travel and stressful situations.',
-                    4: 'Severe disturbance. Stay calm, limit all extra activity. Monitor how you feel and your blood pressure.',
-                    5: 'Extreme level. Avoid any physical strain. Seek medical help if you feel unwell.'
-                };
-                const advice = isUk
-                    ? (stormAdviceUk[g] || stormAdviceUk[1])
-                    : (stormAdviceEn[g] || stormAdviceEn[1]);
-
-                if (isUk) {
-                    return `<h3>🧲 Увага! ${label}</h3>` +
-                        `<p>Активне збурення геомагнітного поля · рівень <b>G${g}</b>.</p>` +
-                        `<blockquote>${advice}</blockquote>`;
-                }
-                return `<h3>🧲 Alert! ${label}</h3>` +
-                    `<p>Active geomagnetic disturbance · level <b>G${g}</b>.</p>` +
-                    `<blockquote>${advice}</blockquote>`;
+                const key = `g${g}`;
+                const c = copy[key] || copy.g1;
+                const title = isUk ? `🧲 Увага! ${label}` : `🧲 Alert! ${label}`;
+                return `<h3>${title}</h3>` +
+                    `<p>${isUk ? c.descUk : c.descEn}</p>` +
+                    `<blockquote>${isUk ? 'Рекомендації' : 'Recommendations'}: ${isUk ? c.adviceUk : c.adviceEn}</blockquote>`;
             }
 
             if (levelInfo.level === 'quiet') {
-                if (isUk) {
-                    return `<h3>🧲 Магнітне поле заспокоїлося (Kp ${kpStr})</h3>` +
-                        `<p>🟢 Умови стали сприятливими.</p>`;
-                }
-                return `<h3>🧲 Geomagnetic field has calmed (Kp ${kpStr})</h3>` +
-                    `<p>🟢 Conditions are now favorable.</p>`;
+                const c = copy.quiet;
+                const title = isUk
+                    ? `🧲 Магнітне поле заспокоїлося (Kp ${kpStr})`
+                    : `🧲 Geomagnetic field has calmed (Kp ${kpStr})`;
+                return `<h3>${title}</h3>` +
+                    `<p>🟢 ${isUk ? c.descUk : c.descEn}</p>` +
+                    `<blockquote>${isUk ? c.adviceUk : c.adviceEn}</blockquote>`;
             }
 
             if (levelInfo.level === 'unsettled') {
@@ -649,7 +669,10 @@ module.exports = async (req, res) => {
                             .filter(v => !isNaN(v));
 
                         const currentMaxKp = next12h.length > 0 ? Math.max(...next12h) : null;
-                        const current = getGeomagLevel(currentMaxKp);
+                        // Classify by rounded Kp so "Kp 5" in the header always maps to G1 advice
+                        const current = getGeomagLevel(
+                            currentMaxKp == null ? null : Math.round(Number(currentMaxKp))
+                        );
 
                         if (current) {
                             snapGeomag = {
@@ -664,16 +687,18 @@ module.exports = async (req, res) => {
                             const lastRank = (last?.date === todayStr && last?.rank != null)
                                 ? Number(last.rank)
                                 : (last?.date === todayStr && last?.maxKp != null
-                                    ? (getGeomagLevel(last.maxKp)?.rank ?? -1)
+                                    ? (getGeomagLevel(Math.round(Number(last.maxKp)))?.rank ?? -1)
                                     : -1);
 
                             if (last?.date === todayStr && current.rank === lastRank) {
                                 // same rank today → silent
                             } else {
+                                // worse: rank rose (unsettled+). better: ONLY full calm (rank 0).
+                                // Intermediate drops (G3→G1 etc.) silent — no de-escalation spam.
                                 let kind = null;
                                 if (current.rank > lastRank && current.rank >= 1) {
                                     kind = 'worse';
-                                } else if (current.rank < lastRank && lastRank >= 0) {
+                                } else if (current.rank === 0 && lastRank > 0) {
                                     kind = 'better';
                                 }
 
