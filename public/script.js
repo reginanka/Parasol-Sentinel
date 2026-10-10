@@ -406,7 +406,132 @@ function parseNoaaTime(timeTag) {
     return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z').getTime();
 }
 
-/** Current 3h Kp point (observed/estimated only — never pure forecast). */
+function geomagBadgeFromKp(kp) {
+    if (kp == null || isNaN(kp)) return null;
+    let badge = '🟢';
+    if (kp >= 5) badge = '🔴';
+    else if (kp >= 4) badge = '🟡';
+    return badge;
+}
+
+/**
+ * Expand official 3h Kp slots into hourly points via linear interpolation.
+ * NOAA value is placed at the START of each 3h bin; between starts we lerp.
+ * This is an estimate for UX only — not an official sub-hourly Kp product.
+ */
+function buildHourlyGeomagSeries(series3h) {
+    if (!Array.isArray(series3h) || series3h.length < 1) return [];
+    const sorted = series3h
+        .map(r => ({
+            t: parseNoaaTime(r.time),
+            kp: Number(r.kp),
+            observed: r.observed || null,
+            scale: r.scale || null
+        }))
+        .filter(r => !isNaN(r.t) && !isNaN(r.kp))
+        .sort((a, b) => a.t - b.t);
+    if (!sorted.length) return [];
+
+    const hourly = [];
+    const hourMs = 3600 * 1000;
+
+    for (let i = 0; i < sorted.length; i++) {
+        const a = sorted[i];
+        const b = sorted[i + 1] || null;
+        // Hours covered: from a.t inclusive up to (b ? b.t : a.t + 3h) exclusive
+        const end = b ? b.t : a.t + 3 * hourMs;
+        for (let t = a.t; t < end; t += hourMs) {
+            let kp;
+            let observed;
+            if (!b || t === a.t) {
+                kp = a.kp;
+                observed = a.observed;
+            } else {
+                const frac = (t - a.t) / (b.t - a.t);
+                kp = a.kp + (b.kp - a.kp) * frac;
+                // Status: inherit from the bin we're in; future bins stay forecast
+                if (a.observed === 'predicted' || (b && b.observed === 'predicted' && t >= b.t)) {
+                    observed = 'predicted';
+                } else if (a.observed === 'observed' && (!b || b.observed === 'observed')) {
+                    observed = 'observed';
+                } else {
+                    observed = a.observed === 'estimated' || (b && b.observed === 'estimated')
+                        ? 'estimated'
+                        : (a.observed || 'estimated');
+                }
+            }
+            hourly.push({
+                time: new Date(t).toISOString(),
+                t,
+                kp: Math.round(kp * 100) / 100,
+                observed,
+                interpolated: t !== a.t,
+                scale: a.scale
+            });
+        }
+    }
+    // Include the final official slot start if loop didn't (when no next bin)
+    const last = sorted[sorted.length - 1];
+    if (!hourly.length || hourly[hourly.length - 1].t < last.t) {
+        hourly.push({
+            time: new Date(last.t).toISOString(),
+            t: last.t,
+            kp: last.kp,
+            observed: last.observed,
+            interpolated: false,
+            scale: last.scale
+        });
+    }
+    return hourly;
+}
+
+/** Interpolated Kp at an arbitrary moment (default: now). */
+function interpolateKpAt(series3h, atMs = Date.now()) {
+    if (!Array.isArray(series3h) || !series3h.length) return null;
+    const sorted = series3h
+        .map(r => ({
+            t: parseNoaaTime(r.time),
+            kp: Number(r.kp),
+            observed: r.observed || null
+        }))
+        .filter(r => !isNaN(r.t) && !isNaN(r.kp))
+        .sort((a, b) => a.t - b.t);
+    if (!sorted.length) return null;
+
+    // Before first / after last
+    if (atMs <= sorted[0].t) {
+        return { kp: sorted[0].kp, observed: sorted[0].observed, t: atMs, interpolated: false };
+    }
+    const last = sorted[sorted.length - 1];
+    if (atMs >= last.t + 3 * 3600 * 1000) {
+        return { kp: last.kp, observed: last.observed, t: atMs, interpolated: false };
+    }
+
+    for (let i = 0; i < sorted.length; i++) {
+        const a = sorted[i];
+        const b = sorted[i + 1];
+        const binEnd = b ? b.t : a.t + 3 * 3600 * 1000;
+        if (atMs >= a.t && atMs < binEnd) {
+            if (!b) {
+                return { kp: a.kp, observed: a.observed, t: atMs, interpolated: false };
+            }
+            const frac = (atMs - a.t) / (b.t - a.t);
+            const kp = a.kp + (b.kp - a.kp) * frac;
+            let observed = a.observed;
+            if (a.observed === 'predicted' || b.observed === 'predicted') observed = 'predicted';
+            else if (a.observed === 'estimated' || b.observed === 'estimated') observed = 'estimated';
+            return {
+                kp: Math.round(kp * 100) / 100,
+                observed,
+                t: atMs,
+                interpolated: frac > 0.01 && frac < 0.99
+            };
+        }
+    }
+    return { kp: last.kp, observed: last.observed, t: atMs, interpolated: false };
+}
+
+/** Current official 3h Kp point (for reference; alerts stay on this). */
 function pickCurrentGeomagPoint(series) {
     if (!Array.isArray(series) || !series.length) return null;
     const nowMs = Date.now();
@@ -427,36 +552,38 @@ function pickCurrentGeomagPoint(series) {
     return currentPt || null;
 }
 
-function geomagBadgeFromKp(kp) {
-    if (kp == null || isNaN(kp)) return null;
-    let badge = '🟢';
-    if (kp >= 5) badge = '🔴';
-    else if (kp >= 4) badge = '🟡';
-    return badge;
-}
-
-/** Honest status label for a Kp point relative to "now". */
+/** Status for hourly/interpolated chart points. */
 function geomagPointStatus(pt) {
     if (!pt) return 'forecast';
-    const t = parseNoaaTime(pt.time);
+    const t = pt.t != null ? pt.t : parseNoaaTime(pt.time);
     const nowMs = Date.now();
-    const isCurrent = t <= nowMs && nowMs < t + 3 * 3600 * 1000;
-    if (pt.observed === 'observed') return isCurrent ? 'now' : 'observed';
-    if (pt.observed === 'estimated') return isCurrent ? 'now' : (t < nowMs ? 'estimated' : 'forecast');
-    if (isCurrent) return 'now';
-    if (t < nowMs) return 'estimated';
+    // "now" = closest hour mark within ±45 min, or exact current interpolate marker
+    if (pt.isNow) return 'now';
+    const isNearNow = Math.abs(t - nowMs) < 45 * 60 * 1000;
+    if (pt.observed === 'predicted') return 'forecast';
+    if (isNearNow) return 'now';
+    if (pt.observed === 'observed' && t < nowMs) return 'observed';
+    if (t < nowMs) return pt.observed === 'estimated' ? 'estimated' : 'observed';
     return 'forecast';
 }
 
-/** Always sync pill from current 3h slot (ignore stale snapshot maxKp). */
+/** Pill = interpolated Kp at this moment (more responsive than flat 3h bin). */
 function syncGeomagBadgeFromSeries() {
     if (!weatherData?.geomagSeries?.length) return;
-    const currentPt = pickCurrentGeomagPoint(weatherData.geomagSeries);
-    if (currentPt) {
+    const at = interpolateKpAt(weatherData.geomagSeries, Date.now());
+    if (at && at.observed !== 'predicted') {
         weatherData.geomag = {
-            maxKp: currentPt.kp,
-            badge: geomagBadgeFromKp(currentPt.kp)
+            maxKp: at.kp,
+            badge: geomagBadgeFromKp(at.kp)
         };
+    } else {
+        const currentPt = pickCurrentGeomagPoint(weatherData.geomagSeries);
+        if (currentPt) {
+            weatherData.geomag = {
+                maxKp: currentPt.kp,
+                badge: geomagBadgeFromKp(currentPt.kp)
+            };
+        }
     }
 }
 
@@ -670,7 +797,7 @@ function updateNowExtras(isToday) {
         aqiPill.style.display = 'none';
     }
 
-    // --- Geomagnetic activity ---
+    // --- Geomagnetic activity (interpolated "now" from 3h slots) ---
     const geo = weatherData.geomag;
     if (geo && geo.maxKp != null) {
         const kp = Number(geo.maxKp);
@@ -679,7 +806,9 @@ function updateNowExtras(isToday) {
         let lvl = 'lvl-good';
         if (kp >= 5) { label = t.geomagStorm; lvl = 'lvl-bad'; }
         else if (kp >= 4) { label = t.geomagUnsettled; lvl = 'lvl-mod'; }
-        document.getElementById('geomag-val').textContent = `Kp ${kp.toFixed(0)} · ${label}`;
+        // One decimal when fractional (hourly interpolate); integer when whole
+        const kpStr = Math.abs(kp - Math.round(kp)) < 0.05 ? String(Math.round(kp)) : kp.toFixed(1);
+        document.getElementById('geomag-val').textContent = `Kp ${kpStr} · ${label}`;
         setLvl(geoPill, lvl);
         geoPill.style.display = 'inline-flex';
         showAny = true;
@@ -814,7 +943,7 @@ function renderChart(dayOffset = 0) {
     const ctx = document.getElementById('weatherChart').getContext('2d');
     if (weatherChart) weatherChart.destroy();
 
-    // ── Geomagnetic Kp chart — same day logic as other tabs ──
+    // ── Geomagnetic Kp chart — hourly interpolation from official 3h slots ──
     if (currentMode === 'geomag') {
         const series = weatherData?.geomagSeries;
         if (!series || !series.length) {
@@ -838,25 +967,46 @@ function renderChart(dayOffset = 0) {
             targetDateStr = (targetDay.valid_date || '').substring(0, 10);
         }
 
-        // Filter Kp points that fall on the selected local calendar day.
-        // NOAA times are UTC (parsed via parseNoaaTime); convert to local date for matching.
-        let points = series.filter(r => {
-            const ms = parseNoaaTime(r.time);
-            if (isNaN(ms)) return false;
-            const d = new Date(ms);
+        // Expand 3h → hourly, then filter by local calendar day
+        const hourlyAll = buildHourlyGeomagSeries(series);
+        let points = hourlyAll.filter(r => {
+            const d = new Date(r.t);
             const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             return localDate === targetDateStr;
         });
 
-        // Fallback: UTC calendar date match
         if (!points.length && targetDateStr) {
-            points = series.filter(r => {
-                const ms = parseNoaaTime(r.time);
-                if (isNaN(ms)) return false;
-                const d = new Date(ms);
+            points = hourlyAll.filter(r => {
+                const d = new Date(r.t);
                 const utcDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
                 return utcDate === targetDateStr;
             });
+        }
+
+        // Mark the hour closest to "now" on today's chart
+        if (dayOffset === 0 && points.length) {
+            const nowMs = Date.now();
+            let bestIdx = -1;
+            let bestDiff = Infinity;
+            points.forEach((p, i) => {
+                const diff = Math.abs(p.t - nowMs);
+                if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+            });
+            if (bestIdx >= 0 && bestDiff < 90 * 60 * 1000) {
+                // Snap "now" marker to interpolated value at exact now (smoother pill match)
+                const at = interpolateKpAt(series, nowMs);
+                if (at) {
+                    points[bestIdx] = {
+                        ...points[bestIdx],
+                        kp: at.kp,
+                        observed: at.observed,
+                        interpolated: at.interpolated,
+                        isNow: true
+                    };
+                } else {
+                    points[bestIdx] = { ...points[bestIdx], isNow: true };
+                }
+            }
         }
 
         if (!points.length) {
@@ -871,9 +1021,8 @@ function renderChart(dayOffset = 0) {
         }
 
         const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
-        // One day → local time on the axis (NOAA UTC → device local)
         const labels = points.map(r => {
-            const d = new Date(parseNoaaTime(r.time));
+            const d = new Date(r.t);
             return d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
         });
         const datasetData = points.map(r => r.kp);
@@ -950,6 +1099,10 @@ function renderChart(dayOffset = 0) {
                                     obs = currentLang === 'uk' ? ' (оцінка)' : ' (est)';
                                 } else {
                                     obs = currentLang === 'uk' ? ' (прогноз)' : ' (fcst)';
+                                }
+                                // Interpolated hours between official 3h slots
+                                if (pt?.interpolated && st !== 'now') {
+                                    obs += currentLang === 'uk' ? ' ≈' : ' ≈';
                                 }
                                 return ` Kp ${y.toFixed(2)}${tag}${obs}`;
                             }
