@@ -412,7 +412,9 @@ module.exports = async (req, res) => {
                 // - COMPARE only FUTURE hours (from localHour) — ignore past-hour model updates (no spam)
                 // - ALERT TEXT shows FULL calendar day schedule (0–23) when we do alert
                 // - No baseline for today → set baseline silently, never treat as "was 0.0 mm"
-                // - "Canceled" only if remaining (future) planned rain drops to 0
+                // - "Canceled" only if PAST hours today had no rain AND remaining (future)
+                //   planned rain drops to 0. If past already had rain and only the remainder
+                //   was cleared → silent: no alert, no baseline rewrite (anti-spam / stable asOf).
                 // - Significant amount change: future total increased by ≥ 1.5 mm
                 // - Significant timing change: future rain window shifted by ≥ 2 h OR duration +≥ 2 h
                 // - When updating baseline, MERGE today's hours into existing array (keep other days)
@@ -601,8 +603,23 @@ module.exports = async (req, res) => {
                             const amountIncrease = newS.total - oldS.total;
                             const significantAmountUp = amountIncrease >= 1.5;
 
-                            // Canceled when previous FUTURE rainy window is gone
-                            const fullyCanceled = (oldS.total > 0 || oldS.duration > 0) && newS.total === 0 && newS.duration === 0;
+                            // Past hours today (0 .. localHour-1) in baseline — rain already "started"
+                            let pastHadRain = false;
+                            for (let h = 0; h < localHour; h++) {
+                                const entry = oldByHour[h] || { precip: 0, prob: 0 };
+                                if (isRainyHour(entry)) {
+                                    pastHadRain = true;
+                                    break;
+                                }
+                            }
+
+                            // Future remainder cleared?
+                            const futureWasPlanned = (oldS.total > 0 || oldS.duration > 0);
+                            const futureNowClear = newS.total === 0 && newS.duration === 0;
+                            // "Canceled" only if the day was still dry so far AND remaining rain vanished.
+                            // If past already had rain → do not alert and do not rewrite baseline
+                            // (avoids appear/cancel spam when the model wiggles the evening hours).
+                            const fullyCanceled = futureWasPlanned && futureNowClear && !pastHadRain;
 
                             let significantShift = false;
                             let significantLonger = false;

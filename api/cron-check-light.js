@@ -410,6 +410,10 @@ module.exports = async (req, res) => {
                 // --- LOGIC D: Smart Precipitation Check ---
                 // Compare FUTURE hours only (no spam from past-hour model updates);
                 // alert text shows FULL calendar day schedule when we do alert.
+                // "Canceled" only if: (1) PAST hours today had no rain in baseline,
+                //   (2) FUTURE still had planned rain, (3) FUTURE is now clear.
+                // If past already had rain and only the remainder was cleared →
+                //   silent: no alert, no baseline rewrite (anti-spam / stable asOf).
                 try {
                     const allTimes = om.hourly?.time || [];
                     const allPrecip = om.hourly?.precipitation || [];
@@ -557,8 +561,24 @@ module.exports = async (req, res) => {
                     } else {
                         const amountIncrease = newS.total - oldS.total;
                         const significantAmountUp = amountIncrease >= 1.5;
-                        // Canceled when previous FUTURE rainy window is gone
-                        const fullyCanceled = (oldS.total > 0 || oldS.duration > 0) && newS.total === 0 && newS.duration === 0;
+
+                        // Past hours today (0 .. localHour-1) in baseline — rain already "started"
+                        let pastHadRain = false;
+                        for (let h = 0; h < localHour; h++) {
+                            const entry = oldByHour[h] || { precip: 0, prob: 0 };
+                            if (isRainyHour(entry)) {
+                                pastHadRain = true;
+                                break;
+                            }
+                        }
+
+                        // Future remainder cleared?
+                        const futureWasPlanned = (oldS.total > 0 || oldS.duration > 0);
+                        const futureNowClear = newS.total === 0 && newS.duration === 0;
+                        // "Canceled" only if the day was still dry so far AND remaining rain vanished.
+                        // If past already had rain → do not alert and do not rewrite baseline
+                        // (avoids appear/cancel spam when the model wiggles the evening hours).
+                        const fullyCanceled = futureWasPlanned && futureNowClear && !pastHadRain;
 
                         let significantShift = false;
                         let significantLonger = false;
