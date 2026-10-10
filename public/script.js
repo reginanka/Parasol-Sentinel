@@ -22,6 +22,7 @@ const i18n = {
         tabWind: "Вітер",
         tabGusts: "Пориви",
         tabPress: "Тиск",
+        tabGeomag: "Магнітка",
         uvIndex: "UV-індекс",
         windGusts: "Вітер",
         humidity: "Вологість",
@@ -64,6 +65,8 @@ const i18n = {
         chartPrecip: "Опади (мм)",
         chartProb: "Шанс опадів (%)",
         chartPress: "Тиск (мм рт.ст.)",
+        chartGeomag: "Kp-індекс",
+        chartGeomagNoData: "Дані магнітного поля недоступні",
         intelMonitoring: "Інтелектуальний моніторинг",
         dataSources: "Weather data: Weatherbit, Open-Meteo · Air quality: WAQI (aqicn.org) · Geomagnetic: NOAA SWPC",
         sentinel: "Вартовий",
@@ -102,6 +105,7 @@ const i18n = {
         tabWind: "Wind",
         tabGusts: "Gusts",
         tabPress: "Pres",
+        tabGeomag: "Geomag",
         uvIndex: "UV Index",
         windGusts: "Wind",
         humidity: "Humidity",
@@ -144,6 +148,8 @@ const i18n = {
         chartPrecip: "Precip (mm)",
         chartProb: "Precip Chance (%)",
         chartPress: "Pressure (mb)",
+        chartGeomag: "Kp Index",
+        chartGeomagNoData: "Geomagnetic data unavailable",
         intelMonitoring: "Intelligence Monitoring",
         dataSources: "Weather data: Weatherbit, Open-Meteo · Air quality: WAQI (aqicn.org) · Geomagnetic: NOAA SWPC",
         sentinel: "Sentinel",
@@ -358,6 +364,8 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 localStorage.setItem('units', JSON.stringify(currentUnits));
             }
             accessType.textContent = i18n[currentLang][currentStatusKey];
+            // Ensure full Kp time series for the Mag tab (API may only send maxKp)
+            await ensureGeomagSeries();
             prunePastDays();
             updateUI(findTodayIndex());
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
@@ -386,6 +394,45 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
     }
 }
 
+/** Load full NOAA Kp series (observed + forecast) for the Mag chart if missing. */
+async function ensureGeomagSeries() {
+    if (!weatherData) return;
+    if (Array.isArray(weatherData.geomagSeries) && weatherData.geomagSeries.length > 0) return;
+    try {
+        const noaaRes = await fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json');
+        if (!noaaRes.ok) return;
+        const noaaData = await noaaRes.json();
+        if (!Array.isArray(noaaData) || noaaData.length === 0) return;
+        const series = noaaData
+            .map(r => ({
+                time: r.time_tag,
+                kp: parseFloat(r.kp != null ? r.kp : r.Kp),
+                observed: r.observed || null,
+                scale: r.noaa_scale || null
+            }))
+            .filter(r => !isNaN(r.kp));
+        weatherData.geomagSeries = series;
+        if (!weatherData.geomag || weatherData.geomag.maxKp == null) {
+            const nowMs = Date.now();
+            const vals = series
+                .filter(r => {
+                    const t = new Date(r.time).getTime();
+                    return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
+                })
+                .map(r => r.kp);
+            const maxKp = vals.length ? Math.max(...vals) : null;
+            if (maxKp != null) {
+                let badge = '🟢';
+                if (maxKp >= 5) badge = '🔴';
+                else if (maxKp >= 4) badge = '🟡';
+                weatherData.geomag = { maxKp, badge };
+            }
+        }
+    } catch (e) {
+        console.warn('ensureGeomagSeries failed:', e.message);
+    }
+}
+
 async function fetchOpenMeteo(lat, lon, name) {
     try {
         const omResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,visibility_max,wind_direction_10m_dominant&timezone=auto`);
@@ -407,14 +454,22 @@ async function fetchOpenMeteo(lat, lon, name) {
             if (noaaRes.ok) {
                 const noaaData = await noaaRes.json();
                 if (Array.isArray(noaaData) && noaaData.length > 0) {
+                    const series = noaaData
+                        .map(r => ({
+                            time: r.time_tag,
+                            kp: parseFloat(r.kp != null ? r.kp : r.Kp),
+                            observed: r.observed || null,
+                            scale: r.noaa_scale || null
+                        }))
+                        .filter(r => !isNaN(r.kp));
+                    weatherData.geomagSeries = series;
                     const nowMs = Date.now();
-                    const vals = noaaData
+                    const vals = series
                         .filter(r => {
-                            const t = new Date(r.time_tag).getTime();
+                            const t = new Date(r.time).getTime();
                             return t >= nowMs - 3 * 3600 * 1000 && t <= nowMs + 24 * 3600 * 1000;
                         })
-                        .map(r => parseFloat(r.kp))
-                        .filter(v => !isNaN(v));
+                        .map(r => r.kp);
                     const maxKp = vals.length ? Math.max(...vals) : null;
                     if (maxKp != null) {
                         let badge = '🟢';
@@ -721,6 +776,122 @@ function getPremiumIcon(code) {
 function renderChart(dayOffset = 0) {
     const ctx = document.getElementById('weatherChart').getContext('2d');
     if (weatherChart) weatherChart.destroy();
+
+    // ── Geomagnetic Kp chart (global, independent of city / day) ──
+    if (currentMode === 'geomag') {
+        const series = weatherData?.geomagSeries;
+        if (!series || !series.length) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+            ctx.textAlign = 'center';
+            ctx.font = "14px 'Oswald', system-ui, sans-serif";
+            ctx.fillText(
+                i18n[currentLang].chartGeomagNoData || 'Geomagnetic data unavailable',
+                ctx.canvas.width / 2, ctx.canvas.height / 2
+            );
+            return;
+        }
+        // Show roughly last 2 days observed + ~3 days forecast (~40 points max)
+        const nowMs = Date.now();
+        const windowed = series.filter(r => {
+            const t = new Date(r.time).getTime();
+            return t >= nowMs - 48 * 3600 * 1000 && t <= nowMs + 72 * 3600 * 1000;
+        });
+        const points = windowed.length ? windowed : series.slice(-32);
+        const loc = currentLang === 'uk' ? 'uk-UA' : 'en-US';
+        const labels = points.map(r => {
+            const d = new Date(r.time);
+            return d.toLocaleString(loc, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        });
+        const datasetData = points.map(r => r.kp);
+        // Color by peak intensity in the visible window
+        const peak = Math.max(...datasetData);
+        let color = '#00F260'; // calm
+        if (peak >= 5) color = '#ef4444';
+        else if (peak >= 4) color = '#fbbf24';
+        else if (peak >= 3) color = '#a3e635';
+
+        weatherChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: i18n[currentLang].chartGeomag,
+                    data: datasetData,
+                    borderColor: color,
+                    backgroundColor: `${color}1A`,
+                    borderWidth: 3,
+                    tension: 0.35,
+                    fill: true,
+                    pointRadius: 3,
+                    pointHitRadius: 16,
+                    pointHoverRadius: 6,
+                    pointBackgroundColor: datasetData.map(kp => {
+                        if (kp >= 5) return '#ef4444';
+                        if (kp >= 4) return '#fbbf24';
+                        return '#00F260';
+                    }),
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        enabled: true,
+                        backgroundColor: 'rgba(15, 32, 39, 0.95)',
+                        titleColor: '#fff',
+                        bodyColor: color,
+                        bodyFont: { size: 14, weight: 'bold' },
+                        padding: 12,
+                        displayColors: false,
+                        borderColor: 'rgba(255, 255, 255, 0.1)',
+                        borderWidth: 1,
+                        cornerRadius: 10,
+                        callbacks: {
+                            label: (context) => {
+                                const y = context.parsed.y;
+                                const pt = points[context.dataIndex];
+                                let tag = '';
+                                if (y >= 5) tag = ` · G${Math.min(5, Math.round(y) - 4)}`;
+                                else if (y >= 4) tag = currentLang === 'uk' ? ' · Збурення' : ' · Unsettled';
+                                const obs = pt?.observed === 'observed'
+                                    ? (currentLang === 'uk' ? ' (факт)' : ' (obs)')
+                                    : (currentLang === 'uk' ? ' (прогноз)' : ' (fcst)');
+                                return ` Kp ${y.toFixed(2)}${tag}${obs}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        min: 0,
+                        max: 9,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: {
+                            color: 'rgba(255, 255, 255, 0.4)',
+                            font: { size: 10 },
+                            stepSize: 1
+                        }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: {
+                            color: 'rgba(255, 255, 255, 0.4)',
+                            font: { size: 9 },
+                            maxRotation: 45,
+                            autoSkip: true,
+                            maxTicksLimit: 10
+                        }
+                    }
+                }
+            }
+        });
+        return;
+    }
 
     let dataSlice = weatherData.hourly;
 
