@@ -325,7 +325,7 @@ module.exports = async (req, res) => {
                                 minDelta: fmtDelta(minShift),
                                 maxDelta: fmtDelta(maxShift)
                             });
-                            alerts.push({ userId: user.telegramId, html, lang });
+                            alerts.push({ userId: user.telegramId, html, lang, type: 'weather' });
                         }
                         alertTriggered = true;
 
@@ -405,7 +405,7 @@ module.exports = async (req, res) => {
                                 expected: fmtTemp(expectedBase),
                                 dir: alertsDict[lang][direction]
                             });
-                            alerts.push({ userId: user.telegramId, html, lang });
+                            alerts.push({ userId: user.telegramId, html, lang, type: 'weather' });
                         }
                         alertTriggered = true;
                     }
@@ -635,7 +635,7 @@ module.exports = async (req, res) => {
                                         newBlocks: precipKind === 'canceled' ? '—' : (fmtBlocks(newSFull) || '—'),
                                         newTotal: precipKind === 'canceled' ? 0 : newSFull.total
                                     });
-                                    alerts.push({ userId: user.telegramId, html, lang });
+                                    alerts.push({ userId: user.telegramId, html, lang, type: 'weather' });
                                 }
                                 alertTriggered = true;
                             }
@@ -832,9 +832,10 @@ module.exports = async (req, res) => {
                 // --- SEND ALERTS (Rich Messages) ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {
-                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false };
+                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false, hasWeather: false };
                     if (a.html) uniqueAlerts[a.userId].parts.push(a.html);
                     if (a.type === 'geomag') uniqueAlerts[a.userId].hasGeomag = true;
+                    if (a.type === 'weather') uniqueAlerts[a.userId].hasWeather = true;
                 }
 
                 for (const userId of Object.keys(uniqueAlerts)) {
@@ -845,6 +846,18 @@ module.exports = async (req, res) => {
                     const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
                     const geomagBtnText = userLang === 'uk' ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast';
                     const rows = [];
+                    // Weather forecast button for temp / precip alerts — always as a NEW message
+                    if (uniqueAlerts[userId].hasWeather) {
+                        let shortDate = todayStr;
+                        try {
+                            const [y, m, d] = todayStr.split('-');
+                            shortDate = `${d}.${m}`;
+                        } catch {}
+                        const weatherBtnText = userLang === 'uk'
+                            ? `🌤 Погод.прогноз на ${shortDate}`
+                            : `🌤 Weather forecast for ${shortDate}`;
+                        rows.push([{ text: weatherBtnText, callback_data: `forecast_hourly|${todayStr}` }]);
+                    }
                     if (uniqueAlerts[userId].hasGeomag) {
                         rows.push([{ text: geomagBtnText, callback_data: 'geomag_fc' }]);
                     }

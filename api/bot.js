@@ -1516,11 +1516,11 @@ bot.on("callback_query:data", async (ctx) => {
             const html = `<h1>${dict[lang].alertSettingsTitle}</h1>\n${dict[lang].alertSettingsDesc}`;
             const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers, mode);
 
-            // From an alert message: send a NEW message so the alert stays in history.
-            // Explicit flag from cron (alert_settings|new), or detect by message content
-            // (covers alerts already sent before deploy with plain alert_settings).
-            // From settings menus: edit in place.
-            const msgText = ctx.callbackQuery.message?.text || '';
+            // From an alert message: always send a NEW message so the alert stays in history.
+            // Explicit flag from cron (alert_settings|new), or detect by message content /
+            // inline keyboard (covers alerts already sent before deploy, and rich messages
+            // where message.text is empty). From settings menus: edit in place.
+            const msgText = ctx.callbackQuery.message?.text || ctx.callbackQuery.message?.caption || '';
             const looksLikeSettingsMenu =
                 msgText.includes('Сповіщення про зміни') ||
                 msgText.includes('Change Alerts') ||
@@ -1528,7 +1528,14 @@ bot.on("callback_query:data", async (ctx) => {
                 msgText.includes('Settings') ||
                 msgText.includes('Вечірній прогноз') ||
                 msgText.includes('Evening forecast');
-            const openAsNew = data[1] === 'new' || !looksLikeSettingsMenu;
+            // Keyboard coming from an alert (forecast / geomag / settings|new)
+            const kb = ctx.callbackQuery.message?.reply_markup?.inline_keyboard || [];
+            const flatCb = kb.flat().map(b => b?.callback_data || '').join(' ');
+            const looksLikeAlertKeyboard =
+                flatCb.includes('forecast_hourly') ||
+                flatCb.includes('geomag_fc') ||
+                flatCb.includes('alert_settings|new');
+            const openAsNew = data[1] === 'new' || looksLikeAlertKeyboard || !looksLikeSettingsMenu;
 
             if (openAsNew) {
                 try {
