@@ -142,8 +142,8 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
   <li><b>Без сповіщ. магнітн. бур</b> — сповіщення про бурі приходити не будуть</li>
 </ul>
 </details>`,
-        alert_temperature: "Температура (зміна прогнозу + аномалія)",
-        alert_precip: "Опади (з’явилися / скасували)",
+        alert_temperature: "Температура",
+        alert_precip: "Опади",
         alert_magneticStorm: "Магнітні бурі",
                 geomagMode_active: "🧲 Всі зміни магн.бур",
         geomagMode_quiet: "🧲 Тихий (лише піки магн.)",
@@ -279,8 +279,8 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
   <li><b>No magnetic storm alerts</b> — storm notifications will not be sent</li>
 </ul>
 </details>`,
-        alert_temperature: "Temperature (forecast + anomaly)",
-        alert_precip: "Precipitation (appeared / canceled)",
+        alert_temperature: "Temperature",
+        alert_precip: "Precipitation",
         alert_magneticStorm: "Magnetic storms",
                 geomagMode_active: "🧲 All storm changes",
         geomagMode_quiet: "🧲 Quiet (peaks only)",
@@ -325,10 +325,14 @@ function buildAlertTriggersKeyboard(lang, triggers = {}, geomagMode = 'quiet') {
     return {
         inline_keyboard: [
             [masterBtn],
-            [{ text: `${getCheck('temperature')}${d.alert_temperature}`, callback_data: 'alert|toggle|temperature' }],
-            [{ text: `${getCheck('precip')}${d.alert_precip}`, callback_data: 'alert|toggle|precip' }],
-            [{ text: `${getCheck('airQuality')}${d.alert_airQuality}`, callback_data: 'alert|toggle|airQuality' }],
-            [{ text: `${modeMark('active')}${d.geomagMode_active}`, callback_data: 'geomag_mode|active' }],
+            [
+                { text: `${getCheck('temperature')}${d.alert_temperature}`, callback_data: 'alert|toggle|temperature' },
+                { text: `${getCheck('precip')}${d.alert_precip}`, callback_data: 'alert|toggle|precip' }
+            ],
+            [
+                { text: `${getCheck('airQuality')}${d.alert_airQuality}`, callback_data: 'alert|toggle|airQuality' },
+                { text: `${modeMark('active')}${d.geomagMode_active}`, callback_data: 'geomag_mode|active' }
+            ],
             [{ text: `${modeMark('quiet')}${d.geomagMode_quiet}`, callback_data: 'geomag_mode|quiet' }],
             [{ text: `${modeMark('off')}${d.geomagMode_off}`, callback_data: 'geomag_mode|off' }],
             [{ text: d.settingsEveningForecast, callback_data: 'forecast_menu' }],
