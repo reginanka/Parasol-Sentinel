@@ -373,15 +373,35 @@ module.exports = async (req, res) => {
         }
 
         // ========== 3. Smart highlights (на що звернути увагу) ==========
+        // Українські дні у знахідному відмінку після прийменника «у»
+        // понеділок/вівторок/четвер — не змінюються; середа→середу, п'ятниця→п'ятницю, субота→суботу, неділя→неділю
+        const dayAccusativeUk = {
+            'понеділок': 'понеділок',
+            'вівторок': 'вівторок',
+            'середа': 'середу',
+            'четвер': 'четвер',
+            "п'ятниця": "п'ятницю",
+            'субота': 'суботу',
+            'неділя': 'неділю'
+        };
+
+        const getDayForPreposition = (dateObj) => {
+            if (!isUk) {
+                return dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+            }
+            // locale може повернути з великої літери
+            const nominative = dateObj.toLocaleDateString('uk-UA', { weekday: 'long' }).toLowerCase();
+            return dayAccusativeUk[nominative] || nominative;
+        };
+
         const highlights = [];
         const highPressureDays = [];
-        let highPressureStart = null;
+        let highPressureStart = null; // accusative form
         let highPressureEnd = null;
 
-        userForecast.forEach((day, idx) => {
+        userForecast.forEach((day) => {
             const dateObj = new Date(day.valid_date || day.datetime);
-            const dayName = dateObj.toLocaleDateString(isUk ? 'uk-UA' : 'en-US', { weekday: 'long' });
-            const dayNameShort = dateObj.toLocaleDateString(isUk ? 'uk-UA' : 'en-US', { weekday: 'short' });
+            const dayName = getDayForPreposition(dateObj); // уже у потрібному відмінку
 
             // Дощ
             const precip = Number(day.precip) || 0;
@@ -435,9 +455,11 @@ module.exports = async (req, res) => {
             const level = getGeomagLevel(kp);
             if (level && kp >= 5) {
                 const label = isUk ? level.labelUk : level.labelEn;
+                // label часто починається з великої («Слабка буря…») — робимо маленьку для середини речення
+                const labelMid = label.charAt(0).toLowerCase() + label.slice(1);
                 highlights.push(isUk
-                    ? `у ${dayName} ${label}`
-                    : `on ${dayName} ${label}`);
+                    ? `у ${dayName} ${labelMid}`
+                    : `on ${dayName} ${labelMid}`);
             }
 
             // Заморозки по ґрунту (для кожного дня)
@@ -490,34 +512,37 @@ module.exports = async (req, res) => {
             : 'Parasol☔️ highlights what to watch. Swipe sideways to see the full forecast';
 
         // ========== 4. Таблиця ==========
-        // Заголовки днів
+        // Заголовки днів — коротший формат + <br>, щоб стовпці були вужчі
         const dayHeaders = userForecast.map((day) => {
             const dateObj = new Date(day.valid_date || day.datetime);
-            const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, {
-                weekday: 'short', day: 'numeric', month: 'short'
-            });
-            const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
-            return `<th width="125" align="center" valign="middle">📅 ${capDay}</th>`;
+            const weekday = dateObj.toLocaleDateString(fDict[lang].loc, { weekday: 'short' });
+            const dayNum = dateObj.toLocaleDateString(fDict[lang].loc, { day: 'numeric', month: 'short' });
+            const capWeek = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+            return `<th width="90" align="center" valign="middle">📅 ${capWeek}<br>${dayNum}</th>`;
         }).join('');
 
-        // Рядки таблиці за метриками
+        // Рядки таблиці за метриками (з <br> у довгих написах і значеннях)
         const rows = [];
 
-        // Стан неба
+        // Стан неба — розбиваємо довгі описи по пробілу/дефісу якщо дуже довгі
         if (metrics.includes('condition')) {
             const cells = userForecast.map((day) => {
                 const desc = getWeatherDesc(day.weather.code, lang) || '';
-                // Прибираємо markdown ** якщо є
                 const clean = desc.replace(/\*\*/g, '');
-                return `<td align="center" valign="middle">${clean}</td>`;
+                // Якщо є пробіл — ставимо <br> після першого слова (іконка + коротке слово)
+                const parts = clean.split(/\s+/);
+                const cell = parts.length > 2
+                    ? `${parts[0]} ${parts[1]}<br>${parts.slice(2).join(' ')}`
+                    : clean;
+                return `<td align="center" valign="middle">${cell}</td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>${isUk ? 'Стан неба' : 'Sky'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>${isUk ? 'Стан<br>неба' : 'Sky'}</b></td>${cells}</tr>`);
         }
 
         // Температура
         if (metrics.includes('temp')) {
             const cells = userForecast.map((day) => {
-                return `<td align="center" valign="middle">${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}</td>`;
+                return `<td align="center" valign="middle">${formatTemp(day.min_temp, tempUnit)} ...<br>${formatTemp(day.max_temp, tempUnit)}</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>🌡 ${isUk ? 'Темп' : 'Temp'}</b></td>${cells}</tr>`);
         }
@@ -541,7 +566,7 @@ module.exports = async (req, res) => {
                 };
                 return `<td align="center" valign="middle">${fmt(mn)} ...<br>${fmt(mx)}</td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>🌱 ${isUk ? 'Ґрунт 0 см' : 'Soil 0 cm'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>🌱 ${isUk ? 'Ґрунт<br>0 см' : 'Soil<br>0 cm'}</b></td>${cells}</tr>`);
         }
 
         // Ґрунт 6 см
@@ -563,7 +588,7 @@ module.exports = async (req, res) => {
                 };
                 return `<td align="center" valign="middle">${fmt(mn)} ...<br>${fmt(mx)}</td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>🌱 ${isUk ? 'Ґрунт 6 см' : 'Soil 6 cm'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>🌱 ${isUk ? 'Ґрунт<br>6 см' : 'Soil<br>6 cm'}</b></td>${cells}</tr>`);
         }
 
         // Вірогідність опадів
@@ -572,13 +597,20 @@ module.exports = async (req, res) => {
                 const precip = (Number(day.precip) || 0).toFixed(1);
                 return `<td align="center" valign="middle">${day.pop}%<br><small>(${precip} мм)</small></td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>💧 ${isUk ? 'Вірог. опадів' : 'Precip'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>💧 ${isUk ? 'Вірог.<br>опадів' : 'Precip'}</b></td>${cells}</tr>`);
         }
 
-        // Вітер
+        // Вітер — напрямок + швидкість окремими рядками
         if (metrics.includes('wind')) {
             const cells = userForecast.map((day) => {
-                return `<td align="center" valign="middle">${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}</td>`;
+                const windStr = formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang);
+                // formatWind повертає "Напрямок, N м/с <small>(пориви до X)</small>"
+                // Розбиваємо по комі для вужчого стовпця
+                const parts = windStr.split(', ');
+                if (parts.length >= 2) {
+                    return `<td align="center" valign="middle">${parts[0]},<br>${parts.slice(1).join(', ')}</td>`;
+                }
+                return `<td align="center" valign="middle">${windStr}</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>💨 ${isUk ? 'Вітер' : 'Wind'}</b></td>${cells}</tr>`);
         }
@@ -586,7 +618,13 @@ module.exports = async (req, res) => {
         // Тиск
         if (metrics.includes('pressure')) {
             const cells = userForecast.map((day) => {
-                return `<td align="center" valign="middle">${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}</td>`;
+                const pressStr = formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang);
+                // Розбиваємо: значення / (slp) / індикатор
+                const m = pressStr.match(/^(.+?)\s+(\(slp:.+?\))\s+(.+)$/);
+                if (m) {
+                    return `<td align="center" valign="middle">${m[1]}<br>${m[2]}<br>${m[3]}</td>`;
+                }
+                return `<td align="center" valign="middle">${pressStr}</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>🧭 ${isUk ? 'Тиск' : 'Pressure'}</b></td>${cells}</tr>`);
         }
@@ -596,7 +634,7 @@ module.exports = async (req, res) => {
             const cells = userForecast.map((day) => {
                 return `<td align="center" valign="middle">${formatTemp(day.dewpt, tempUnit)}</td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>🌡 ${isUk ? 'Точка роси' : 'Dew Point'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>🌡 ${isUk ? 'Точка<br>роси' : 'Dew<br>Point'}</b></td>${cells}</tr>`);
         }
 
         // УФ
@@ -604,7 +642,7 @@ module.exports = async (req, res) => {
             const cells = userForecast.map((day) => {
                 return `<td align="center" valign="middle">${formatUV(day.uv)}</td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>☀️ ${isUk ? 'УФ-індекс' : 'UV Index'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>☀️ ${isUk ? 'УФ-<br>індекс' : 'UV<br>Index'}</b></td>${cells}</tr>`);
         }
 
         // Видимість
@@ -619,7 +657,13 @@ module.exports = async (req, res) => {
         if (metrics.includes('moon')) {
             const cells = userForecast.map((day) => {
                 const dObj = new Date(day.valid_date || day.datetime);
-                return `<td align="center" valign="middle">${formatMoon(dObj, lang)}</td>`;
+                const moon = formatMoon(dObj, lang);
+                // "🌑 Новий місяць" → іконка + <br> + назва
+                const m = moon.match(/^(\S+)\s+(.+)$/);
+                if (m) {
+                    return `<td align="center" valign="middle">${m[1]}<br>${m[2]}</td>`;
+                }
+                return `<td align="center" valign="middle">${moon}</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>${isUk ? 'Місяць' : 'Moon'}</b></td>${cells}</tr>`);
         }
@@ -646,18 +690,19 @@ module.exports = async (req, res) => {
                 const level = getGeomagLevel(kp);
                 if (level) {
                     const label = isUk ? level.labelUk : level.labelEn;
-                    return `<td align="center" valign="middle">${level.badge} ${label}</td>`;
+                    // "🟢 Спокійно" або "🟡 Слабка буря G1" → badge + <br> + текст
+                    return `<td align="center" valign="middle">${level.badge}<br>${label}</td>`;
                 }
                 return `<td align="center" valign="middle">—</td>`;
             }).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн. бурі' : 'Geomag'}</b></td>${cells}</tr>`);
+            rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн.<br>бурі' : 'Geomag'}</b></td>${cells}</tr>`);
         }
 
         const tableHtml = `
 <table bordered striped>
   <thead>
     <tr>
-      <th width="110" align="left" valign="middle">${isUk ? 'Показник' : 'Metric'}</th>
+      <th width="80" align="left" valign="middle">${isUk ? 'Показник' : 'Metric'}</th>
       ${dayHeaders}
     </tr>
   </thead>
