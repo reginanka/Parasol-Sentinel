@@ -113,31 +113,35 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         alertSettingsTitle: "🔔 Сповіщення про зміни",
         alertSettingsDesc: `<p>Тут ви вмикаєте або вимикаєте лише <b>проактивні сповіщення</b> про різкі зміни протягом дня. Вечірній прогноз налаштовується окремо.</p>
 
-<h2>🌡 Температура</h2>
+<details><summary>🌡 Температура</summary>
 <ul>
   <li>Зміна прогнозу на ≥ 4 °C</li>
   <li>Аномалія зараз (відхилення &gt; 5 °C від очікуваного діапазону)</li>
 </ul>
+</details>
 
-<h2>🌧 Опади</h2>
+<details><summary>🌧 Опади</summary>
 <ul>
   <li>Несподівані опади або їх скасування</li>
   <li>Значно більше опадів (≥ 1.5 мм)</li>
   <li>Триваліший дощ або зміщення в часі</li>
 </ul>
+</details>
 
-<h2>💨 Якість повітря</h2>
+<details><summary>💨 Якість повітря</summary>
 <ul>
   <li>Погіршення AQI (&gt; 50 / 100 / 150) або різке зростання PM2.5 / PM10</li>
   <li>Повернення повітря в безпечну зону</li>
 </ul>
+</details>
 
-<h2>🧲 Магнітні бурі</h2>
+<details><summary>🧲 Магнітні бурі</summary>
 <ul>
   <li><b>Всі зміни магн.бур</b> — активний режим для метеочутливих людей. Бот буде надсилати повідомлення про усі підвищення і зниження рівня (Kp)</li>
   <li><b>Тихий</b> — лише якщо буря сильніша, ніж планувалась (у вечірньому прогнозі)</li>
   <li><b>Без сповіщ. магнітн. бур</b> — сповіщення про бурі приходити не будуть</li>
-</ul>`,
+</ul>
+</details>`,
         alert_temperature: "Температура (зміна прогнозу + аномалія)",
         alert_precip: "Опади (з’явилися / скасували)",
         alert_magneticStorm: "Магнітні бурі",
@@ -246,31 +250,35 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
         alertSettingsTitle: "🔔 Change Alerts",
         alertSettingsDesc: `<p>Here you enable or disable only <b>proactive alerts</b> about sudden changes during the day. The evening forecast is configured separately.</p>
 
-<h2>🌡 Temperature</h2>
+<details><summary>🌡 Temperature</summary>
 <ul>
   <li>Forecast change of ≥ 4 °C</li>
   <li>Current anomaly (deviation &gt; 5 °C from the expected range)</li>
 </ul>
+</details>
 
-<h2>🌧 Precipitation</h2>
+<details><summary>🌧 Precipitation</summary>
 <ul>
   <li>Unexpected precipitation or its cancellation</li>
   <li>Significantly more precipitation (≥ 1.5 mm)</li>
   <li>Longer rain or shift in timing</li>
 </ul>
+</details>
 
-<h2>💨 Air Quality</h2>
+<details><summary>💨 Air Quality</summary>
 <ul>
   <li>AQI deterioration (&gt; 50 / 100 / 150) or sharp rise in PM2.5 / PM10</li>
   <li>Air quality returning to the safe zone</li>
 </ul>
+</details>
 
-<h2>🧲 Magnetic Storms</h2>
+<details><summary>🧲 Magnetic Storms</summary>
 <ul>
   <li><b>All storm changes</b> — active mode for weather-sensitive people. The bot will send messages about all rises and drops in the Kp level</li>
   <li><b>Quiet</b> — only if the storm is stronger than planned (in the evening forecast)</li>
   <li><b>No magnetic storm alerts</b> — storm notifications will not be sent</li>
-</ul>`,
+</ul>
+</details>`,
         alert_temperature: "Temperature (forecast + anomaly)",
         alert_precip: "Precipitation (appeared / canceled)",
         alert_magneticStorm: "Magnetic storms",
