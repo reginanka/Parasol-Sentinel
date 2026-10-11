@@ -1918,20 +1918,24 @@ bot.on("callback_query:data", async (ctx) => {
         const text = dict[lang].forecastSettingsTitle;
         const markup = buildForecastSettingsKeyboard(lang, user.forecastSettings, user.eveningForecastEnabled !== false);
 
-        // If the button was clicked from a forecast message (identified by icons/keywords), 
-        // we send a NEW message so the forecast remains visible.
-        // Otherwise (from settings menu), we edit the current message.
-        const msgText = ctx.callbackQuery.message?.text || '';
-        const isFromForecast = msgText.includes('🌆') || 
-                               msgText.includes('🧪') || 
-                               msgText.includes('Прогноз') || 
-                               msgText.includes('прогноз') || 
-                               msgText.includes('forecast') || 
-                               msgText.includes('Forecast') || 
-                               msgText.includes('Якість повітря') || 
+        // If the button was clicked from a forecast message, send a NEW message
+        // so the forecast (especially Rich Message) remains visible.
+        // Rich Messages have no .text — they expose .rich_message instead.
+        const cbMsg = ctx.callbackQuery.message;
+        const msgText = cbMsg?.text || '';
+        const isRichMessage = !!(cbMsg?.rich_message);
+        const isFromForecast = isRichMessage ||
+                               msgText.includes('🌆') ||
+                               msgText.includes('🧪') ||
+                               msgText.includes('Прогноз') ||
+                               msgText.includes('прогноз') ||
+                               msgText.includes('forecast') ||
+                               msgText.includes('Forecast') ||
+                               msgText.includes('Якість повітря') ||
                                msgText.includes('Air Quality');
 
         if (isFromForecast) {
+            // Always a separate message — never overwrite the forecast
             await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: markup });
         } else {
             try {
