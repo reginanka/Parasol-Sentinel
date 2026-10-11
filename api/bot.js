@@ -1829,22 +1829,22 @@ bot.on("callback_query:data", async (ctx) => {
                 daySummary(dayKeys[2], day3Label)
             ].filter(Boolean);
 
-            // Table header
+            // Table header (native Rich Message table)
             const headers = dayKeys.map(k => weekdayShort(k));
-            let table = `<table>\n  <tr>\n    <th>${isUk ? 'Час' : 'Time'}</th>\n`;
+            let table = `<table bordered striped compact><tr><th>${isUk ? 'Час' : 'Time'}</th>`;
             for (const h of headers) {
-                table += `    <th>${h}</th>\n`;
+                table += `<th>${h}</th>`;
             }
-            table += `  </tr>\n`;
+            table += `</tr>`;
 
             const hours = [0, 3, 6, 9, 12, 15, 18, 21];
             for (const h of hours) {
-                table += `  <tr>\n    <td><b>${String(h).padStart(2, '0')}:00</b></td>\n`;
+                table += `<tr><td><b>${String(h).padStart(2, '0')}:00</b></td>`;
                 for (const dk of dayKeys) {
                     const slot = (slots[dk] || {})[h];
-                    table += `    <td>${cellHtml(slot)}</td>\n`;
+                    table += `<td align="center">${cellHtml(slot)}</td>`;
                 }
-                table += `  </tr>\n`;
+                table += `</tr>`;
             }
             table += `</table>`;
 
@@ -1864,18 +1864,21 @@ bot.on("callback_query:data", async (ctx) => {
                 ? `ℹ️ Джерело: NOAA SWPC, оновлено ${nowLocal}.`
                 : `ℹ️ Source: NOAA SWPC, updated ${nowLocal}.`;
 
-            let body = `<h1>${dict[userLang].geomagForecastTitle}</h1>\n\n`;
+            let body = `<h1>${dict[userLang].geomagForecastTitle}</h1>`;
             if (summaries.length) {
-                body += `<blockquote>\n<b>${isUk ? 'ГОЛОВНЕ' : 'SUMMARY'}:</b><br>\n`;
-                body += summaries.join('<br>\n');
-                body += `\n</blockquote>\n\n`;
+                body += `<blockquote><b>${isUk ? 'ГОЛОВНЕ' : 'SUMMARY'}:</b><br>`;
+                body += summaries.join('<br>');
+                body += `</blockquote>`;
             }
             body += table;
-            body += `\n\n<p><i><small>${sourceLine}</small></i></p>`;
+            body += `<p><i><small>${sourceLine}</small></i></p>`;
 
-            await ctx.reply(body, { parse_mode: 'HTML' });
+            await ctx.api.sendRichMessage(ctx.chat.id, {
+                html: body,
+                skip_entity_detection: true
+            });
         } catch (e) {
-            console.error('geomag_fc error:', e.message);
+            console.error('geomag_fc error:', e.message, e.stack);
             await ctx.reply(dict[lang].geomagForecastEmpty).catch(() => {});
         }
     }
