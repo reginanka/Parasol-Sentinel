@@ -165,7 +165,7 @@ module.exports = async (req, res) => {
 
             const baseWind = `${dirStr}, ${Math.round(spdVal)} ${unitStr}`;
             if (Math.round(gustVal) > Math.round(spdVal)) {
-                return `${baseWind} (${fDict[lang].gustsTo} ${Math.round(gustVal)})`;
+                return `${baseWind} <small>(${fDict[lang].gustsTo} ${Math.round(gustVal)})</small>`;
             }
             return baseWind;
         };
@@ -315,17 +315,19 @@ module.exports = async (req, res) => {
             console.error('Test forecast frost check error:', e.message);
         }
 
-        // --- Формування повідомлення ---
+        // --- Формування повідомлення (Rich Message) ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
+        const isUk = lang === 'uk';
+        const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
 
-        let aqiPrefix = '';
+        // ========== 1. AQI prefix ==========
+        let aqiHtml = '';
         if (metrics.includes('aqi') && aqiData) {
-            const aqiLabel = lang === 'uk' ? '🍃 **Якість повітря (на момент зараз):**' : '🍃 **Air Quality (current moment):**';
-            aqiPrefix = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
-            if (aqiData.pm25 != null) aqiPrefix += ` | PM2.5: ${aqiData.pm25}`;
-            if (aqiData.pm10 != null) aqiPrefix += ` | PM10: ${aqiData.pm10}`;
+            const aqiLabel = isUk ? '🍃 <b>Якість повітря (на момент зараз):</b>' : '🍃 <b>Air Quality (current moment):</b>';
+            aqiHtml = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
+            if (aqiData.pm25 != null) aqiHtml += ` | PM2.5: ${aqiData.pm25}`;
+            if (aqiData.pm10 != null) aqiHtml += ` | PM10: ${aqiData.pm10}`;
 
-            const isUk = lang === 'uk';
             const issues = [];
             if (aqiData.pm25 != null && aqiData.pm25 > 25) {
                 issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
@@ -337,131 +339,387 @@ module.exports = async (req, res) => {
             let advice = '';
             if (aqiData.aqi > 150) {
                 advice = isUk
-                    ? '\n🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
-                    : '\n🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
+                    ? '<br>🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
+                    : '<br>🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
             } else if (aqiData.aqi > 100) {
                 advice = isUk
-                    ? '\n🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
-                    : '\n🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
+                    ? '<br>🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
+                    : '<br>🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
             } else if (aqiData.aqi > 50) {
                 advice = isUk
-                    ? '\n🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
-                    : '\n🟡 Air quality is acceptable, but sensitive groups should be cautious.';
+                    ? '<br>🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
+                    : '<br>🟡 Air quality is acceptable, but sensitive groups should be cautious.';
             } else if (issues.length > 0) {
                 advice = isUk
-                    ? '\n⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
-                    : '\n⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+                    ? '<br>⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
+                    : '<br>⚠️ AQI is low, but elevated levels of specific dust particles detected.';
             }
 
             if (issues.length > 0 && advice) {
                 advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
             }
 
-            aqiPrefix += advice + '\n\n';
+            aqiHtml += advice;
         }
 
-        let frostPrefix = frostAnyDay ? `${frostWarningText(lang, frostColdest)}\n\n` : '';
-        let message = `${aqiPrefix}${frostPrefix}🧪 **ТЕСТОВИЙ прогноз на ${settings.daysCount} дн. для ${displayCity}**\n\n`;
+        // ========== 2. Frost prefix ==========
+        let frostHtml = '';
+        if (frostAnyDay) {
+            // frostWarningText returns Markdown-style text; convert basic ** to <b>
+            const raw = frostWarningText(lang, frostColdest) || '';
+            frostHtml = raw
+                .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+                .replace(/\n/g, '<br>');
+        }
 
-        const userForecast = fullResponse.slice(1, 1 + settings.daysCount);
+        // ========== 3. Smart highlights (на що звернути увагу) ==========
+        const highlights = [];
+        const highPressureDays = [];
+        let highPressureStart = null;
+        let highPressureEnd = null;
 
-        userForecast.forEach((day) => {
+        userForecast.forEach((day, idx) => {
+            const dateObj = new Date(day.valid_date || day.datetime);
+            const dayName = dateObj.toLocaleDateString(isUk ? 'uk-UA' : 'en-US', { weekday: 'long' });
+            const dayNameShort = dateObj.toLocaleDateString(isUk ? 'uk-UA' : 'en-US', { weekday: 'short' });
+
+            // Дощ
+            const precip = Number(day.precip) || 0;
+            const pop = Number(day.pop) || 0;
+            if (precip >= 5) {
+                highlights.push(isUk
+                    ? `у ${dayName} сильний дощ (${precip.toFixed(1)} мм)`
+                    : `on ${dayName} heavy rain (${precip.toFixed(1)} mm)`);
+            } else if (precip >= 0.3 || pop >= 40) {
+                highlights.push(isUk
+                    ? `у ${dayName} слабкий дощ (${precip.toFixed(1)} мм)`
+                    : `on ${dayName} light rain (${precip.toFixed(1)} mm)`);
+            }
+
+            // Пориви вітру (поріг 7 м/с)
+            const gust = Number(day.wind_gust_spd || day.wind_spd) || 0;
+            if (gust >= 7) {
+                highlights.push(isUk
+                    ? `у ${dayName} сильний вітер із поривами до ${Math.round(gust)} м/с`
+                    : `on ${dayName} strong wind with gusts up to ${Math.round(gust)} m/s`);
+            }
+
+            // Високий тиск — збираємо послідовні дні
+            const slp = Number(day.slp || day.pres) || 0;
+            if (slp > 1018) {
+                if (highPressureStart === null) {
+                    highPressureStart = dayName;
+                    highPressureEnd = dayName;
+                } else {
+                    highPressureEnd = dayName;
+                }
+            } else {
+                if (highPressureStart !== null) {
+                    if (highPressureStart === highPressureEnd) {
+                        highPressureDays.push(isUk
+                            ? `у ${highPressureStart} високий тиск 🔴`
+                            : `on ${highPressureStart} high pressure 🔴`);
+                    } else {
+                        highPressureDays.push(isUk
+                            ? `у ${highPressureStart}–${highPressureEnd} високий тиск 🔴`
+                            : `on ${highPressureStart}–${highPressureEnd} high pressure 🔴`);
+                    }
+                    highPressureStart = null;
+                    highPressureEnd = null;
+                }
+            }
+
+            // Магнітна буря (Kp ≥ 5)
+            const dayDate = String(day.valid_date || day.datetime || '').slice(0, 10);
+            const kp = geomagByDate[dayDate];
+            const level = getGeomagLevel(kp);
+            if (level && kp >= 5) {
+                const label = isUk ? level.labelUk : level.labelEn;
+                highlights.push(isUk
+                    ? `у ${dayName} ${label}`
+                    : `on ${dayName} ${label}`);
+            }
+
+            // Заморозки по ґрунту (для кожного дня)
+            const dStrSoil = String(day.valid_date || day.datetime || '').slice(0, 10);
+            const vals0 = [];
+            for (let i = 0; i < soilTimes.length; i++) {
+                if (String(soilTimes[i]).startsWith(dStrSoil) && soil0[i] != null) {
+                    vals0.push(Number(soil0[i]));
+                }
+            }
+            if (vals0.length) {
+                const minSoil = Math.min(...vals0);
+                if (minSoil <= 0) {
+                    highlights.push(isUk
+                        ? `у ${dayName} заморозки на ґрунті (до ${minSoil.toFixed(1)}°C)`
+                        : `on ${dayName} soil frost (down to ${minSoil.toFixed(1)}°C)`);
+                }
+            }
+        });
+
+        // Закрити останній діапазон високого тиску
+        if (highPressureStart !== null) {
+            if (highPressureStart === highPressureEnd) {
+                highPressureDays.push(isUk
+                    ? `у ${highPressureStart} високий тиск 🔴`
+                    : `on ${highPressureStart} high pressure 🔴`);
+            } else {
+                highPressureDays.push(isUk
+                    ? `у ${highPressureStart}–${highPressureEnd} високий тиск 🔴`
+                    : `on ${highPressureStart}–${highPressureEnd} high pressure 🔴`);
+            }
+        }
+
+        // Об'єднати highlights + high pressure
+        const allHighlights = [...highlights, ...highPressureDays];
+
+        let highlightText = '';
+        if (allHighlights.length > 0) {
+            // Перша літера велика, решта через кому
+            const joined = allHighlights.map((h, i) => i === 0 ? h.charAt(0).toUpperCase() + h.slice(1) : h).join(', ');
+            highlightText = joined + '.';
+        } else {
+            highlightText = isUk
+                ? 'Особливих небезпек не передбачається.'
+                : 'No significant hazards expected.';
+        }
+
+        const citeText = isUk
+            ? 'Парасоль☔️ підказує, на що звернути увагу. Гортай вбік, щоб переглянути прогноз на всі дні'
+            : 'Parasol☔️ highlights what to watch. Swipe sideways to see the full forecast';
+
+        // ========== 4. Таблиця ==========
+        // Заголовки днів
+        const dayHeaders = userForecast.map((day) => {
             const dateObj = new Date(day.valid_date || day.datetime);
             const dayStr = dateObj.toLocaleDateString(fDict[lang].loc, {
                 weekday: 'short', day: 'numeric', month: 'short'
             });
             const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
+            return `<th width="125" align="center" valign="middle">📅 ${capDay}</th>`;
+        }).join('');
 
-            message += `📅 **${capDay}**\n`;
+        // Рядки таблиці за метриками
+        const rows = [];
 
-            if (metrics.includes('condition')) {
-                message += `${getWeatherDesc(day.weather.code, lang)}\n`;
-            }
-            if (metrics.includes('temp')) {
-                message += `${fDict[lang].temp} ${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}\n`;
-            }
-            if (metrics.includes('soil0') || metrics.includes('soil6')) {
+        // Стан неба
+        if (metrics.includes('condition')) {
+            const cells = userForecast.map((day) => {
+                const desc = getWeatherDesc(day.weather.code, lang) || '';
+                // Прибираємо markdown ** якщо є
+                const clean = desc.replace(/\*\*/g, '');
+                return `<td align="center" valign="middle">${clean}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>${isUk ? 'Стан неба' : 'Sky'}</b></td>${cells}</tr>`);
+        }
+
+        // Температура
+        if (metrics.includes('temp')) {
+            const cells = userForecast.map((day) => {
+                return `<td align="center" valign="middle">${formatTemp(day.min_temp, tempUnit)} ... ${formatTemp(day.max_temp, tempUnit)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🌡 ${isUk ? 'Темп' : 'Temp'}</b></td>${cells}</tr>`);
+        }
+
+        // Ґрунт 0 см
+        if (metrics.includes('soil0')) {
+            const cells = userForecast.map((day) => {
                 const dStrSoil = String(day.valid_date || day.datetime || '').slice(0, 10);
-                const vals0 = [], vals6 = [];
+                const vals = [];
                 for (let i = 0; i < soilTimes.length; i++) {
-                    if (!String(soilTimes[i]).startsWith(dStrSoil)) continue;
-                    if (soil0[i] != null && !Number.isNaN(Number(soil0[i]))) vals0.push(Number(soil0[i]));
-                    if (soil6[i] != null && !Number.isNaN(Number(soil6[i]))) vals6.push(Number(soil6[i]));
+                    if (String(soilTimes[i]).startsWith(dStrSoil) && soil0[i] != null && !Number.isNaN(Number(soil0[i]))) {
+                        vals.push(Number(soil0[i]));
+                    }
                 }
-                const fmtSoil = (v) => {
-                    const n = Number(v);
-                    const s = n > 0 ? '+' : '';
-                    return `${s}${n.toFixed(1)}°C`;
+                if (!vals.length) return `<td align="center" valign="middle">—</td>`;
+                const mn = Math.min(...vals);
+                const mx = Math.max(...vals);
+                const fmt = (v) => {
+                    const s = v > 0 ? '+' : '';
+                    return `${s}${v.toFixed(1)}°C`;
                 };
-                if (metrics.includes('soil0') && vals0.length) {
-                    const mn = Math.min(...vals0), mx = Math.max(...vals0);
-                    message += lang === 'uk'
-                        ? `🌱 **Ґрунт 0 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
-                        : `🌱 **Soil 0 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
+                return `<td align="center" valign="middle">${fmt(mn)} ...<br>${fmt(mx)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🌱 ${isUk ? 'Ґрунт 0 см' : 'Soil 0 cm'}</b></td>${cells}</tr>`);
+        }
+
+        // Ґрунт 6 см
+        if (metrics.includes('soil6')) {
+            const cells = userForecast.map((day) => {
+                const dStrSoil = String(day.valid_date || day.datetime || '').slice(0, 10);
+                const vals = [];
+                for (let i = 0; i < soilTimes.length; i++) {
+                    if (String(soilTimes[i]).startsWith(dStrSoil) && soil6[i] != null && !Number.isNaN(Number(soil6[i]))) {
+                        vals.push(Number(soil6[i]));
+                    }
                 }
-                if (metrics.includes('soil6') && vals6.length) {
-                    const mn = Math.min(...vals6), mx = Math.max(...vals6);
-                    message += lang === 'uk'
-                        ? `🌱 **Ґрунт 6 см:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`
-                        : `🌱 **Soil 6 cm:** ${fmtSoil(mn)} ... ${fmtSoil(mx)}\n`;
-                }
-            }
-            if (metrics.includes('precip')) {
-                message += `${fDict[lang].precip} ${day.pop}% (${(day.precip || 0).toFixed(1)} мм)\n`;
-            }
-            if (metrics.includes('wind')) {
-                message += `${fDict[lang].wind} ${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}\n`;
-            }
-            if (metrics.includes('pressure')) {
-                message += `${fDict[lang].press} ${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}\n`;
-            }
-            if (metrics.includes('dew')) {
-                message += `${fDict[lang].dew} ${formatTemp(day.dewpt, tempUnit)}\n`;
-            }
-            if (metrics.includes('uv')) {
-                message += `${fDict[lang].uv} ${formatUV(day.uv)}\n`;
-            }
-            if (metrics.includes('visibility')) {
-                message += `${fDict[lang].vis} ${Math.round(day.vis)} км\n`;
-            }
-            if (metrics.includes('moon')) {
+                if (!vals.length) return `<td align="center" valign="middle">—</td>`;
+                const mn = Math.min(...vals);
+                const mx = Math.max(...vals);
+                const fmt = (v) => {
+                    const s = v > 0 ? '+' : '';
+                    return `${s}${v.toFixed(1)}°C`;
+                };
+                return `<td align="center" valign="middle">${fmt(mn)} ...<br>${fmt(mx)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🌱 ${isUk ? 'Ґрунт 6 см' : 'Soil 6 cm'}</b></td>${cells}</tr>`);
+        }
+
+        // Вірогідність опадів
+        if (metrics.includes('precip')) {
+            const cells = userForecast.map((day) => {
+                const precip = (Number(day.precip) || 0).toFixed(1);
+                return `<td align="center" valign="middle">${day.pop}%<br><small>(${precip} мм)</small></td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>💧 ${isUk ? 'Вірог. опадів' : 'Precip'}</b></td>${cells}</tr>`);
+        }
+
+        // Вітер
+        if (metrics.includes('wind')) {
+            const cells = userForecast.map((day) => {
+                return `<td align="center" valign="middle">${formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>💨 ${isUk ? 'Вітер' : 'Wind'}</b></td>${cells}</tr>`);
+        }
+
+        // Тиск
+        if (metrics.includes('pressure')) {
+            const cells = userForecast.map((day) => {
+                return `<td align="center" valign="middle">${formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🧭 ${isUk ? 'Тиск' : 'Pressure'}</b></td>${cells}</tr>`);
+        }
+
+        // Точка роси
+        if (metrics.includes('dew')) {
+            const cells = userForecast.map((day) => {
+                return `<td align="center" valign="middle">${formatTemp(day.dewpt, tempUnit)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🌡 ${isUk ? 'Точка роси' : 'Dew Point'}</b></td>${cells}</tr>`);
+        }
+
+        // УФ
+        if (metrics.includes('uv')) {
+            const cells = userForecast.map((day) => {
+                return `<td align="center" valign="middle">${formatUV(day.uv)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>☀️ ${isUk ? 'УФ-індекс' : 'UV Index'}</b></td>${cells}</tr>`);
+        }
+
+        // Видимість
+        if (metrics.includes('visibility')) {
+            const cells = userForecast.map((day) => {
+                return `<td align="center" valign="middle">${Math.round(day.vis)} км</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>👁 ${isUk ? 'Видимість' : 'Visibility'}</b></td>${cells}</tr>`);
+        }
+
+        // Місяць
+        if (metrics.includes('moon')) {
+            const cells = userForecast.map((day) => {
                 const dObj = new Date(day.valid_date || day.datetime);
-                message += `${fDict[lang].moon} ${formatMoon(dObj, lang)}\n`;
-            }
-            if (metrics.includes('sun')) {
-                const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
-                const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv' });
-                message += `${fDict[lang].sun} ${sunrise} | ${sunset}\n`;
-            }
-            // Geomag: max Kp for THIS day (not only idx === 0)
-            if (metrics.includes('geomag')) {
+                return `<td align="center" valign="middle">${formatMoon(dObj, lang)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>${isUk ? 'Місяць' : 'Moon'}</b></td>${cells}</tr>`);
+        }
+
+        // Сонце
+        if (metrics.includes('sun')) {
+            const cells = userForecast.map((day) => {
+                const sunrise = new Date(day.sunrise_ts * 1000).toLocaleTimeString('uk-UA', {
+                    hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv'
+                });
+                const sunset = new Date(day.sunset_ts * 1000).toLocaleTimeString('uk-UA', {
+                    hour: '2-digit', minute: '2-digit', timeZone: user.timezone || 'Europe/Kyiv'
+                });
+                return `<td align="center" valign="middle">${sunrise}<br>${sunset}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🌅 ${isUk ? 'Сонце' : 'Sun'}</b></td>${cells}</tr>`);
+        }
+
+        // Магнітні бурі
+        if (metrics.includes('geomag')) {
+            const cells = userForecast.map((day) => {
                 const dayDate = String(day.valid_date || day.datetime || '').slice(0, 10);
                 const kp = geomagByDate[dayDate];
                 const level = getGeomagLevel(kp);
                 if (level) {
-                    const geomagLabel = lang === 'uk' ? '🧲 **Магнітні бурі:**' : '🧲 **Magnetic Storms:**';
-                    const label = lang === 'uk' ? level.labelUk : level.labelEn;
-                    message += `${geomagLabel} ${level.badge} ${label}\n`;
+                    const label = isUk ? level.labelUk : level.labelEn;
+                    return `<td align="center" valign="middle">${level.badge} ${label}</td>`;
                 }
-            }
-            message += '\n';
-        });
+                return `<td align="center" valign="middle">—</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн. бурі' : 'Geomag'}</b></td>${cells}</tr>`);
+        }
 
-        await bot.api.sendMessage(user.telegramId, message, {
-            parse_mode: 'Markdown',
-            disable_web_page_preview: true,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: lang === 'uk' ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
-                    [{ text: lang === 'uk' ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
-                    [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
-                    [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
-                ]
-            }
-        });
+        const tableHtml = `
+<table bordered striped>
+  <thead>
+    <tr>
+      <th width="110" align="left" valign="middle">${isUk ? 'Показник' : 'Metric'}</th>
+      ${dayHeaders}
+    </tr>
+  </thead>
+  <tbody>
+    ${rows.join('\n    ')}
+  </tbody>
+</table>`.trim();
 
-        await log(`🧪 <b>Тестовий прогноз</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
-        res.status(200).send(`Test forecast sent to ${TEST_USER_ID}`);
+        // ========== 5. Збірка повного HTML ==========
+        let fullHtml = '';
+
+        if (aqiHtml) {
+            fullHtml += aqiHtml + '\n\n';
+        }
+        if (frostHtml) {
+            fullHtml += frostHtml + '\n\n';
+        }
+
+        fullHtml += `<h1>🧪 ${isUk ? 'ТЕСТОВИЙ прогноз' : 'TEST forecast'} на ${settings.daysCount} дн. для ${escapeHTML(displayCity)}</h1>\n\n`;
+
+        fullHtml += `<aside>${escapeHTML(highlightText)}<br>
+  <cite>${citeText}</cite>
+</aside>\n\n`;
+
+        fullHtml += tableHtml;
+
+        // ========== 6. Відправка Rich Message ==========
+        try {
+            await bot.api.sendRichMessage(user.telegramId, {
+                html: fullHtml,
+                skip_entity_detection: true
+            }, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: isUk ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
+                        [{ text: isUk ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
+                        [{ text: isUk ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
+                        [{ text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                    ]
+                }
+            });
+        } catch (sendErr) {
+            console.error('sendRichMessage failed, fallback to plain:', sendErr.message);
+            // Fallback: plain text version
+            const plain = fullHtml
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            await bot.api.sendMessage(user.telegramId, plain, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: isUk ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
+                        [{ text: isUk ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
+                        [{ text: isUk ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
+                        [{ text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                    ]
+                }
+            }).catch(() => {});
+        }
+
+        await log(`🧪 <b>Тестовий прогноз (Rich)</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
+        res.status(200).send(`Test forecast (Rich Message) sent to ${TEST_USER_ID}`);
     } catch (error) {
         console.error(error);
         await log(`❌ <b>Test forecast FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
