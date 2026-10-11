@@ -849,7 +849,7 @@ module.exports = async (req, res) => {
                         }, {
                             reply_markup: {
                                 inline_keyboard: [
-                                    [{ text: btnText, callback_data: 'alert_settings' }]
+                                    [{ text: btnText, callback_data: 'alert_settings|new' }]
                                 ]
                             }
                         });
@@ -860,7 +860,7 @@ module.exports = async (req, res) => {
                         await bot.api.sendMessage(userId, plain, {
                             reply_markup: {
                                 inline_keyboard: [
-                                    [{ text: btnText, callback_data: 'alert_settings' }]
+                                    [{ text: btnText, callback_data: 'alert_settings|new' }]
                                 ]
                             }
                         }).catch(() => {});

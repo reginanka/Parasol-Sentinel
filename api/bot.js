@@ -1502,27 +1502,56 @@ bot.on("callback_query:data", async (ctx) => {
             const html = `<h1>${dict[lang].alertSettingsTitle}</h1>\n${dict[lang].alertSettingsDesc}`;
             const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers, mode);
 
-            try {
-                // Same rich-message path as Help — supports <h1>/<h2>/<ul>/<li>/<p>
-                await ctx.api.raw.editMessageText({
-                    chat_id: ctx.chat.id,
-                    message_id: ctx.callbackQuery.message.message_id,
-                    rich_message: {
-                        html,
-                        skip_entity_detection: true
-                    },
-                    reply_markup: markup
-                });
-            } catch (e) {
-                if (e.message && e.message.includes('message is not modified')) return;
-                console.error('Alert settings rich edit error:', e.message);
+            // From an alert message: send a NEW message so the alert stays in history.
+            // Explicit flag from cron (alert_settings|new), or detect by message content
+            // (covers alerts already sent before deploy with plain alert_settings).
+            // From settings menus: edit in place.
+            const msgText = ctx.callbackQuery.message?.text || '';
+            const looksLikeSettingsMenu =
+                msgText.includes('Сповіщення про зміни') ||
+                msgText.includes('Change Alerts') ||
+                msgText.includes('Налаштування') ||
+                msgText.includes('Settings') ||
+                msgText.includes('Вечірній прогноз') ||
+                msgText.includes('Evening forecast');
+            const openAsNew = data[1] === 'new' || !looksLikeSettingsMenu;
+
+            if (openAsNew) {
                 try {
                     await ctx.api.sendRichMessage(ctx.chat.id, {
                         html,
                         skip_entity_detection: true
                     }, { reply_markup: markup });
                 } catch (e2) {
-                    console.error('Alert settings fallback error:', e2.message);
+                    console.error('Alert settings new-message error:', e2.message);
+                    await ctx.reply(
+                        `${dict[lang].alertSettingsTitle}\n${dict[lang].alertSettingsDesc}`,
+                        { parse_mode: 'Markdown', reply_markup: markup }
+                    ).catch(() => {});
+                }
+            } else {
+                try {
+                    // Same rich-message path as Help — supports <h1>/<h2>/<ul>/<li>/<p>
+                    await ctx.api.raw.editMessageText({
+                        chat_id: ctx.chat.id,
+                        message_id: ctx.callbackQuery.message.message_id,
+                        rich_message: {
+                            html,
+                            skip_entity_detection: true
+                        },
+                        reply_markup: markup
+                    });
+                } catch (e) {
+                    if (e.message && e.message.includes('message is not modified')) return;
+                    console.error('Alert settings rich edit error:', e.message);
+                    try {
+                        await ctx.api.sendRichMessage(ctx.chat.id, {
+                            html,
+                            skip_entity_detection: true
+                        }, { reply_markup: markup });
+                    } catch (e2) {
+                        console.error('Alert settings fallback error:', e2.message);
+                    }
                 }
             }
         } catch (err) {

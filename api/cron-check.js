@@ -988,7 +988,7 @@ module.exports = async (req, res) => {
                     if (uniqueAlerts[userId].hasGeomag) {
                         rows.push([{ text: geomagBtnText, callback_data: 'geomag_fc' }]);
                     }
-                    rows.push([{ text: btnText, callback_data: 'alert_settings' }]);
+                    rows.push([{ text: btnText, callback_data: 'alert_settings|new' }]);
                     try {
                         await bot.api.sendRichMessage(userId, {
                             html: parts.join('<hr/>'),
