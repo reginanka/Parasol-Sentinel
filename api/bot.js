@@ -146,7 +146,7 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         alert_precip: "Опади",
         alert_magneticStorm: "Магнітні бурі",
                 geomagMode_active: "🧲 Всі зміни магн.бур",
-        geomagMode_quiet: "🧲 Тихий (лише піки магн.)",
+        geomagMode_quiet: "🧲 Тихий",
         geomagMode_off: "🧲 Без сповіщ.магн.бур",
         geomagModeHint: "Тихий: алерт лише якщо буря сильніша за вечірній план.\nАктивний: усі підвищення й зниження рівня.",
         geomagForecastTitle: "🧲 Прогноз магнітних бур",
@@ -283,7 +283,7 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
         alert_precip: "Precipitation",
         alert_magneticStorm: "Magnetic storms",
                 geomagMode_active: "🧲 All storm changes",
-        geomagMode_quiet: "🧲 Quiet (peaks only)",
+        geomagMode_quiet: "🧲 Quiet",
         geomagMode_off: "🧲 No storm alerts",
         geomagModeHint: "Quiet: alert only if stronger than evening plan.\nActive: all level rises and drops.",
         geomagForecastTitle: "🧲 Geomagnetic storm forecast",
@@ -333,8 +333,10 @@ function buildAlertTriggersKeyboard(lang, triggers = {}, geomagMode = 'quiet') {
                 { text: `${getCheck('airQuality')}${d.alert_airQuality}`, callback_data: 'alert|toggle|airQuality' },
                 { text: `${modeMark('active')}${d.geomagMode_active}`, callback_data: 'geomag_mode|active' }
             ],
-            [{ text: `${modeMark('quiet')}${d.geomagMode_quiet}`, callback_data: 'geomag_mode|quiet' }],
-            [{ text: `${modeMark('off')}${d.geomagMode_off}`, callback_data: 'geomag_mode|off' }],
+            [
+                { text: `${modeMark('quiet')}${d.geomagMode_quiet}`, callback_data: 'geomag_mode|quiet' },
+                { text: `${modeMark('off')}${d.geomagMode_off}`, callback_data: 'geomag_mode|off' }
+            ],
             [{ text: d.settingsEveningForecast, callback_data: 'forecast_menu' }],
             [{ text: d.settingsGeneral, callback_data: 'open_settings' }]
         ]
