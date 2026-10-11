@@ -151,7 +151,7 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         geomagModeHint: "Тихий: алерт лише якщо буря сильніша за вечірній план.\nАктивний: усі підвищення й зниження рівня.",
         geomagForecastTitle: "🧲 Прогноз магнітних бур",
         geomagForecastEmpty: "Немає даних NOAA зараз. Спробуйте пізніше.",
-        geomagForecastBtn: "🧲 Прогноз магн. бур",
+        geomagForecastBtn: "🧲 Прогноз магнітних бур",
         alert_airQuality: "Якість повітря",
         alertDisableAll: "🔕 Вимкнути всі сповіщення про зміни",
         alertEnableAll: "🔔 Увімкнути всі сповіщення про зміни",
@@ -288,7 +288,7 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
         geomagModeHint: "Quiet: alert only if stronger than evening plan.\nActive: all level rises and drops.",
         geomagForecastTitle: "🧲 Geomagnetic storm forecast",
         geomagForecastEmpty: "No NOAA data right now. Try again later.",
-        geomagForecastBtn: "🧲 Storm forecast",
+        geomagForecastBtn: "🧲 Geomagnetic storm forecast",
         alert_airQuality: "Air quality",
         alertDisableAll: "🔕 Disable all change alerts",
         alertEnableAll: "🔔 Enable all change alerts",
@@ -1654,7 +1654,7 @@ bot.on("callback_query:data", async (ctx) => {
         }
     }
 
-    // --- Geomag forecast table (from alert button) ---
+    // --- Geomag forecast table (from alert button) — rich HTML ---
     else if (data[0] === 'geomag_fc') {
         try {
             await ctx.answerCallbackQuery().catch(() => {});
@@ -1662,6 +1662,7 @@ bot.on("callback_query:data", async (ctx) => {
             const user = await User.findOne({ telegramId: ctx.from.id });
             const userLang = user?.language || lang || 'uk';
             const tz = user?.timezone || 'Europe/Kyiv';
+            const isUk = userLang === 'uk';
 
             const noaaRes = await axios.get(
                 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
@@ -1672,7 +1673,7 @@ bot.on("callback_query:data", async (ctx) => {
                 return ctx.reply(dict[userLang].geomagForecastEmpty);
             }
 
-            // Local today / tomorrow YYYY-MM-DD
+            // Local YYYY-MM-DD
             const fmtLocal = (d) => {
                 try {
                     return new Intl.DateTimeFormat('en-CA', {
@@ -1682,8 +1683,6 @@ bot.on("callback_query:data", async (ctx) => {
                     return d.toISOString().slice(0, 10);
                 }
             };
-            const todayStr = fmtLocal(new Date());
-            const tomorrowStr = fmtLocal(new Date(Date.now() + 36e5 * 24));
 
             const parseNoaaTime = (timeTag) => {
                 if (!timeTag) return null;
@@ -1696,48 +1695,183 @@ bot.on("callback_query:data", async (ctx) => {
                 return isNaN(t.getTime()) ? null : t;
             };
 
-            const fmtHour = (d) => {
+            // Build day keys: today + next 2 days
+            const now = new Date();
+            const dayKeys = [0, 1, 2].map(offset => {
+                const d = new Date(now.getTime() + offset * 86400000);
+                return fmtLocal(d);
+            });
+
+            // Short weekday labels (uk / en) — dateStr is already local YYYY-MM-DD
+            const weekdayShort = (dateStr) => {
+                // Treat as noon UTC so formatting with target tz still lands on the same calendar day
+                const d = new Date(dateStr + 'T12:00:00Z');
                 try {
-                    return new Intl.DateTimeFormat('uk-UA', {
+                    const parts = new Intl.DateTimeFormat(isUk ? 'uk-UA' : 'en-US', {
+                        timeZone: tz,
+                        weekday: 'short',
+                        day: 'numeric',
+                        month: 'short'
+                    }).formatToParts(d);
+                    const wd = parts.find(p => p.type === 'weekday')?.value || '';
+                    const day = parts.find(p => p.type === 'day')?.value || '';
+                    const mon = parts.find(p => p.type === 'month')?.value || '';
+                    // e.g. "Нд, 11 жов" or "Sun, 11 Oct"
+                    return `${wd}, ${day} ${mon}`;
+                } catch {
+                    return dateStr.slice(5);
+                }
+            };
+
+            // Collect slots: { dateStr -> { hour (0|3|6|9|12|15|18|21) -> { kp, level, observed } } }
+            const slots = {};
+            for (const key of dayKeys) slots[key] = {};
+
+            for (const r of rows) {
+                const t = parseNoaaTime(r.time_tag);
+                if (!t) continue;
+                const localDate = fmtLocal(t);
+                if (!slots[localDate]) continue;
+
+                let hour;
+                try {
+                    hour = parseInt(new Intl.DateTimeFormat('en-US', {
+                        timeZone: tz, hour: 'numeric', hour12: false
+                    }).format(t), 10);
+                } catch {
+                    hour = t.getUTCHours();
+                }
+                // Normalize to 3-hour bins
+                const bin = Math.floor(hour / 3) * 3;
+                if (![0, 3, 6, 9, 12, 15, 18, 21].includes(bin)) continue;
+
+                const kp = parseFloat(r.kp != null ? r.kp : r.Kp);
+                if (isNaN(kp)) continue;
+                const level = getGeomagLevel(Math.round(kp));
+                slots[localDate][bin] = {
+                    kp,
+                    kpRounded: level ? level.kpRounded : Math.round(kp),
+                    level,
+                    observed: r.observed || ''
+                };
+            }
+
+            // Cell formatter: badge + bold Kp if elevated
+            const cellHtml = (slot) => {
+                if (!slot || !slot.level) return '—';
+                const { badge, kpRounded, rank } = slot.level;
+                if (rank >= 2) return `${badge} <b>${kpRounded}</b>`;
+                if (rank === 1) return `${badge} <b>${kpRounded}</b>`;
+                return `${badge} ${kpRounded}`;
+            };
+
+            // Build summary (ГОЛОВНЕ)
+            const daySummary = (dateStr, label) => {
+                const daySlots = slots[dateStr] || {};
+                const entries = Object.entries(daySlots)
+                    .map(([h, s]) => ({ hour: +h, ...s }))
+                    .filter(e => e.level)
+                    .sort((a, b) => a.hour - b.hour);
+                if (!entries.length) return null;
+
+                const maxEntry = entries.reduce((best, e) =>
+                    (e.level.rank > (best?.level?.rank ?? -1) ||
+                     (e.level.rank === (best?.level?.rank ?? -1) && e.kpRounded > (best?.kpRounded ?? -1)))
+                        ? e : best, null);
+
+                if (!maxEntry || maxEntry.level.rank === 0) {
+                    return isUk
+                        ? `• <b>${label}:</b> Спокійно (Kp ≤ 3)`
+                        : `• <b>${label}:</b> Calm (Kp ≤ 3)`;
+                }
+
+                const timeStr = `${String(maxEntry.hour).padStart(2, '0')}:00`;
+                const lvl = maxEntry.level;
+                const h = maxEntry.hour;
+
+                // Human-friendly period
+                let periodUk = '';
+                let periodEn = '';
+                if (h >= 0 && h < 6) { periodUk = 'вночі'; periodEn = 'at night'; }
+                else if (h >= 6 && h < 12) { periodUk = 'вранці'; periodEn = 'in the morning'; }
+                else if (h >= 12 && h < 18) { periodUk = 'вдень'; periodEn = 'in the afternoon'; }
+                else { periodUk = 'ввечері'; periodEn = 'in the evening'; }
+
+                if (lvl.isStorm) {
+                    const gName = {
+                        1: isUk ? 'Слабка буря' : 'Minor storm',
+                        2: isUk ? 'Помірна буря' : 'Moderate storm',
+                        3: isUk ? 'Сильна буря' : 'Strong storm',
+                        4: isUk ? 'Дуже сильна буря' : 'Severe storm',
+                        5: isUk ? 'Екстремальний шторм' : 'Extreme storm'
+                    }[lvl.gScale] || (isUk ? 'Буря' : 'Storm');
+
+                    if (isUk) {
+                        return `• <b>${label}:</b> ⚠️ Пік о ${timeStr} — ${lvl.badge} <b>G${lvl.gScale} (Kp ${lvl.kpRounded})</b>`;
+                    }
+                    return `• <b>${label}:</b> ⚠️ Peak at ${timeStr} — ${lvl.badge} <b>G${lvl.gScale} (Kp ${lvl.kpRounded})</b>`;
+                }
+
+                // Unsettled (Kp 4)
+                if (isUk) {
+                    return `• <b>${label}:</b> Збурення ${periodUk} (Kp ${lvl.kpRounded})`;
+                }
+                return `• <b>${label}:</b> Unsettled ${periodEn} (Kp ${lvl.kpRounded})`;
+            };
+
+            const todayLabel = isUk ? 'Сьогодні' : 'Today';
+            const tomLabel = isUk ? 'Завтра' : 'Tomorrow';
+            const day3Label = isUk ? 'Післязавтра' : 'Day after';
+
+            const summaries = [
+                daySummary(dayKeys[0], todayLabel),
+                daySummary(dayKeys[1], tomLabel),
+                daySummary(dayKeys[2], day3Label)
+            ].filter(Boolean);
+
+            // Table header
+            const headers = dayKeys.map(k => weekdayShort(k));
+            let table = `<table>\n  <tr>\n    <th>${isUk ? 'Час' : 'Time'}</th>\n`;
+            for (const h of headers) {
+                table += `    <th>${h}</th>\n`;
+            }
+            table += `  </tr>\n`;
+
+            const hours = [0, 3, 6, 9, 12, 15, 18, 21];
+            for (const h of hours) {
+                table += `  <tr>\n    <td><b>${String(h).padStart(2, '0')}:00</b></td>\n`;
+                for (const dk of dayKeys) {
+                    const slot = (slots[dk] || {})[h];
+                    table += `    <td>${cellHtml(slot)}</td>\n`;
+                }
+                table += `  </tr>\n`;
+            }
+            table += `</table>`;
+
+            // Update timestamp
+            const nowLocal = (() => {
+                try {
+                    return new Intl.DateTimeFormat(isUk ? 'uk-UA' : 'en-GB', {
                         timeZone: tz, day: '2-digit', month: '2-digit',
                         hour: '2-digit', minute: '2-digit', hour12: false
-                    }).format(d);
+                    }).format(new Date());
                 } catch {
-                    return d.toISOString().slice(5, 16).replace('T', ' ');
+                    return new Date().toISOString().slice(0, 16).replace('T', ' ');
                 }
-            };
+            })();
 
-            const pick = (dateStr) => {
-                const lines = [];
-                for (const r of rows) {
-                    const t = parseNoaaTime(r.time_tag);
-                    if (!t) continue;
-                    const localDate = fmtLocal(t);
-                    if (localDate !== dateStr) continue;
-                    const kp = parseFloat(r.kp != null ? r.kp : r.Kp);
-                    if (isNaN(kp)) continue;
-                    const level = getGeomagLevel(Math.round(kp));
-                    const label = level
-                        ? (userLang === 'uk' ? level.labelUk : level.labelEn)
-                        : `Kp ${kp}`;
-                    const badge = level?.badge || '';
-                    const src = r.observed || '';
-                    lines.push(`${fmtHour(t)}  ${badge} ${label}  (${src})`);
-                }
-                return lines;
-            };
+            const sourceLine = isUk
+                ? `ℹ️ Джерело: NOAA SWPC, оновлено ${nowLocal}.`
+                : `ℹ️ Source: NOAA SWPC, updated ${nowLocal}.`;
 
-            const todayLines = pick(todayStr);
-            const tomLines = pick(tomorrowStr);
-            let body = `<b>${dict[userLang].geomagForecastTitle}</b>\n`;
-            body += userLang === 'uk' ? `<b>Сьогодні</b> (${todayStr})\n` : `<b>Today</b> (${todayStr})\n`;
-            body += todayLines.length
-                ? `<pre>${todayLines.join('\n')}</pre>\n`
-                : (userLang === 'uk' ? '<i>немає бінів</i>\n' : '<i>no bins</i>\n');
-            body += userLang === 'uk' ? `<b>Завтра</b> (${tomorrowStr})\n` : `<b>Tomorrow</b> (${tomorrowStr})\n`;
-            body += tomLines.length
-                ? `<pre>${tomLines.join('\n')}</pre>`
-                : (userLang === 'uk' ? '<i>немає бінів</i>' : '<i>no bins</i>');
+            let body = `<h1>${dict[userLang].geomagForecastTitle}</h1>\n\n`;
+            if (summaries.length) {
+                body += `<blockquote>\n<b>${isUk ? 'ГОЛОВНЕ' : 'SUMMARY'}:</b><br>\n`;
+                body += summaries.join('<br>\n');
+                body += `\n</blockquote>\n\n`;
+            }
+            body += table;
+            body += `\n\n<p><i><small>${sourceLine}</small></i></p>`;
 
             await ctx.reply(body, { parse_mode: 'HTML' });
         } catch (e) {

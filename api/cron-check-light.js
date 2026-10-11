@@ -710,7 +710,7 @@ module.exports = async (req, res) => {
                                         const lang = user.language || 'uk';
                                         const html = htmlGeomag(lang, { kind, levelInfo: current });
                                         if (!html) continue;
-                                        alerts.push({ userId: user.telegramId, html, lang });
+                                        alerts.push({ userId: user.telegramId, html, lang, type: 'geomag' });
                                         anyUserAlerted = true;
                                     }
                                     if (anyUserAlerted) {
@@ -830,10 +830,11 @@ module.exports = async (req, res) => {
                 }
 
                 // --- SEND ALERTS (Rich Messages) ---
-                const uniqueAlerts = {};
+                const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {
-                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk' };
+                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false };
                     if (a.html) uniqueAlerts[a.userId].parts.push(a.html);
+                    if (a.type === 'geomag') uniqueAlerts[a.userId].hasGeomag = true;
                 }
 
                 for (const userId of Object.keys(uniqueAlerts)) {
@@ -842,27 +843,25 @@ module.exports = async (req, res) => {
                     await sleep(50);
                     const userLang = uniqueAlerts[userId].lang || 'uk';
                     const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
+                    const geomagBtnText = userLang === 'uk' ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast';
+                    const rows = [];
+                    if (uniqueAlerts[userId].hasGeomag) {
+                        rows.push([{ text: geomagBtnText, callback_data: 'geomag_fc' }]);
+                    }
+                    rows.push([{ text: btnText, callback_data: 'alert_settings|new' }]);
                     try {
                         await bot.api.sendRichMessage(userId, {
                             html: parts.join('<hr/>'),
                             skip_entity_detection: true
                         }, {
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: btnText, callback_data: 'alert_settings|new' }]
-                                ]
-                            }
+                            reply_markup: { inline_keyboard: rows }
                         });
                         alertsTotal++;
                     } catch (sendErr) {
                         console.error(`sendRichMessage failed for ${userId}:`, sendErr.message);
                         const plain = parts.join('\n\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
                         await bot.api.sendMessage(userId, plain, {
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: btnText, callback_data: 'alert_settings|new' }]
-                                ]
-                            }
+                            reply_markup: { inline_keyboard: rows }
                         }).catch(() => {});
                         alertsTotal++;
                     }

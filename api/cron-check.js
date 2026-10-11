@@ -983,7 +983,7 @@ module.exports = async (req, res) => {
                     await sleep(50);
                     const userLang = uniqueAlerts[userId].lang || 'uk';
                     const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
-                    const geomagBtnText = userLang === 'uk' ? '🧲 Прогноз магн. бур' : '🧲 Storm forecast';
+                    const geomagBtnText = userLang === 'uk' ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast';
                     const rows = [];
                     if (uniqueAlerts[userId].hasGeomag) {
                         rows.push([{ text: geomagBtnText, callback_data: 'geomag_fc' }]);
