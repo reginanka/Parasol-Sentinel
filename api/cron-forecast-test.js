@@ -479,6 +479,7 @@ module.exports = async (req, res) => {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: lang === 'uk' ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
+                    [{ text: lang === 'uk' ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
                     [{ text: lang === 'uk' ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
                     [{ text: lang === 'uk' ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
                 ]
