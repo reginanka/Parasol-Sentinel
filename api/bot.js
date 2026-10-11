@@ -1480,31 +1480,53 @@ bot.on("callback_query:data", async (ctx) => {
 
     // --- Alert settings screen callback ---
     else if (data[0] === 'alert_settings') {
-        await connectDB();
-        let user = await User.findOne({ telegramId: ctx.from.id });
-        if (!user) return ctx.answerCallbackQuery('❌ Error');
-        await ctx.answerCallbackQuery();
-
-        // Lazy migrate geomagMode from legacy magneticStorm flag
-        let mode = resolveGeomagMode(user);
-        if (user.geomagMode !== mode) {
-            user = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
-                { $set: { geomagMode: mode, 'alertTriggers.magneticStorm': mode !== 'off' } },
-                { new: true }
-            );
-        }
-
-        const text = `<b>${dict[lang].alertSettingsTitle}</b>\n\n${dict[lang].alertSettingsDesc}`;
-        const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers, mode);
+        // Answer immediately — Telegram callback queries expire in a few seconds;
+        // DB/cold-start latency on Vercel otherwise causes "query is too old".
+        await ctx.answerCallbackQuery().catch(() => { });
 
         try {
-            await ctx.editMessageText(text, {
-                parse_mode: 'HTML',
-                reply_markup: markup
-            });
-        } catch (e) {
-            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: markup });
+            await connectDB();
+            let user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user) return;
+
+            // Lazy migrate geomagMode from legacy magneticStorm flag
+            let mode = resolveGeomagMode(user);
+            if (user.geomagMode !== mode) {
+                user = await User.findOneAndUpdate(
+                    { telegramId: ctx.from.id },
+                    { $set: { geomagMode: mode, 'alertTriggers.magneticStorm': mode !== 'off' } },
+                    { new: true }
+                );
+            }
+
+            const html = `<h1>${dict[lang].alertSettingsTitle}</h1>\n${dict[lang].alertSettingsDesc}`;
+            const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers, mode);
+
+            try {
+                // Same rich-message path as Help — supports <h1>/<h2>/<ul>/<li>/<p>
+                await ctx.api.raw.editMessageText({
+                    chat_id: ctx.chat.id,
+                    message_id: ctx.callbackQuery.message.message_id,
+                    rich_message: {
+                        html,
+                        skip_entity_detection: true
+                    },
+                    reply_markup: markup
+                });
+            } catch (e) {
+                if (e.message && e.message.includes('message is not modified')) return;
+                console.error('Alert settings rich edit error:', e.message);
+                try {
+                    await ctx.api.sendRichMessage(ctx.chat.id, {
+                        html,
+                        skip_entity_detection: true
+                    }, { reply_markup: markup });
+                } catch (e2) {
+                    console.error('Alert settings fallback error:', e2.message);
+                }
+            }
+        } catch (err) {
+            console.error('Alert settings handler error:', err.message);
         }
     }
 
@@ -1514,7 +1536,10 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await connectDB();
             const user = await User.findOne({ telegramId: ctx.from.id });
-            if (!user) return ctx.answerCallbackQuery('❌ Error');
+            if (!user) {
+                await ctx.answerCallbackQuery('❌ Error').catch(() => {});
+                return;
+            }
 
             const currentTriggers = user.alertTriggers || {};
             const currentValue = currentTriggers[key] !== false;
@@ -1526,10 +1551,10 @@ bot.on("callback_query:data", async (ctx) => {
                 { new: true }
             );
 
-            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved).catch(() => {});
             await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers, resolveGeomagMode(updatedUser)) });
         } catch (error) {
-            await ctx.answerCallbackQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error').catch(() => {});
         }
     }
 
@@ -1551,10 +1576,10 @@ bot.on("callback_query:data", async (ctx) => {
                 },
                 { new: true }
             );
-            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved).catch(() => {});
             await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers, resolveGeomagMode(updatedUser)) });
         } catch (error) {
-            await ctx.answerCallbackQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error').catch(() => {});
         }
     }
 
@@ -1563,7 +1588,7 @@ bot.on("callback_query:data", async (ctx) => {
     else if (data[0] === 'geomag_mode') {
         const mode = data[1];
         if (!['active', 'quiet', 'off'].includes(mode)) {
-            return ctx.answerCallbackQuery('❌');
+            return ctx.answerCallbackQuery('❌').catch(() => {});
         }
         try {
             await connectDB();
@@ -1577,12 +1602,12 @@ bot.on("callback_query:data", async (ctx) => {
                 },
                 { new: true }
             );
-            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved).catch(() => {});
             await ctx.editMessageReplyMarkup({
                 reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers, mode)
             });
         } catch (e) {
-            await ctx.answerCallbackQuery('❌ Error');
+            await ctx.answerCallbackQuery('❌ Error').catch(() => {});
         }
     }
 
