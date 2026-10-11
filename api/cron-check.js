@@ -765,34 +765,83 @@ module.exports = async (req, res) => {
                                     ? (getGeomagLevel(Math.round(Number(last.maxKp)))?.rank ?? -1)
                                     : -1);
 
+                            // Evening plan for quiet mode (seeded by cron-forecast; key = local YYYY-MM-DD)
+                            const planEntry = cityDoc?.eveningGeomag?.[todayStr];
+                            const planRank = (planEntry && planEntry.maxRank != null)
+                                ? Number(planEntry.maxRank)
+                                : -1;
+
                             // Same rank today → silent (dashboard snap only)
                             if (last?.date === todayStr && current.rank === lastRank) {
                                 // no-op
                             } else {
-                                // kind: 'worse' | 'better' | null
+                                // kind candidates from rank delta (city-level)
                                 // - worse: rank rose and is at least unsettled
-                                // - better: ONLY full calm (rank 0 / Kp < 4).
-                                //   Intermediate drops (G3→G1, G2→unsettled) stay silent
-                                //   to avoid de-escalation spam; rank is still saved below.
-                                let kind = null;
+                                // - better_full: full calm after any disturbance
+                                // - better_partial: intermediate drop (active mode only)
+                                let kindBase = null; // 'worse' | 'better' | null
+                                let isPartialBetter = false;
                                 if (current.rank > lastRank && current.rank >= 1) {
-                                    kind = 'worse';
+                                    kindBase = 'worse';
                                 } else if (current.rank === 0 && lastRank > 0) {
-                                    kind = 'better';
+                                    kindBase = 'better';
+                                } else if (current.rank < lastRank && current.rank >= 0 && lastRank > 0) {
+                                    kindBase = 'better';
+                                    isPartialBetter = true;
                                 }
 
                                 let anyUserAlerted = false;
-                                if (kind) {
+                                if (kindBase) {
                                     for (const user of cityInfo.users) {
-                                        if (!user.notificationsEnabled || user.alertTriggers?.magneticStorm === false) continue;
+                                        if (!user.notificationsEnabled) continue;
+
+                                        // Resolve geomagMode with lazy migration from legacy flag
+                                        let mode = user.geomagMode;
+                                        if (mode !== 'active' && mode !== 'quiet' && mode !== 'off') {
+                                            mode = (user.alertTriggers?.magneticStorm === false) ? 'off' : 'quiet';
+                                            // fire-and-forget migrate
+                                            User.updateOne(
+                                                { _id: user._id },
+                                                {
+                                                    $set: {
+                                                        geomagMode: mode,
+                                                        'alertTriggers.magneticStorm': mode !== 'off'
+                                                    }
+                                                }
+                                            ).catch(() => {});
+                                            user.geomagMode = mode;
+                                        }
+                                        if (mode === 'off') continue;
+                                        // legacy safety
+                                        if (user.alertTriggers?.magneticStorm === false && mode !== 'active') continue;
+
+                                        let kind = null;
+                                        if (kindBase === 'worse') {
+                                            if (mode === 'active') {
+                                                kind = 'worse';
+                                            } else if (mode === 'quiet') {
+                                                // only above lastAlerted AND above evening plan
+                                                if (current.rank > lastRank && current.rank > planRank) {
+                                                    kind = 'worse';
+                                                }
+                                            }
+                                        } else if (kindBase === 'better') {
+                                            if (mode === 'active') {
+                                                kind = 'better'; // full calm + intermediate
+                                            } else if (mode === 'quiet') {
+                                                if (!isPartialBetter) kind = 'better'; // full calm only
+                                            }
+                                        }
+                                        if (!kind) continue;
+
                                         const lang = user.language || 'uk';
                                         const html = htmlGeomag(lang, { kind, levelInfo: current });
                                         if (!html) continue;
-                                        alerts.push({ userId: user.telegramId, html, lang });
+                                        alerts.push({ userId: user.telegramId, html, lang, type: 'geomag' });
                                         anyUserAlerted = true;
                                     }
                                     if (anyUserAlerted) {
-                                        if (kind === 'worse') {
+                                        if (kindBase === 'worse') {
                                             if (current.gScale) reasons.push(`магн. буря G${current.gScale}`);
                                             else reasons.push('збурення магн. поля');
                                         } else {
@@ -923,8 +972,9 @@ module.exports = async (req, res) => {
                 // --- SENDING ALERTS (Rich Messages) ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {
-                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk' };
+                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false };
                     if (a.html) uniqueAlerts[a.userId].parts.push(a.html);
+                    if (a.type === 'geomag') uniqueAlerts[a.userId].hasGeomag = true;
                 }
 
                 for (const userId of Object.keys(uniqueAlerts)) {
@@ -933,28 +983,25 @@ module.exports = async (req, res) => {
                     await sleep(50);
                     const userLang = uniqueAlerts[userId].lang || 'uk';
                     const btnText = userLang === 'uk' ? '⚙️ Налаштувати сповіщення' : '⚙️ Configure alerts';
+                    const geomagBtnText = userLang === 'uk' ? '🧲 Прогноз магн. бур' : '🧲 Storm forecast';
+                    const rows = [];
+                    if (uniqueAlerts[userId].hasGeomag) {
+                        rows.push([{ text: geomagBtnText, callback_data: 'geomag_fc' }]);
+                    }
+                    rows.push([{ text: btnText, callback_data: 'alert_settings' }]);
                     try {
                         await bot.api.sendRichMessage(userId, {
                             html: parts.join('<hr/>'),
                             skip_entity_detection: true
                         }, {
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: btnText, callback_data: 'alert_settings' }]
-                                ]
-                            }
+                            reply_markup: { inline_keyboard: rows }
                         });
                         alertsTotal++;
                     } catch (sendErr) {
                         console.error(`sendRichMessage failed for ${userId}:`, sendErr.message);
-                        // Fallback: strip tags roughly and send plain
                         const plain = parts.join('\n\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
                         await bot.api.sendMessage(userId, plain, {
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: btnText, callback_data: 'alert_settings' }]
-                                ]
-                            }
+                            reply_markup: { inline_keyboard: rows }
                         }).catch(() => {});
                         alertsTotal++;
                     }

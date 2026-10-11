@@ -405,6 +405,62 @@ module.exports = async (req, res) => {
                     console.error('NOAA 27-day outlook error:', outlookErr.message);
                 }
 
+                // --- Persist eveningGeomag plan (today seed / tomorrow always) ---
+                // Quiet-mode daytime alerts use eveningGeomag[todayStr].maxRank as planRank.
+                // Does NOT touch lastGeomagAlert (owned by cron-check).
+                try {
+                    const egPre = cityDocPre?.eveningGeomag || {};
+                    const egSet = {};
+                    const asOfEg = new Date();
+                    const buildPlan = (dateStr) => {
+                        const kp = geomagByDate[dateStr];
+                        if (kp == null || isNaN(Number(kp))) return null;
+                        const lvl = getGeomagLevel(Math.round(Number(kp)));
+                        if (!lvl) return null;
+                        return { maxRank: lvl.rank, maxKp: Number(kp), asOf: asOfEg };
+                    };
+                    const planTomorrow = buildPlan(tomorrowStr);
+                    if (planTomorrow) {
+                        egSet[`eveningGeomag.${tomorrowStr}`] = planTomorrow;
+                    }
+                    // today: seed only if missing
+                    if (!egPre[todayLocal]) {
+                        const planToday = buildPlan(todayLocal);
+                        if (planToday) {
+                            egSet[`eveningGeomag.${todayLocal}`] = planToday;
+                        }
+                    }
+                    // prune keys older than yesterday
+                    if (egPre && typeof egPre === 'object') {
+                        for (const d of Object.keys(egPre)) {
+                            if (d < yesterdayStr) {
+                                egSet[`eveningGeomag.${d}`] = undefined; // handled via $unset below
+                            }
+                        }
+                    }
+                    const egUnset = {};
+                    if (egPre && typeof egPre === 'object') {
+                        for (const d of Object.keys(egPre)) {
+                            if (d < yesterdayStr) egUnset[`eveningGeomag.${d}`] = 1;
+                        }
+                    }
+                    // remove undefined keys from $set
+                    Object.keys(egSet).forEach(k => { if (egSet[k] === undefined) delete egSet[k]; });
+                    if (Object.keys(egSet).length || Object.keys(egUnset).length) {
+                        await City.findOneAndUpdate(
+                            { externalId: key },
+                            {
+                                ...(Object.keys(egSet).length ? { $set: egSet } : {}),
+                                ...(Object.keys(egUnset).length ? { $unset: egUnset } : {})
+                            },
+                            { upsert: true }
+                        );
+                    }
+                } catch (egWriteErr) {
+                    console.error('eveningGeomag write error:', egWriteErr.message);
+                }
+
+
                 // --- Planned soil frost (save once per city for frost-cron cross-check) ---
                 // Store the coldest frost day in the next 6 days (from tomorrow). frost-cron reads this from Mongo.
                 // Only in frost season (Mar–Jun, Aug–Nov).

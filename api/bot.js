@@ -17,7 +17,7 @@ const {
     fetchMissingHistory
 } = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
-const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason } = require('../utils/weather');
+const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason, getGeomagLevel } = require('../utils/weather');
 
 /**
  * Parasol Sentinel Bot - Core logic handler.
@@ -115,6 +115,14 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         alert_temperature: "Температура (зміна прогнозу + аномалія)",
         alert_precip: "Опади (з’явилися / скасували)",
         alert_magneticStorm: "Магнітні бурі",
+        geomagModeTitle: "🧲 Режим магн. бур",
+        geomagMode_active: "Активний (усі зміни)",
+        geomagMode_quiet: "Тихий (лише вище плану)",
+        geomagMode_off: "Вимкнено",
+        geomagModeHint: "Тихий: алерт лише якщо буря сильніша за вечірній план.\nАктивний: усі підвищення й зниження рівня.",
+        geomagForecastTitle: "🧲 Прогноз магнітних бур",
+        geomagForecastEmpty: "Немає даних NOAA зараз. Спробуйте пізніше.",
+        geomagForecastBtn: "🧲 Прогноз магн. бур",
         alert_airQuality: "Якість повітря",
         alertDisableAll: "🔕 Вимкнути всі сповіщення про зміни",
         alertEnableAll: "🔔 Увімкнути всі сповіщення про зміни",
@@ -215,6 +223,14 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
         alert_temperature: "Temperature (forecast + anomaly)",
         alert_precip: "Precipitation (appeared / canceled)",
         alert_magneticStorm: "Magnetic storms",
+        geomagModeTitle: "🧲 Storm alert mode",
+        geomagMode_active: "Active (all changes)",
+        geomagMode_quiet: "Quiet (above plan only)",
+        geomagMode_off: "Off",
+        geomagModeHint: "Quiet: alert only if stronger than evening plan.\nActive: all level rises and drops.",
+        geomagForecastTitle: "🧲 Geomagnetic storm forecast",
+        geomagForecastEmpty: "No NOAA data right now. Try again later.",
+        geomagForecastBtn: "🧲 Storm forecast",
         alert_airQuality: "Air quality",
         alertDisableAll: "🔕 Disable all change alerts",
         alertEnableAll: "🔔 Enable all change alerts",
@@ -228,24 +244,36 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
 };
 
 // Build Alert Triggers configuration keyboard
-function buildAlertTriggersKeyboard(lang, triggers = {}) {
+function resolveGeomagMode(user) {
+    if (user?.geomagMode === 'active' || user?.geomagMode === 'quiet' || user?.geomagMode === 'off') {
+        return user.geomagMode;
+    }
+    return (user?.alertTriggers?.magneticStorm === false) ? 'off' : 'quiet';
+}
+
+function buildAlertTriggersKeyboard(lang, triggers = {}, geomagMode = 'quiet') {
     const d = dict[lang];
-    const keys = ['temperature', 'precip', 'magneticStorm', 'airQuality'];
-    const hasAnyActive = keys.some(k => triggers[k] !== false);
+    const keys = ['temperature', 'precip', 'airQuality'];
+    const mode = geomagMode === 'active' || geomagMode === 'quiet' || geomagMode === 'off' ? geomagMode : 'quiet';
+    const hasAnyActive = keys.some(k => triggers[k] !== false) || mode !== 'off';
 
     const masterBtn = hasAnyActive
         ? { text: d.alertDisableAll, callback_data: 'alert|toggle_all|off' }
         : { text: d.alertEnableAll, callback_data: 'alert|toggle_all|on' };
 
     const getCheck = (key) => (triggers[key] !== false ? '✅ ' : '⬜️ ');
+    const modeMark = (m) => (mode === m ? '✅ ' : '⬜️ ');
 
     return {
         inline_keyboard: [
             [masterBtn],
             [{ text: `${getCheck('temperature')}${d.alert_temperature}`, callback_data: 'alert|toggle|temperature' }],
             [{ text: `${getCheck('precip')}${d.alert_precip}`, callback_data: 'alert|toggle|precip' }],
-            [{ text: `${getCheck('magneticStorm')}${d.alert_magneticStorm}`, callback_data: 'alert|toggle|magneticStorm' }],
             [{ text: `${getCheck('airQuality')}${d.alert_airQuality}`, callback_data: 'alert|toggle|airQuality' }],
+            [{ text: `${d.geomagModeTitle}`, callback_data: 'noop' }],
+            [{ text: `${modeMark('active')}${d.geomagMode_active}`, callback_data: 'geomag_mode|active' }],
+            [{ text: `${modeMark('quiet')}${d.geomagMode_quiet}`, callback_data: 'geomag_mode|quiet' }],
+            [{ text: `${modeMark('off')}${d.geomagMode_off}`, callback_data: 'geomag_mode|off' }],
             [{ text: d.settingsEveningForecast, callback_data: 'forecast_menu' }],
             [{ text: d.settingsGeneral, callback_data: 'open_settings' }]
         ]
@@ -1404,12 +1432,26 @@ bot.on("callback_query:data", async (ctx) => {
     // --- Alert settings screen callback ---
     else if (data[0] === 'alert_settings') {
         await connectDB();
-        const user = await User.findOne({ telegramId: ctx.from.id });
+        let user = await User.findOne({ telegramId: ctx.from.id });
         if (!user) return ctx.answerCallbackQuery('❌ Error');
         await ctx.answerCallbackQuery();
 
-        const text = `${dict[lang].alertSettingsTitle}\n\n${dict[lang].alertSettingsDesc}`;
-        const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers);
+        // Lazy migrate geomagMode from legacy magneticStorm flag
+        let mode = resolveGeomagMode(user);
+        if (user.geomagMode !== mode) {
+            user = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                { $set: { geomagMode: mode, 'alertTriggers.magneticStorm': mode !== 'off' } },
+                { new: true }
+            );
+        }
+
+        const text = `${dict[lang].alertSettingsTitle}
+
+${dict[lang].alertSettingsDesc}
+
+_${dict[lang].geomagModeHint}_`;
+        const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers, mode);
 
         try {
             await ctx.editMessageText(text, {
@@ -1440,7 +1482,7 @@ bot.on("callback_query:data", async (ctx) => {
             );
 
             await ctx.answerCallbackQuery(dict[lang].settingsSaved);
-            await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers) });
+            await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers, resolveGeomagMode(updatedUser)) });
         } catch (error) {
             await ctx.answerCallbackQuery('❌ Error');
         }
@@ -1458,16 +1500,142 @@ bot.on("callback_query:data", async (ctx) => {
                         'alertTriggers.temperature': targetState,
                         'alertTriggers.precip': targetState,
                         'alertTriggers.magneticStorm': targetState,
-                        'alertTriggers.airQuality': targetState
+                        'alertTriggers.airQuality': targetState,
+                        geomagMode: targetState ? 'quiet' : 'off'
                     }
                 },
                 { new: true }
             );
             await ctx.answerCallbackQuery(dict[lang].settingsSaved);
-            await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers) });
+            await ctx.editMessageReplyMarkup({ reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers, resolveGeomagMode(updatedUser)) });
         } catch (error) {
             await ctx.answerCallbackQuery('❌ Error');
         }
+    }
+
+
+    // --- Geomag mode: active | quiet | off ---
+    else if (data[0] === 'geomag_mode') {
+        const mode = data[1];
+        if (!['active', 'quiet', 'off'].includes(mode)) {
+            return ctx.answerCallbackQuery('❌');
+        }
+        try {
+            await connectDB();
+            const updatedUser = await User.findOneAndUpdate(
+                { telegramId: ctx.from.id },
+                {
+                    $set: {
+                        geomagMode: mode,
+                        'alertTriggers.magneticStorm': mode !== 'off'
+                    }
+                },
+                { new: true }
+            );
+            await ctx.answerCallbackQuery(dict[lang].settingsSaved);
+            await ctx.editMessageReplyMarkup({
+                reply_markup: buildAlertTriggersKeyboard(lang, updatedUser.alertTriggers, mode)
+            });
+        } catch (e) {
+            await ctx.answerCallbackQuery('❌ Error');
+        }
+    }
+
+    // --- Geomag forecast table (from alert button) ---
+    else if (data[0] === 'geomag_fc') {
+        try {
+            await ctx.answerCallbackQuery().catch(() => {});
+            await connectDB();
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            const userLang = user?.language || lang || 'uk';
+            const tz = user?.timezone || 'Europe/Kyiv';
+
+            const noaaRes = await axios.get(
+                'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
+                { timeout: 10000 }
+            );
+            const rows = Array.isArray(noaaRes.data) ? noaaRes.data : [];
+            if (!rows.length) {
+                return ctx.reply(dict[userLang].geomagForecastEmpty);
+            }
+
+            // Local today / tomorrow YYYY-MM-DD
+            const fmtLocal = (d) => {
+                try {
+                    return new Intl.DateTimeFormat('en-CA', {
+                        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'
+                    }).format(d);
+                } catch {
+                    return d.toISOString().slice(0, 10);
+                }
+            };
+            const todayStr = fmtLocal(new Date());
+            const tomorrowStr = fmtLocal(new Date(Date.now() + 36e5 * 24));
+
+            const parseNoaaTime = (timeTag) => {
+                if (!timeTag) return null;
+                const s = String(timeTag).trim();
+                const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+                const withZ = /[zZ]$/.test(normalized) || /[+-]\d{2}:?\d{2}$/.test(normalized)
+                    ? normalized
+                    : normalized + 'Z';
+                const t = new Date(withZ);
+                return isNaN(t.getTime()) ? null : t;
+            };
+
+            const fmtHour = (d) => {
+                try {
+                    return new Intl.DateTimeFormat('uk-UA', {
+                        timeZone: tz, day: '2-digit', month: '2-digit',
+                        hour: '2-digit', minute: '2-digit', hour12: false
+                    }).format(d);
+                } catch {
+                    return d.toISOString().slice(5, 16).replace('T', ' ');
+                }
+            };
+
+            const pick = (dateStr) => {
+                const lines = [];
+                for (const r of rows) {
+                    const t = parseNoaaTime(r.time_tag);
+                    if (!t) continue;
+                    const localDate = fmtLocal(t);
+                    if (localDate !== dateStr) continue;
+                    const kp = parseFloat(r.kp != null ? r.kp : r.Kp);
+                    if (isNaN(kp)) continue;
+                    const level = getGeomagLevel(Math.round(kp));
+                    const label = level
+                        ? (userLang === 'uk' ? level.labelUk : level.labelEn)
+                        : `Kp ${kp}`;
+                    const badge = level?.badge || '';
+                    const src = r.observed || '';
+                    lines.push(`${fmtHour(t)}  ${badge} ${label}  (${src})`);
+                }
+                return lines;
+            };
+
+            const todayLines = pick(todayStr);
+            const tomLines = pick(tomorrowStr);
+            let body = `<b>${dict[userLang].geomagForecastTitle}</b>\n`;
+            body += userLang === 'uk' ? `<b>Сьогодні</b> (${todayStr})\n` : `<b>Today</b> (${todayStr})\n`;
+            body += todayLines.length
+                ? `<pre>${todayLines.join('\n')}</pre>\n`
+                : (userLang === 'uk' ? '<i>немає бінів</i>\n' : '<i>no bins</i>\n');
+            body += userLang === 'uk' ? `<b>Завтра</b> (${tomorrowStr})\n` : `<b>Tomorrow</b> (${tomorrowStr})\n`;
+            body += tomLines.length
+                ? `<pre>${tomLines.join('\n')}</pre>`
+                : (userLang === 'uk' ? '<i>немає бінів</i>' : '<i>no bins</i>');
+
+            await ctx.reply(body, { parse_mode: 'HTML' });
+        } catch (e) {
+            console.error('geomag_fc error:', e.message);
+            await ctx.reply(dict[lang].geomagForecastEmpty).catch(() => {});
+        }
+    }
+
+    // noop (section headers in keyboards)
+    else if (data[0] === 'noop') {
+        await ctx.answerCallbackQuery().catch(() => {});
     }
 
     // --- Toggle evening forecast callback ---
