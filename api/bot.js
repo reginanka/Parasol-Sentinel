@@ -110,8 +110,34 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         help_soil6: "🌱 Ґрунт 6 см",
         help_aqi_desc: "<h3>🍃 Якість повітря</h3><p>Три фракції <b>PM</b> — мікроскопічний пил у повітрі.</p><details open><summary>🔹 Фракції PM</summary><ul><li><b>PM₁</b> — ультрадрібний (сажа, вихлоп). У кров, шкодить судинам</li><li><b>PM₂.₅</b> — дрібний; норма 0–12 мкг/м³. Смог, осідає в легенях</li><li><b>PM₁₀</b> — великий; норма 0–45 мкг/м³. Пісок, пилок, носоглотка</li></ul></details><h3>📊 Рівні AQI</h3><table bordered striped compact><tr><th>AQI</th><th>Рекомендація</th></tr><tr><td>🟢 0–50 Чисто</td><td>Гуляти, провітрювати, спорт OK</td></tr><tr><td>🟡 51–100 Помірно</td><td>Чутливим зменшити навантаження на вулиці</td></tr><tr><td>🟠 101–150 Шкідливо</td><td>Дітям і хворим — у приміщенні, вікна зачинити</td></tr><tr><td>🔴 151+ Небезпечно</td><td>Без спорту на вулиці; респіратор; протерти рослини</td></tr></table>",
         help_geomag_desc: "<h3>🧲 Магнітні бурі</h3><p>Збурення магнітного поля Землі через сонячні спалахи.</p><p>📡 <b>Kp-індекс</b> (0–9):</p><table bordered striped compact><tr><th>Kp</th><th>Що очікувати</th></tr><tr><td>🟢 0–3 Спокійно</td><td>Поле в нормі, самопочуття стабільне</td></tr><tr><td>🟡 4 Слабке</td><td>Легкий дискомфорт у дуже чутливих</td></tr><tr><td>🔴 5–6 Буря</td><td>Головний біль, тиск, можливі збої GPS</td></tr><tr><td>🔴 7–9 Сильна</td><td>Серйозний вплив; уникати навантажень</td></tr></table><details open><summary>⚕️ Поради під час бурі</summary><ul><li>Більше води, менше стресу і тренувань</li><li>Ліки під рукою, якщо ви метеозалежні</li><li>Не пересаджуйте рослини в ці дні</li></ul></details>",
-        alertSettingsTitle: "🔔 **Сповіщення про зміни**",
-        alertSettingsDesc: "Тут ви керуєте тільки сповіщеннями про різкі зміни погоди.\nВечірній прогноз налаштовується окремо.",
+        alertSettingsTitle: "🔔 Сповіщення про зміни",
+        alertSettingsDesc: `<p>Тут ви вмикаєте або вимикаєте лише <b>проактивні сповіщення</b> про різкі зміни протягом дня. Вечірній прогноз налаштовується окремо.</p>
+
+<h2>🌡 Температура</h2>
+<ul>
+  <li>Зміна прогнозу на ≥ 4 °C</li>
+  <li>Аномалія зараз (відхилення &gt; 5 °C від очікуваного діапазону)</li>
+</ul>
+
+<h2>🌧 Опади</h2>
+<ul>
+  <li>Несподівані опади або їх скасування</li>
+  <li>Значно більше опадів (≥ 1.5 мм)</li>
+  <li>Триваліший дощ або зміщення в часі</li>
+</ul>
+
+<h2>💨 Якість повітря</h2>
+<ul>
+  <li>Погіршення AQI (&gt; 50 / 100 / 150) або різке зростання PM2.5 / PM10</li>
+  <li>Повернення повітря в безпечну зону</li>
+</ul>
+
+<h2>🧲 Магнітні бурі</h2>
+<ul>
+  <li><b>Всі зміни магн.бур</b> — активний режим для метеочутливих людей. Бот буде надсилати повідомлення про усі підвищення і зниження рівня (Kp)</li>
+  <li><b>Тихий</b> — лише якщо буря сильніша, ніж планувалась (у вечірньому прогнозі)</li>
+  <li><b>Без сповіщ. магнітн. бур</b> — сповіщення про бурі приходити не будуть</li>
+</ul>`,
         alert_temperature: "Температура (зміна прогнозу + аномалія)",
         alert_precip: "Опади (з’явилися / скасували)",
         alert_magneticStorm: "Магнітні бурі",
@@ -217,8 +243,34 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
         help_soil6: "🌱 Soil 6 cm",
         help_aqi_desc: "<h3>🍃 Air quality</h3><p>Three <b>PM</b> fractions — microscopic particles in the air.</p><details open><summary>🔹 PM fractions</summary><ul><li><b>PM₁</b> — ultra-fine (soot, exhaust). Enters blood, harms vessels</li><li><b>PM₂.₅</b> — fine; norm 0–12 µg/m³. Smog, settles in lungs</li><li><b>PM₁₀</b> — coarse; norm 0–45 µg/m³. Sand, pollen, upper airways</li></ul></details><h3>📊 AQI levels</h3><table bordered striped compact><tr><th>AQI</th><th>Advice</th></tr><tr><td>🟢 0–50 Good</td><td>Walk, ventilate, outdoor sport OK</td></tr><tr><td>🟡 51–100 Moderate</td><td>Sensitive people: reduce outdoor exertion</td></tr><tr><td>🟠 101–150 Unhealthy</td><td>Kids/patients indoors, close windows</td></tr><tr><td>🔴 151+ Hazardous</td><td>No outdoor sport; respirator; wipe plants</td></tr></table>",
         help_geomag_desc: "<h3>🧲 Magnetic storms</h3><p>Disturbance of Earth’s magnetic field from solar flares.</p><p>📡 <b>Kp-index</b> (0–9):</p><table bordered striped compact><tr><th>Kp</th><th>What to expect</th></tr><tr><td>🟢 0–3 Calm</td><td>Field normal, feeling stable</td></tr><tr><td>🟡 4 Weak</td><td>Mild discomfort for the very sensitive</td></tr><tr><td>🔴 5–6 Storm</td><td>Headache, BP swings, possible GPS issues</td></tr><tr><td>🔴 7–9 Severe</td><td>Serious impact; avoid exertion</td></tr></table><details open><summary>⚕️ Tips during a storm</summary><ul><li>More water, less stress and hard workouts</li><li>Keep meds nearby if weather-sensitive</li><li>Avoid repotting plants on these days</li></ul></details>",
-        alertSettingsTitle: "🔔 **Change Alerts**",
-        alertSettingsDesc: "Here you control only alerts about sudden weather changes.\nThe evening forecast is configured separately.",
+        alertSettingsTitle: "🔔 Change Alerts",
+        alertSettingsDesc: `<p>Here you enable or disable only <b>proactive alerts</b> about sudden changes during the day. The evening forecast is configured separately.</p>
+
+<h2>🌡 Temperature</h2>
+<ul>
+  <li>Forecast change of ≥ 4 °C</li>
+  <li>Current anomaly (deviation &gt; 5 °C from the expected range)</li>
+</ul>
+
+<h2>🌧 Precipitation</h2>
+<ul>
+  <li>Unexpected precipitation or its cancellation</li>
+  <li>Significantly more precipitation (≥ 1.5 mm)</li>
+  <li>Longer rain or shift in timing</li>
+</ul>
+
+<h2>💨 Air Quality</h2>
+<ul>
+  <li>AQI deterioration (&gt; 50 / 100 / 150) or sharp rise in PM2.5 / PM10</li>
+  <li>Air quality returning to the safe zone</li>
+</ul>
+
+<h2>🧲 Magnetic Storms</h2>
+<ul>
+  <li><b>All storm changes</b> — active mode for weather-sensitive people. The bot will send messages about all rises and drops in the Kp level</li>
+  <li><b>Quiet</b> — only if the storm is stronger than planned (in the evening forecast)</li>
+  <li><b>No magnetic storm alerts</b> — storm notifications will not be sent</li>
+</ul>`,
         alert_temperature: "Temperature (forecast + anomaly)",
         alert_precip: "Precipitation (appeared / canceled)",
         alert_magneticStorm: "Magnetic storms",
@@ -1443,20 +1495,16 @@ bot.on("callback_query:data", async (ctx) => {
             );
         }
 
-        const text = `${dict[lang].alertSettingsTitle}
-
-${dict[lang].alertSettingsDesc}
-
-_${dict[lang].geomagModeHint}_`;
+        const text = `<b>${dict[lang].alertSettingsTitle}</b>\n\n${dict[lang].alertSettingsDesc}`;
         const markup = buildAlertTriggersKeyboard(lang, user.alertTriggers, mode);
 
         try {
             await ctx.editMessageText(text, {
-                parse_mode: 'Markdown',
+                parse_mode: 'HTML',
                 reply_markup: markup
             });
         } catch (e) {
-            await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: markup });
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: markup });
         }
     }
 
