@@ -5,37 +5,11 @@ const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, getGeomagLevel } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
-
-/** Kp → badge + labels (UK/EN) */
-const getGeomagLevel = (kp) => {
-    if (kp == null || isNaN(Number(kp))) return null;
-    const k = Number(kp);
-    const kpStr = k.toFixed(0);
-    if (k >= 5) {
-        return {
-            badge: '🔴',
-            labelUk: `Буря (Kp ${kpStr})`,
-            labelEn: `Storm (Kp ${kpStr})`
-        };
-    }
-    if (k >= 4) {
-        return {
-            badge: '🟡',
-            labelUk: `Збурення (Kp ${kpStr})`,
-            labelEn: `Unsettled (Kp ${kpStr})`
-        };
-    }
-    return {
-        badge: '🟢',
-        labelUk: `Спокійно (Kp ${kpStr})`,
-        labelEn: `Calm (Kp ${kpStr})`
-    };
-};
 
 /**
  * Build { 'YYYY-MM-DD': maxKp } from NOAA 3-hourly forecast + 27-day outlook.
