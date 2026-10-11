@@ -138,7 +138,7 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
 <details><summary>🧲 Магнітні бурі</summary>
 <ul>
   <li><b>Всі зміни магн.бур</b> — активний режим для метеочутливих людей. Бот буде надсилати повідомлення про усі підвищення і зниження рівня (Kp)</li>
-  <li><b>Тихий</b> — лише якщо буря сильніша, ніж планувалась (у вечірньому прогнозі)</li>
+  <li><b>Тихий</b> — лише якщо буря сильніша, ніж планувалась (у вечірньому прогнозі), а також коли магнітне поле повністю заспокоїться</li>
   <li><b>Без сповіщ. магнітн. бур</b> — сповіщення про бурі приходити не будуть</li>
 </ul>
 </details>`,
@@ -275,7 +275,7 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
 <details><summary>🧲 Magnetic Storms</summary>
 <ul>
   <li><b>All storm changes</b> — active mode for weather-sensitive people. The bot will send messages about all rises and drops in the Kp level</li>
-  <li><b>Quiet</b> — only if the storm is stronger than planned (in the evening forecast)</li>
+  <li><b>Quiet</b> — only if the storm is stronger than planned (in the evening forecast), plus when the field fully calms down</li>
   <li><b>No magnetic storm alerts</b> — storm notifications will not be sent</li>
 </ul>
 </details>`,
