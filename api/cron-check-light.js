@@ -129,46 +129,47 @@ module.exports = async (req, res) => {
             const label = isUk ? levelInfo.labelUk : levelInfo.labelEn;
             const g = levelInfo.gScale;
 
+            // desc* must NOT repeat the title label — only symptoms / context.
             const copy = {
                 unsettled: {
-                    descUk: 'Невеликі геомагнітні збурення. Метеочутливі люди можуть відчувати легку втому або сонливість.',
-                    descEn: 'Minor geomagnetic disturbances. Weather-sensitive people may feel mild fatigue or drowsiness.',
+                    descUk: 'Метеочутливі люди можуть відчувати легку втому або сонливість.',
+                    descEn: 'Weather-sensitive people may feel mild fatigue or drowsiness.',
                     adviceUk: 'Намагайтеся не перевтомлюватися, пийте достатньо чистої води та приділіть трохи більше часу відпочинку ввечері.',
                     adviceEn: 'Try not to overexert yourself, drink enough clean water, and allow a bit more rest in the evening.'
                 },
                 g1: {
-                    descUk: 'Слабка магнітна буря. Можливі незначні коливання самопочуття, легкий головний біль чи перепади настрою у чутливих людей.',
-                    descEn: 'Minor magnetic storm. Sensitive people may notice mild discomfort, a light headache, or mood swings.',
+                    descUk: 'Можливі незначні коливання самопочуття, легкий головний біль чи перепади настрою у чутливих людей.',
+                    descEn: 'Sensitive people may notice mild discomfort, a light headache, or mood swings.',
                     adviceUk: 'Зменште інтенсивні фізичні навантаження, уникайте стресів. Корисні прогулянки на свіжому повітрі та повноцінний сон.',
                     adviceEn: 'Reduce intense physical activity and avoid stress. Fresh-air walks and a full night\'s sleep help.'
                 },
                 g2: {
-                    descUk: 'Помірна геомагнітна буря. Може спостерігатися погіршення самопочуття, втома або зниження концентрації.',
-                    descEn: 'Moderate geomagnetic storm. You may feel worse overall, more tired, or less focused.',
+                    descUk: 'Може спостерігатися погіршення самопочуття, втома або зниження концентрації.',
+                    descEn: 'You may feel worse overall, more tired, or less focused.',
                     adviceUk: 'Тримайте під рукою необхідні звичні ліки, уникайте важкої їжі та зайвої кави. Бажано зменшити темп роботи і більше відпочивати.',
                     adviceEn: 'Keep your usual medication handy, avoid heavy food and excess coffee. Ease your work pace and rest more.'
                 },
                 g3: {
-                    descUk: 'Сильна геомагнітна буря. Багато метеочутливих людей можуть відчувати втому, апатію або головний біль.',
-                    descEn: 'Strong geomagnetic storm. Many weather-sensitive people may feel fatigue, apathy, or a headache.',
+                    descUk: 'Багато метеочутливих людей можуть відчувати втому, апатію або головний біль.',
+                    descEn: 'Many weather-sensitive people may feel fatigue, apathy, or a headache.',
                     adviceUk: 'Уникайте важкої праці та стресових ситуацій. Прислухайтеся до свого організму, за потреби робіть паузи в роботі та проведіть вечір у тиші.',
                     adviceEn: 'Avoid heavy work and stressful situations. Listen to your body, take breaks if needed, and keep the evening quiet.'
                 },
                 g4: {
-                    descUk: 'Дуже сильна геомагнітна буря. Може суттєво позначитися на самопочутті та рівні енергії.',
-                    descEn: 'Severe geomagnetic storm. It can noticeably affect how you feel and your energy level.',
+                    descUk: 'Може суттєво позначитися на самопочутті та рівні енергії.',
+                    descEn: 'It can noticeably affect how you feel and your energy level.',
                     adviceUk: 'Постарайтеся провести день у спокійному режимі. Уникайте навантажень, пийте заспокійливі трав\'яні чаї. Якщо самопочуття помітно погіршилось — варто звернутися до лікаря.',
                     adviceEn: 'Try to keep the day calm. Avoid strain and drink soothing herbal tea. If you feel significantly worse, consider seeing a doctor.'
                 },
                 g5: {
-                    descUk: 'Екстремальний геомагнітний шторм. Потужний вплив на самопочуття та загальний тонус організму.',
-                    descEn: 'Extreme geomagnetic storm. Strong impact on well-being and overall energy.',
+                    descUk: 'Потужний вплив на самопочуття та загальний тонус організму.',
+                    descEn: 'Strong impact on well-being and overall energy.',
                     adviceUk: 'Максимально знизьте активність, залишайтеся вдома у затишку та уникайте будь-яких стресів. За необхідності обов\'язково звертайтеся по медичну допомогу.',
                     adviceEn: 'Minimize activity, stay home in a calm setting, and avoid stress. Seek medical help if you need it.'
                 },
                 quiet: {
-                    descUk: 'Магнітне поле Землі заспокоїлось.',
-                    descEn: 'Earth\'s magnetic field has calmed.',
+                    descUk: 'Умови знову сприятливі для метеочутливих людей.',
+                    descEn: 'Conditions are favorable again for weather-sensitive people.',
                     adviceUk: 'Ідеальний час для активностей! Можна сміливо планувати прогулянки на свіжому повітрі, спорт і не хвилюватися про самопочуття — насолоджуйтеся днем на повну.',
                     adviceEn: 'A great time to be active! Plan outdoor walks or sport and enjoy the day without worrying about how you feel.'
                 }
