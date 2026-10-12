@@ -163,11 +163,12 @@ module.exports = async (req, res) => {
                 unitStr = fDict[lang].unitKmh;
             }
 
-            const baseWind = `${dirStr}, ${Math.round(spdVal)} ${unitStr}`;
+            // Multi-line for table cells: dir / speed / gusts
+            let html = `${dirStr},<br>${Math.round(spdVal)} ${unitStr}`;
             if (Math.round(gustVal) > Math.round(spdVal)) {
-                return `${baseWind} <small>(${fDict[lang].gustsTo} ${Math.round(gustVal)})</small>`;
+                html += `<br>(${fDict[lang].gustsTo} ${Math.round(gustVal)})`;
             }
-            return baseWind;
+            return html;
         };
 
         const formatPress = (pres_mb, slp_mb, unit, lang) => {
@@ -181,7 +182,8 @@ module.exports = async (req, res) => {
             else if (slp_mb <= 1018) indicator = `🟡(${fDict[lang].pressNorm})`;
             else indicator = `🔴(${fDict[lang].pressHigh})`;
 
-            return `${presVal} (slp: ${slpVal}) ${unitStr} ${indicator}`;
+            // Multi-line for table cells: value / slp / unit / indicator
+            return `${presVal}<br>(slp: ${slpVal})<br>${unitStr}<br>${indicator}`;
         };
 
         const formatUV = (uv) => {
@@ -600,30 +602,19 @@ module.exports = async (req, res) => {
             rows.push(`<tr><td align="left" valign="middle"><b>💧 ${isUk ? 'Вірог.<br>опадів' : 'Precip'}</b></td>${cells}</tr>`);
         }
 
-        // Вітер — напрямок + швидкість окремими рядками
+        // Вітер — напрямок / швидкість / пориви (formatWind already has <br>)
         if (metrics.includes('wind')) {
             const cells = userForecast.map((day) => {
                 const windStr = formatWind(day.wind_spd, day.wind_gust_spd, day.wind_cdir, user.units?.wind || 'ms', lang);
-                // formatWind повертає "Напрямок, N м/с <small>(пориви до X)</small>"
-                // Розбиваємо по комі для вужчого стовпця
-                const parts = windStr.split(', ');
-                if (parts.length >= 2) {
-                    return `<td align="center" valign="middle">${parts[0]},<br>${parts.slice(1).join(', ')}</td>`;
-                }
                 return `<td align="center" valign="middle">${windStr}</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>💨 ${isUk ? 'Вітер' : 'Wind'}</b></td>${cells}</tr>`);
         }
 
-        // Тиск
+                // Тиск — значення / slp / одиниця / індикатор (formatPress already has <br>)
         if (metrics.includes('pressure')) {
             const cells = userForecast.map((day) => {
                 const pressStr = formatPress(day.pres, day.slp || day.pres, user.units?.pressure || 'mmhg', lang);
-                // Розбиваємо: значення / (slp) / індикатор
-                const m = pressStr.match(/^(.+?)\s+(\(slp:.+?\))\s+(.+)$/);
-                if (m) {
-                    return `<td align="center" valign="middle">${m[1]}<br>${m[2]}<br>${m[3]}</td>`;
-                }
                 return `<td align="center" valign="middle">${pressStr}</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>🧭 ${isUk ? 'Тиск' : 'Pressure'}</b></td>${cells}</tr>`);
@@ -737,11 +728,17 @@ module.exports = async (req, res) => {
             }, {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: isUk ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
-                        [{ text: isUk ? `Прогноз Tomorrow.io` : `Tomorrow.io forecast`, callback_data: `forecast_verify|${targetHourlyStr}` }],
-                        [{ text: isUk ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
-                        [{ text: isUk ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
-                        [{ text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                        [
+                            { text: isUk ? '🌤 Погод. прогноз' : '🌤 Weather', callback_data: `forecast_hourly|${targetHourlyStr}` },
+                            { text: isUk ? 'Прогноз Tomorrow.io' : 'Tomorrow.io', callback_data: `forecast_verify|${targetHourlyStr}` }
+                        ],
+                        [
+                            { text: isUk ? '🧲 Магнітні бурі' : '🧲 Magnetic storms', callback_data: 'geomag_fc' },
+                            { text: isUk ? '🌱 Рекомендації' : '🌱 Tips', callback_data: 'agro_tomorrow' }
+                        ],
+                        [
+                            { text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }
+                        ]
                     ]
                 }
             });
@@ -755,11 +752,17 @@ module.exports = async (req, res) => {
             await bot.api.sendMessage(user.telegramId, plain, {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: isUk ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
-                        [{ text: isUk ? `Прогноз Tomorrow.io` : `Tomorrow.io forecast`, callback_data: `forecast_verify|${targetHourlyStr}` }],
-                        [{ text: isUk ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
-                        [{ text: isUk ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
-                        [{ text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
+                        [
+                            { text: isUk ? '🌤 Погод. прогноз' : '🌤 Weather', callback_data: `forecast_hourly|${targetHourlyStr}` },
+                            { text: isUk ? 'Прогноз Tomorrow.io' : 'Tomorrow.io', callback_data: `forecast_verify|${targetHourlyStr}` }
+                        ],
+                        [
+                            { text: isUk ? '🧲 Магнітні бурі' : '🧲 Magnetic storms', callback_data: 'geomag_fc' },
+                            { text: isUk ? '🌱 Рекомендації' : '🌱 Tips', callback_data: 'agro_tomorrow' }
+                        ],
+                        [
+                            { text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }
+                        ]
                     ]
                 }
             }).catch(() => {});

@@ -662,44 +662,38 @@ module.exports = async (req, res) => {
 
                 
                 // --- Tomorrow.io hourly cache (for «Tomorrow.io» / «Прогноз Tomorrow.io» in bot) ---
-                // One request per city per cron run; skip if no key or recent cache (< 45 min).
+                // Always refresh with the same cadence as Open-Meteo on this cron run (no 45-min skip).
                 try {
                     const TIO_KEY = process.env.TOMORROW_IO_KEY;
                     if (TIO_KEY) {
-                        const tmrUpdated = evening?.hourlyTmrUpdatedAt
-                            ? new Date(evening.hourlyTmrUpdatedAt).getTime()
-                            : 0;
-                        const cacheAgeMin = tmrUpdated ? (Date.now() - tmrUpdated) / 60000 : 999;
-                        if (cacheAgeMin >= 45 || !(evening?.hourlyTmr && evening.hourlyTmr.length)) {
-                            const { fetchTomorrowHourly } = require('../utils/tomorrow');
-                            const { hours, fetchedAt } = await fetchTomorrowHourly(
-                                cityInfo.lat,
-                                cityInfo.lon,
-                                cityTimezone,
-                                { apiKey: TIO_KEY, endTime: 'nowPlus48h' }
-                            );
-                            if (hours.length) {
-                                const compact = hours.map(h => ({
-                                    timeLocal: h.timeLocal,
-                                    temperature: h.temperature,
-                                    precip: h.precip,
-                                    precipProb: h.precipProb,
-                                    windMs: h.windMs,
-                                    weatherCode: h.weatherCode
-                                }));
-                                await City.findOneAndUpdate(
-                                    { externalId: key },
-                                    {
-                                        $set: {
-                                            'eveningState.hourlyTmr': compact,
-                                            'eveningState.hourlyTmrUpdatedAt': fetchedAt
-                                        }
+                        const { fetchTomorrowHourly } = require('../utils/tomorrow');
+                        const { hours, fetchedAt } = await fetchTomorrowHourly(
+                            cityInfo.lat,
+                            cityInfo.lon,
+                            cityTimezone,
+                            { apiKey: TIO_KEY, endTime: 'nowPlus48h' }
+                        );
+                        if (hours.length) {
+                            const compact = hours.map(h => ({
+                                timeLocal: h.timeLocal,
+                                temperature: h.temperature,
+                                precip: h.precip,
+                                precipProb: h.precipProb,
+                                windMs: h.windMs,
+                                weatherCode: h.weatherCode
+                            }));
+                            await City.findOneAndUpdate(
+                                { externalId: key },
+                                {
+                                    $set: {
+                                        'eveningState.hourlyTmr': compact,
+                                        'eveningState.hourlyTmrUpdatedAt': fetchedAt
                                     }
-                                );
-                                if (evening) {
-                                    evening.hourlyTmr = compact;
-                                    evening.hourlyTmrUpdatedAt = fetchedAt;
                                 }
+                            );
+                            if (evening) {
+                                evening.hourlyTmr = compact;
+                                evening.hourlyTmrUpdatedAt = fetchedAt;
                             }
                         }
                     }
