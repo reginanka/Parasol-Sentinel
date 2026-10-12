@@ -154,13 +154,12 @@ async function fetchTomorrowHourly(lat, lon, timezone = 'Europe/Kyiv', opts = {}
         'windSpeed'
     ].join(',');
 
-    // Cover from local midnight today so past hours of the day are available
-    // (same idea as Open-Meteo full-day table). +1h margin for TZ edge cases.
+    // Free tier: deeper than ~24h past often returns 403 (historical not in plan).
+    // Cover from local midnight today (+1h margin). Optional opts.startTime overrides.
     let startTime = opts.startTime;
     if (!startTime) {
         const { hour } = localNowParts(timezone);
-        // Full yesterday (24h) + today so far (+1h margin); cap 48h for API limits
-        const hoursBack = Math.min(48, Math.max(25, hour + 25));
+        const hoursBack = Math.min(24, Math.max(1, hour + 1));
         startTime = `nowMinus${hoursBack}h`;
     }
     const endTime = opts.endTime || 'nowPlus48h';
