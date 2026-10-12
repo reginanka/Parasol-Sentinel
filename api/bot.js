@@ -1386,7 +1386,9 @@ bot.on("callback_query:data", async (ctx) => {
                         );
                     }
                 } catch (e) {
-                    console.error('forecast_verify live fetch:', e.message);
+                    const status = e.response?.status;
+                    console.error('forecast_verify live fetch:', status || '', e.message);
+                    // 403 = plan/limit (e.g. historical range); keep existing cache
                 }
             }
 
