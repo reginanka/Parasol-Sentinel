@@ -899,8 +899,11 @@ bot.on("callback_query:data", async (ctx) => {
             }
 
             const timezone = user.timezone || 'Europe/Kyiv';
-            const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: timezone }));
-            const todayStr = localNow.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD
+            // Do NOT use toLocaleString→new Date (UTC server shifts calendar day after ~21:00 Kyiv)
+            const todayStr = new Intl.DateTimeFormat('en-CA', {
+                timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+            }).format(new Date());
+            const localNow = new Date(); // real now; date math uses todayStr / addDaysYmd
 
             // Determine target date:
             // 1) Explicit date from callback (forecast_hourly|YYYY-MM-DD)
@@ -1328,8 +1331,10 @@ bot.on("callback_query:data", async (ctx) => {
             }
 
             const timezone = user.timezone || 'Europe/Kyiv';
-            const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: timezone }));
-            const todayStr = localNow.toLocaleDateString('en-CA', { timeZone: timezone });
+            const todayStr = new Intl.DateTimeFormat('en-CA', {
+                timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+            }).format(new Date());
+            const localNow = new Date();
 
             let targetDateStr = data[1] && /^\d{4}-\d{2}-\d{2}$/.test(data[1]) ? data[1] : todayStr;
 
