@@ -460,10 +460,13 @@ module.exports = async (req, res) => {
                 // label часто з великої («Слабка буря…») — маленька + «магнітна» для ясності
                 let labelMid = label.charAt(0).toLowerCase() + label.slice(1);
                 if (isUk) {
-                    labelMid = labelMid
-                        .replace(/\bбуря\b/, 'магнітна буря')
-                        .replace(/\bшторм\b/, 'магнітний шторм');
-                } else {
+                    // No \b — JS word boundaries ignore Cyrillic
+                    if (!labelMid.includes('магніт')) {
+                        labelMid = labelMid
+                            .replace('буря', 'магнітна буря')
+                            .replace('шторм', 'магнітний шторм');
+                    }
+                } else if (!/magnetic/i.test(labelMid)) {
                     labelMid = labelMid.replace(/\bstorm\b/i, 'magnetic storm');
                 }
                 highlights.push(isUk
