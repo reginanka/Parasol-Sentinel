@@ -13,7 +13,7 @@ const API_KEY = process.env.WEATHERBIT_KEY;
 
 /**
  * Build { 'YYYY-MM-DD': maxKp } from NOAA 3-hourly forecast + 27-day outlook.
- * 3-hourly values take priority; outlook fills missing days.
+ * 3-hourly values take priority; outlook fills missing  days.
  */
 const fetchGeomagByDate = async () => {
     const byDate = {};
