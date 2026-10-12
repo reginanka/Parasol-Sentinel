@@ -708,6 +708,25 @@ module.exports = async (req, res) => {
                                     : `on ${dayName} soil frost (down to ${minSoil.toFixed(1)}°C)`);
                             }
                         }
+
+                        // УФ-індекс (≥6 високий, ≥8 дуже високий, >10 екстремальний)
+                        const uv = Number(day.uv);
+                        if (!Number.isNaN(uv) && uv >= 6) {
+                            const uvR = Math.round(uv);
+                            if (uv > 10) {
+                                highlights.push(isUk
+                                    ? `у ${dayName} екстремальний УФ-індекс (${uvR}) 🟣`
+                                    : `on ${dayName} extreme UV index (${uvR}) 🟣`);
+                            } else if (uv >= 8) {
+                                highlights.push(isUk
+                                    ? `у ${dayName} дуже високий УФ-індекс (${uvR}) 🔴`
+                                    : `on ${dayName} very high UV index (${uvR}) 🔴`);
+                            } else {
+                                highlights.push(isUk
+                                    ? `у ${dayName} високий УФ-індекс (${uvR}) 🟠`
+                                    : `on ${dayName} high UV index (${uvR}) 🟠`);
+                            }
+                        }
                     });
 
                     if (highPressureStart !== null) {
