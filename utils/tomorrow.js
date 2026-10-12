@@ -1,5 +1,5 @@
 /**
- * Tomorrow.io helpers — shared by frost cron, check cron, and bot hourly "Перевірити".
+ * Tomorrow.io helpers — shared by frost cron, check cron, and bot hourly «Tomorrow.io» / «Прогноз Tomorrow.io».
  *
  * Env: TOMORROW_IO_KEY
  * API: GET https://api.tomorrow.io/v4/timelines
@@ -197,14 +197,35 @@ function filterHoursByDate(hours, dateStr) {
 }
 
 /**
+ * Merge sorted hour numbers into "HH:00–HH:00" blocks (same style as Open-Meteo hourly).
+ */
+function fmtHourBlocks(hours) {
+    const sorted = [...(hours || [])].sort((a, b) => a - b);
+    const blocks = [];
+    for (const hr of sorted) {
+        if (blocks.length && hr === blocks[blocks.length - 1][1] + 1) {
+            blocks[blocks.length - 1][1] = hr;
+        } else {
+            blocks.push([hr, hr]);
+        }
+    }
+    return blocks.map(([a, b]) => {
+        const from = `${String(a).padStart(2, '0')}:00`;
+        const to = `${String(b).padStart(2, '0')}:00`;
+        return a === b ? from : `${from}–${to}`;
+    }).join(', ');
+}
+
+/**
  * Day summary for analysis (like Open-Meteo hourly view):
- * total mm, rainy blocks (precip > 0 or prob > 15), min/max temp.
+ * total mm, actual rain blocks (precip > 0), possible rain (0 mm but prob > threshold), min/max temp.
  */
 function summarizeDayHours(dayHours, rainProbThreshold = 15) {
     const list = dayHours || [];
     let totalPrecip = 0;
     const temps = [];
-    const wetHours = [];
+    const wetHours = [];      // precip > 0
+    const possibleHours = []; // precip == 0 && prob > threshold
     for (const h of list) {
         const p = Number(h.precip) || 0;
         const pr = h.precipProb != null ? Number(h.precipProb) : 0;
@@ -215,31 +236,24 @@ function summarizeDayHours(dayHours, rainProbThreshold = 15) {
         const hour = h.hour != null
             ? h.hour
             : parseInt(String(h.timeLocal || '').slice(11, 13), 10);
-        if (!Number.isNaN(hour) && (p > 0 || pr > rainProbThreshold)) {
+        if (Number.isNaN(hour)) continue;
+        if (p > 0) {
             wetHours.push(hour);
+        } else if (pr > rainProbThreshold) {
+            possibleHours.push(hour);
         }
     }
-    wetHours.sort((a, b) => a - b);
-    const blocks = [];
-    for (const hr of wetHours) {
-        if (blocks.length && hr === blocks[blocks.length - 1][1] + 1) {
-            blocks[blocks.length - 1][1] = hr;
-        } else {
-            blocks.push([hr, hr]);
-        }
-    }
-    const fmtBlocks = blocks.map(([a, b]) => {
-        const from = `${String(a).padStart(2, '0')}:00`;
-        const to = `${String(b).padStart(2, '0')}:00`;
-        return a === b ? from : `${from}–${to}`;
-    }).join(', ');
+
+    const precipBlocks = fmtHourBlocks(wetHours);
+    const possibleBlocks = fmtHourBlocks(possibleHours);
 
     return {
         totalPrecip,
         minTemp: temps.length ? Math.min(...temps) : null,
         maxTemp: temps.length ? Math.max(...temps) : null,
         wetHours,
-        precipBlocks: fmtBlocks,
+        precipBlocks,
+        possibleBlocks,
         hourCount: list.length
     };
 }
