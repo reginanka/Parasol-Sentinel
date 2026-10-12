@@ -699,7 +699,54 @@ module.exports = async (req, res) => {
                     console.error('Open-Meteo fetch error in check:', omErr.message);
                 }
 
-                // --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
+                
+                // --- Tomorrow.io hourly cache (for «Перевірити» in bot) ---
+                // One request per city per cron run; skip if no key or recent cache (< 45 min).
+                try {
+                    const TIO_KEY = process.env.TOMORROW_IO_KEY;
+                    if (TIO_KEY) {
+                        const tmrUpdated = evening?.hourlyTmrUpdatedAt
+                            ? new Date(evening.hourlyTmrUpdatedAt).getTime()
+                            : 0;
+                        const cacheAgeMin = tmrUpdated ? (Date.now() - tmrUpdated) / 60000 : 999;
+                        if (cacheAgeMin >= 45 || !(evening?.hourlyTmr && evening.hourlyTmr.length)) {
+                            const { fetchTomorrowHourly } = require('../utils/tomorrow');
+                            const { hours, fetchedAt } = await fetchTomorrowHourly(
+                                cityInfo.lat,
+                                cityInfo.lon,
+                                cityTimezone,
+                                { apiKey: TIO_KEY, endTime: 'nowPlus48h' }
+                            );
+                            if (hours.length) {
+                                const compact = hours.map(h => ({
+                                    timeLocal: h.timeLocal,
+                                    temperature: h.temperature,
+                                    precip: h.precip,
+                                    precipProb: h.precipProb,
+                                    windMs: h.windMs,
+                                    weatherCode: h.weatherCode
+                                }));
+                                await City.findOneAndUpdate(
+                                    { externalId: key },
+                                    {
+                                        $set: {
+                                            'eveningState.hourlyTmr': compact,
+                                            'eveningState.hourlyTmrUpdatedAt': fetchedAt
+                                        }
+                                    }
+                                );
+                                if (evening) {
+                                    evening.hourlyTmr = compact;
+                                    evening.hourlyTmrUpdatedAt = fetchedAt;
+                                }
+                            }
+                        }
+                    }
+                } catch (tioErr) {
+                    console.error('Tomorrow.io hourly cache error:', tioErr.message);
+                }
+
+// --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
                 // Rules (state machine by rank):
                 // - Alert ONLY on the CURRENT 3-hour Kp slot (observed/estimated "now"),
                 //   never on future forecast peaks within +12h (that misled users).

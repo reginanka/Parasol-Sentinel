@@ -1306,7 +1306,10 @@ bot.on("callback_query:data", async (ctx) => {
             }, {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: otherLabel, callback_data: `forecast_hourly|${otherDateStr}` }]
+                        [
+                            { text: otherLabel, callback_data: `forecast_hourly|${otherDateStr}` },
+                            { text: lang === 'uk' ? '🔍 Перевірити' : '🔍 Verify', callback_data: `forecast_verify|${targetDateStr}` }
+                        ]
                     ]
                 }
             });
@@ -1315,6 +1318,198 @@ bot.on("callback_query:data", async (ctx) => {
             await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }
+
+    
+    // --- Verify hourly forecast via Tomorrow.io (cached by cron-check) ---
+    else if (data[0] === 'forecast_verify') {
+        try {
+            await ctx.answerCallbackQuery().catch(() => { });
+            await connectDB();
+
+            const user = await User.findOne({ telegramId: ctx.from.id });
+            if (!user || !user.lat || !user.lon) {
+                return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
+            }
+
+            const timezone = user.timezone || 'Europe/Kyiv';
+            const localNow = new Date(new Date().toLocaleString('en-US', { timeZone: timezone }));
+            const todayStr = localNow.toLocaleDateString('en-CA', { timeZone: timezone });
+
+            let targetDateStr = data[1] && /^\d{4}-\d{2}-\d{2}$/.test(data[1]) ? data[1] : todayStr;
+
+            const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
+            let cityDoc = await City.findOne({ externalId: cityKey });
+            let hours = cityDoc?.eveningState?.hourlyTmr || [];
+            let tmrUpdated = cityDoc?.eveningState?.hourlyTmrUpdatedAt || null;
+
+            // Refresh if empty or older than 90 min
+            const ageMin = tmrUpdated ? (Date.now() - new Date(tmrUpdated).getTime()) / 60000 : 999;
+            const needRefresh = !hours.length || ageMin > 90;
+            if (needRefresh && process.env.TOMORROW_IO_KEY) {
+                try {
+                    const { fetchTomorrowHourly } = require('../utils/tomorrow');
+                    const { hours: fresh, fetchedAt } = await fetchTomorrowHourly(
+                        user.lat, user.lon, timezone, { endTime: 'nowPlus48h' }
+                    );
+                    if (fresh.length) {
+                        hours = fresh.map(h => ({
+                            timeLocal: h.timeLocal,
+                            temperature: h.temperature,
+                            precip: h.precip,
+                            precipProb: h.precipProb,
+                            windMs: h.windMs,
+                            weatherCode: h.weatherCode
+                        }));
+                        tmrUpdated = fetchedAt;
+                        await City.findOneAndUpdate(
+                            { externalId: cityKey },
+                            {
+                                $set: {
+                                    'eveningState.hourlyTmr': hours,
+                                    'eveningState.hourlyTmrUpdatedAt': fetchedAt
+                                }
+                            },
+                            { upsert: true }
+                        );
+                    }
+                } catch (e) {
+                    console.error('forecast_verify live fetch:', e.message);
+                }
+            }
+
+            const dayHours = (hours || []).filter(h => {
+                const d = (h.timeLocal || '').slice(0, 10);
+                return d === targetDateStr;
+            }).sort((a, b) => (a.timeLocal || '').localeCompare(b.timeLocal || ''));
+
+            const targetDate = new Date(targetDateStr + 'T12:00:00');
+            const shortDate = targetDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                day: '2-digit', month: '2-digit'
+            });
+            const isToday = targetDateStr === todayStr;
+
+            if (!dayHours.length) {
+                return ctx.reply(lang === 'uk'
+                    ? `⚠️ Немає даних Tomorrow.io на ${shortDate}. Спробуйте пізніше.`
+                    : `⚠️ No Tomorrow.io data for ${shortDate}. Try again later.`);
+            }
+
+            const { tioWeatherEmoji } = require('../utils/tomorrow');
+            const windUnit = user.units?.wind || 'ms';
+            const tempUnit = user.units?.temp || 'c';
+            const toTemp = (c) => {
+                if (c == null) return '—';
+                const v = tempUnit === 'f' ? (c * 9 / 5 + 32) : c;
+                return `${v >= 0 ? '' : ''}${Math.round(v)}°`;
+            };
+            const toWind = (ms) => {
+                if (ms == null) return '—';
+                if (windUnit === 'kmh') return `${Math.round(ms * 3.6)}`;
+                return `${Math.round(ms * 10) / 10}`;
+            };
+            const windLabel = windUnit === 'kmh' ? 'км/г' : 'м/с';
+
+            // Build rich HTML table
+            let msg = lang === 'uk'
+                ? `<h3>🔍 Перевірка · ${shortDate}</h3>`
+                : `<h3>🔍 Verify · ${shortDate}</h3>`;
+
+            msg += `<table bordered striped compact>` +
+                `<tr>` +
+                `<th>${lang === 'uk' ? 'Час' : 'Time'}</th>` +
+                `<th>${lang === 'uk' ? 'Ст' : 'Cd'}</th>` +
+                `<th>${lang === 'uk' ? 'Темп' : 'Temp'}</th>` +
+                `<th>${lang === 'uk' ? 'Опади' : 'Prec'}</th>` +
+                `<th>%</th>` +
+                `<th>${lang === 'uk' ? 'Вітер' : 'Wind'}</th>` +
+                `</tr>`;
+
+            for (const h of dayHours) {
+                const hh = (h.timeLocal || '').slice(11, 13) || String(h.hour ?? '').padStart(2, '0');
+                const emoji = tioWeatherEmoji(h.weatherCode);
+                const temp = toTemp(h.temperature);
+                const prec = h.precip != null ? Number(h.precip).toFixed(1) : '0.0';
+                const prob = h.precipProb != null ? String(Math.round(h.precipProb)) : '—';
+                const wind = toWind(h.windMs);
+                msg += `<tr>` +
+                    `<td>${hh}:00</td>` +
+                    `<td>${emoji}</td>` +
+                    `<td>${temp}</td>` +
+                    `<td>${prec}</td>` +
+                    `<td>${prob}</td>` +
+                    `<td>${wind}</td>` +
+                    `</tr>`;
+            }
+            msg += `</table>`;
+
+            const asOfStr = tmrUpdated
+                ? new Date(tmrUpdated).toLocaleString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                    timeZone: timezone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+                })
+                : '—';
+
+            const sourceLine = lang === 'uk'
+                ? `📡 Джерело: <b>Tomorrow.io</b> · оновлено ${asOfStr} · вітер у ${windLabel}`
+                : `📡 Source: <b>Tomorrow.io</b> · updated ${asOfStr} · wind in ${windLabel}`;
+
+            const legendList = lang === 'uk'
+                ? `<ul>` +
+                  `<li><b>Час</b> — година доби</li>` +
+                  `<li><b>Ст</b> — стан погоди (іконка)</li>` +
+                  `<li><b>Темп</b> — температура повітря на висоті 2 м</li>` +
+                  `<li><b>Опади</b> — кількість опадів, мм</li>` +
+                  `<li><b>%</b> — ймовірність опадів</li>` +
+                  `<li><b>Вітер</b> — швидкість вітру (${windLabel})</li>` +
+                  `</ul>`
+                : `<ul>` +
+                  `<li><b>Time</b> — hour of day</li>` +
+                  `<li><b>Cd</b> — weather condition (icon)</li>` +
+                  `<li><b>Temp</b> — air temperature at 2 m</li>` +
+                  `<li><b>Prec</b> — precipitation amount, mm</li>` +
+                  `<li><b>%</b> — precipitation probability</li>` +
+                  `<li><b>Wind</b> — wind speed (${windLabel})</li>` +
+                  `</ul>`;
+
+            msg += `<footer>${sourceLine}</footer>`;
+            msg += `<details>` +
+                `<summary>${lang === 'uk' ? '📖 Легенда заголовків' : '📖 Column legend'}</summary>` +
+                legendList +
+                `</details>`;
+
+            // Day navigation: other day + back to Open-Meteo hourly
+            const otherDate = new Date(targetDate);
+            if (isToday) otherDate.setDate(otherDate.getDate() + 1);
+            else otherDate.setDate(otherDate.getDate() - 1);
+            const otherDateStr = otherDate.toLocaleDateString('en-CA', { timeZone: timezone });
+            const otherShort = otherDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                day: '2-digit', month: '2-digit'
+            });
+            const otherLabel = lang === 'uk'
+                ? (isToday ? `➡️ На ${otherShort}` : `⬅️ На ${otherShort}`)
+                : (isToday ? `➡️ For ${otherShort}` : `⬅️ For ${otherShort}`);
+
+            const omLabel = lang === 'uk' ? '🌤 Open-Meteo' : '🌤 Open-Meteo';
+            const backLabel = lang === 'uk' ? '⬅️ Назад' : '⬅️ Back';
+
+            await ctx.api.sendRichMessage(ctx.chat.id, {
+                html: msg,
+                skip_entity_detection: true
+            }, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: otherLabel, callback_data: `forecast_verify|${otherDateStr}` },
+                            { text: omLabel, callback_data: `forecast_hourly|${targetDateStr}` }
+                        ]
+                    ]
+                }
+            });
+        } catch (error) {
+            console.error('forecast_verify error:', error);
+            await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
+        }
+    }
+
 
     // --- Agro recommendations callback ---
     else if (data[0] === 'agro_tomorrow') {
