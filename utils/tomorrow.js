@@ -1,7 +1,7 @@
 /**
  * Tomorrow.io helpers — shared by frost cron, check cron, and bot hourly «Tomorrow.io» / «Прогноз Tomorrow.io».
  *
- * Env: TOMORROW_IO_KEY
+ * Env: TOMORROW_IO_KEY 
  * API: GET https://api.tomorrow.io/v4/timelines
  */
 const axios = require('axios');
