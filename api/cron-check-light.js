@@ -661,7 +661,7 @@ module.exports = async (req, res) => {
                 }
 
                 
-                // --- Tomorrow.io hourly cache (for «Перевірити» in bot) ---
+                // --- Tomorrow.io hourly cache (for «Tomorrow.io» / «Прогноз Tomorrow.io» in bot) ---
                 // One request per city per cron run; skip if no key or recent cache (< 45 min).
                 try {
                     const TIO_KEY = process.env.TOMORROW_IO_KEY;

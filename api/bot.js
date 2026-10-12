@@ -1308,7 +1308,7 @@ bot.on("callback_query:data", async (ctx) => {
                     inline_keyboard: [
                         [
                             { text: otherLabel, callback_data: `forecast_hourly|${otherDateStr}` },
-                            { text: lang === 'uk' ? '🔍 Перевірити' : '🔍 Verify', callback_data: `forecast_verify|${targetDateStr}` }
+                            { text: lang === 'uk' ? 'Tomorrow.io' : 'Tomorrow.io', callback_data: `forecast_verify|${targetDateStr}` }
                         ]
                     ]
                 }
@@ -1407,33 +1407,57 @@ bot.on("callback_query:data", async (ctx) => {
             const daySum = summarizeDayHours(dayHours);
             const windUnit = user.units?.wind || 'ms';
             const tempUnit = user.units?.temp || 'c';
+            const windUnitStr = windUnit === 'kmh'
+                ? (lang === 'uk' ? 'км/г' : 'km/h')
+                : (lang === 'uk' ? 'м/с' : 'm/s');
+            const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
+            const displayCity = user.city || (lang === 'uk' ? 'Ваше місто' : 'Your city');
+            const formattedDate = targetDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
+                weekday: 'short', day: 'numeric', month: 'short'
+            });
+
             const toTemp = (c) => {
                 if (c == null) return '—';
                 const v = tempUnit === 'f' ? (c * 9 / 5 + 32) : c;
-                return `${v >= 0 ? '' : ''}${Math.round(v)}°`;
+                return `${Math.round(v)}°`;
             };
+            // Units only in table cells — not in footer
             const toWind = (ms) => {
                 if (ms == null) return '—';
-                if (windUnit === 'kmh') return `${Math.round(ms * 3.6)}`;
-                return `${Math.round(ms * 10) / 10}`;
+                const v = windUnit === 'kmh' ? Math.round(ms * 3.6) : Math.round(ms * 10) / 10;
+                return `${v}${windUnitStr}`;
             };
-            const windLabel = windUnit === 'kmh' ? 'км/г' : 'м/с';
 
-            // Build rich HTML table
+            // Header mirrors Open-Meteo hourly layout + «від Tomorrow.io»
             let msg = lang === 'uk'
-                ? `<h3>🔍 Перевірка · ${shortDate}</h3>`
-                : `<h3>🔍 Verify · ${shortDate}</h3>`;
+                ? `<h3>🌤 Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate}) від Tomorrow.io</h3>` +
+                  `<p>📍 <b>${displayCity}</b></p>`
+                : `<h3>🌤 Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate}) from Tomorrow.io</h3>` +
+                  `<p>📍 <b>${displayCity}</b></p>`;
 
-            // Day analysis (same idea as Open-Meteo hourly: totals + rainy windows)
             const tMin = daySum.minTemp != null ? Math.round(daySum.minTemp) : '—';
             const tMax = daySum.maxTemp != null ? Math.round(daySum.maxTemp) : '—';
             const sumMm = Number(daySum.totalPrecip || 0).toFixed(1);
-            const blocksLine = daySum.precipBlocks
-                ? (lang === 'uk' ? `Дощові години: <b>${daySum.precipBlocks}</b>` : `Rain hours: <b>${daySum.precipBlocks}</b>`)
-                : (lang === 'uk' ? 'Дощові години: немає' : 'Rain hours: none');
+
             msg += lang === 'uk'
-                ? `<p>🌡 ${tMin}…${tMax}°C · 💧 <b>${sumMm} мм</b> · ${blocksLine}</p>`
-                : `<p>🌡 ${tMin}…${tMax}°C · 💧 <b>${sumMm} mm</b> · ${blocksLine}</p>`;
+                ? `<p>🌡 Температура: <b>${tMin}°C … ${tMax}°C</b></p>`
+                : `<p>🌡 Temperature: <b>${tMin}°C … ${tMax}°C</b></p>`;
+
+            if (Number(daySum.totalPrecip) > 0 && daySum.precipBlocks) {
+                msg += lang === 'uk'
+                    ? `<p>💧 Дощитиме: <b>${daySum.precipBlocks}</b><br/>Загалом опадів на день: <b>${sumMm} ${precipUnitStr}</b></p>`
+                    : `<p>💧 Rain: <b>${daySum.precipBlocks}</b><br/>Total precip for the day: <b>${sumMm} ${precipUnitStr}</b></p>`;
+            } else {
+                msg += lang === 'uk'
+                    ? `<p>💧 Опадів не очікується</p>`
+                    : `<p>💧 No precipitation expected</p>`;
+            }
+
+            if (daySum.possibleBlocks) {
+                msg += lang === 'uk'
+                    ? `<p>👀 Можливий дощ: <b>${daySum.possibleBlocks}</b></p>`
+                    : `<p>👀 Possible rain: <b>${daySum.possibleBlocks}</b></p>`;
+            }
 
             msg += `<table bordered striped compact>` +
                 `<tr>` +
@@ -1470,8 +1494,8 @@ bot.on("callback_query:data", async (ctx) => {
                 : '—';
 
             const sourceLine = lang === 'uk'
-                ? `📡 Джерело: <b>Tomorrow.io</b> · оновлено ${asOfStr} · вітер у ${windLabel}`
-                : `📡 Source: <b>Tomorrow.io</b> · updated ${asOfStr} · wind in ${windLabel}`;
+                ? `📡 Джерело: <b>Tomorrow.io</b> · оновлено ${asOfStr}`
+                : `📡 Source: <b>Tomorrow.io</b> · updated ${asOfStr}`;
 
             const legendList = lang === 'uk'
                 ? `<ul>` +
@@ -1480,7 +1504,7 @@ bot.on("callback_query:data", async (ctx) => {
                   `<li><b>Темп</b> — температура повітря на висоті 2 м</li>` +
                   `<li><b>Опади</b> — кількість опадів, мм</li>` +
                   `<li><b>%</b> — ймовірність опадів</li>` +
-                  `<li><b>Вітер</b> — швидкість вітру (${windLabel})</li>` +
+                  `<li><b>Вітер</b> — швидкість вітру</li>` +
                   `</ul>`
                 : `<ul>` +
                   `<li><b>Time</b> — hour of day</li>` +
@@ -1488,7 +1512,7 @@ bot.on("callback_query:data", async (ctx) => {
                   `<li><b>Temp</b> — air temperature at 2 m</li>` +
                   `<li><b>Prec</b> — precipitation amount, mm</li>` +
                   `<li><b>%</b> — precipitation probability</li>` +
-                  `<li><b>Wind</b> — wind speed (${windLabel})</li>` +
+                  `<li><b>Wind</b> — wind speed</li>` +
                   `</ul>`;
 
             msg += `<footer>${sourceLine}</footer>`;
