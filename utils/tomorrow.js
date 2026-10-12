@@ -1,7 +1,7 @@
 /**
  * Tomorrow.io helpers — shared by frost cron, check cron, and bot hourly «Tomorrow.io» / «Прогноз Tomorrow.io».
  *
- * Env: TOMORROW_IO_KEY 
+ * Env: TOMORROW_IO_KEY
  * API: GET https://api.tomorrow.io/v4/timelines
  */
 const axios = require('axios');
@@ -159,7 +159,8 @@ async function fetchTomorrowHourly(lat, lon, timezone = 'Europe/Kyiv', opts = {}
     let startTime = opts.startTime;
     if (!startTime) {
         const { hour } = localNowParts(timezone);
-        const hoursBack = Math.min(36, Math.max(1, hour + 1));
+        // Full yesterday (24h) + today so far (+1h margin); cap 48h for API limits
+        const hoursBack = Math.min(48, Math.max(25, hour + 25));
         startTime = `nowMinus${hoursBack}h`;
     }
     const endTime = opts.endTime || 'nowPlus48h';
