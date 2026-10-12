@@ -11,7 +11,7 @@ const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../
 const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
 const { getGeomagLevel } = require('../utils/weather');
 
-/**
+/** 
  * Light weather check cron — identical alert logic to cron-check.js
  * but WITHOUT any Weatherbit API calls (to stay within free-tier limits).
  *
