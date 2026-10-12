@@ -1342,9 +1342,18 @@ bot.on("callback_query:data", async (ctx) => {
             let hours = cityDoc?.eveningState?.hourlyTmr || [];
             let tmrUpdated = cityDoc?.eveningState?.hourlyTmrUpdatedAt || null;
 
-            // Refresh if empty or older than 90 min
+            // Refresh if empty, older than 90 min, or today cache misses morning hours
+            // (older deploys used startTime=now → table started at "now", no 00:00–now)
             const ageMin = tmrUpdated ? (Date.now() - new Date(tmrUpdated).getTime()) / 60000 : 999;
-            const needRefresh = !hours.length || ageMin > 90;
+            const todayCached = (hours || []).filter(h => (h.timeLocal || '').startsWith(todayStr));
+            const minCachedHour = todayCached.length
+                ? Math.min(...todayCached.map(h => {
+                    const hr = h.hour != null ? h.hour : parseInt(String(h.timeLocal || '').slice(11, 13), 10);
+                    return Number.isNaN(hr) ? 99 : hr;
+                }))
+                : 99;
+            const missingMorning = targetDateStr === todayStr && minCachedHour > 0;
+            const needRefresh = !hours.length || ageMin > 90 || missingMorning;
             if (needRefresh && process.env.TOMORROW_IO_KEY) {
                 try {
                     const { fetchTomorrowHourly } = require('../utils/tomorrow');
@@ -1394,7 +1403,8 @@ bot.on("callback_query:data", async (ctx) => {
                     : `⚠️ No Tomorrow.io data for ${shortDate}. Try again later.`);
             }
 
-            const { tioWeatherEmoji } = require('../utils/tomorrow');
+            const { tioWeatherEmoji, summarizeDayHours } = require('../utils/tomorrow');
+            const daySum = summarizeDayHours(dayHours);
             const windUnit = user.units?.wind || 'ms';
             const tempUnit = user.units?.temp || 'c';
             const toTemp = (c) => {
@@ -1413,6 +1423,17 @@ bot.on("callback_query:data", async (ctx) => {
             let msg = lang === 'uk'
                 ? `<h3>🔍 Перевірка · ${shortDate}</h3>`
                 : `<h3>🔍 Verify · ${shortDate}</h3>`;
+
+            // Day analysis (same idea as Open-Meteo hourly: totals + rainy windows)
+            const tMin = daySum.minTemp != null ? Math.round(daySum.minTemp) : '—';
+            const tMax = daySum.maxTemp != null ? Math.round(daySum.maxTemp) : '—';
+            const sumMm = Number(daySum.totalPrecip || 0).toFixed(1);
+            const blocksLine = daySum.precipBlocks
+                ? (lang === 'uk' ? `Дощові години: <b>${daySum.precipBlocks}</b>` : `Rain hours: <b>${daySum.precipBlocks}</b>`)
+                : (lang === 'uk' ? 'Дощові години: немає' : 'Rain hours: none');
+            msg += lang === 'uk'
+                ? `<p>🌡 ${tMin}…${tMax}°C · 💧 <b>${sumMm} мм</b> · ${blocksLine}</p>`
+                : `<p>🌡 ${tMin}…${tMax}°C · 💧 <b>${sumMm} mm</b> · ${blocksLine}</p>`;
 
             msg += `<table bordered striped compact>` +
                 `<tr>` +

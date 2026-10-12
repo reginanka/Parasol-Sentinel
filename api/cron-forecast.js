@@ -935,6 +935,7 @@ module.exports = async (req, res) => {
                     const replyMarkup = {
                         inline_keyboard: [
                             [{ text: isUk ? `🌤 Погод.прогноз на ${targetHourlyShort}` : `🌤 Weather forecast for ${targetHourlyShort}`, callback_data: `forecast_hourly|${targetHourlyStr}` }],
+                            [{ text: isUk ? `🔍 Перевірити (${targetHourlyShort})` : `🔍 Verify (${targetHourlyShort})`, callback_data: `forecast_verify|${targetHourlyStr}` }],
                             [{ text: isUk ? '🧲 Прогноз магнітних бур' : '🧲 Geomagnetic storm forecast', callback_data: 'geomag_fc' }],
                             [{ text: isUk ? '🌱 Рекомендації на завтра' : '🌱 Agro-recommendations for tomorrow', callback_data: 'agro_tomorrow' }],
                             [{ text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }]
