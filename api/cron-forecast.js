@@ -899,7 +899,12 @@ module.exports = async (req, res) => {
                             const level = getGeomagLevel(kp);
                             if (level) {
                                 const label = isUk ? level.labelUk : level.labelEn;
-                                return `<td align="center" valign="middle">${level.badge}<br>${label}</td>`;
+                                // 🟠<br>Слабка буря G1<br>(Kp 5)
+                                const m = String(label).match(/^(.+?)\s*(\(Kp\s*\d+\))\s*$/i);
+                                const body = m
+                                    ? `${m[1]}<br>${m[2]}`
+                                    : label;
+                                return `<td align="center" valign="middle">${level.badge}<br>${body}</td>`;
                             }
                             return `<td align="center" valign="middle">—</td>`;
                         }).join('');
