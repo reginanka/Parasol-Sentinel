@@ -22,7 +22,7 @@ const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason, ge
 /**
  * Parasol Sentinel Bot - Core logic handler.
  * Design Choice: Using a hybrid approach (Serverless Webhook + Polling for Local Dev).
- * Migrated from Telegraf to grammY.
+ * Migrated from Telegraf to grammY. 
  */
 
 const dict = {
