@@ -437,8 +437,10 @@ module.exports = async (req, res) => {
                 // - "Canceled" only if PAST hours today had no rain AND remaining (future)
                 //   planned rain drops to 0. If past already had rain and only the remainder
                 //   was cleared → silent: no alert, no baseline rewrite (anti-spam / stable asOf).
-                // - Significant amount change: future total increased by ≥ 1.5 mm
-                // - Significant timing change: future rain window shifted by ≥ 2 h OR duration +≥ 2 h
+                // - amountUp: future total increased by ≥ (1.5 + 0.3 × old future total) mm
+                // - longer: duration +≥ 2 h AND amount also increased by ≥ dynamic threshold
+                // - appeared: was dry (future), now ≥ 1.5 mm (shifted removed — pure timing jitter is noise)
+                // - Priority: canceled > amountUp > longer > appeared (one kind per cycle)
                 // - When updating baseline, MERGE today's hours into existing array (keep other days)
                 // Also stores full hourly block for dashboard snapshot
                 let omHourlyForSnap = null;
@@ -622,8 +624,11 @@ module.exports = async (req, res) => {
                         if (!hasTodayBaseline) {
                             await mergeTodayBaseline();
                         } else {
+                            // Dynamic amount threshold: 1.5 + 0.3 × previous future total
+                            // (reduces spam when model already forecasts several mm)
                             const amountIncrease = newS.total - oldS.total;
-                            const significantAmountUp = amountIncrease >= 1.5;
+                            const amountThreshold = 1.5 + 0.3 * oldS.total;
+                            const significantAmountUp = amountIncrease >= amountThreshold;
 
                             // Past hours today (0 .. localHour-1) in baseline — rain already "started"
                             let pastHadRain = false;
@@ -643,18 +648,21 @@ module.exports = async (req, res) => {
                             // (avoids appear/cancel spam when the model wiggles the evening hours).
                             const fullyCanceled = futureWasPlanned && futureNowClear && !pastHadRain;
 
-                            let significantShift = false;
-                            let significantLonger = false;
-                            if (oldS.start != null && newS.start != null) {
-                                const startDelta = Math.abs(newS.start - oldS.start);
-                                const endDelta = Math.abs((newS.end ?? newS.start) - (oldS.end ?? oldS.start));
-                                significantShift = startDelta >= 2 || endDelta >= 2;
-                                significantLonger = (newS.duration - oldS.duration) >= 2;
-                            } else if (oldS.start == null && newS.start != null && (newS.total >= 0.5 || newS.duration >= 1)) {
-                                significantShift = true;
-                            }
+                            // longer: duration grew by ≥2h AND total mm also rose by ≥ dynamic threshold
+                            // (avoids "smeared weaker rain" spam)
+                            const significantLonger =
+                                (newS.duration - oldS.duration) >= 2 &&
+                                amountIncrease >= amountThreshold;
 
-                            const shouldAlert = fullyCanceled || significantAmountUp || significantShift || significantLonger;
+                            // appeared: was no future rain, now meaningful amount (≥1.5 mm)
+                            // shifted: REMOVED — hour-window jitter without amount change is noise
+                            const significantAppeared =
+                                oldS.start == null &&
+                                newS.start != null &&
+                                newS.total >= 1.5;
+
+                            // Priority: canceled > amountUp > longer > appeared (one kind only)
+                            const shouldAlert = fullyCanceled || significantAmountUp || significantLonger || significantAppeared;
 
                             if (shouldAlert) {
                                 // Message uses FULL-day schedule; decision was future-only
@@ -662,7 +670,7 @@ module.exports = async (req, res) => {
                                 if (fullyCanceled) precipKind = 'canceled';
                                 else if (significantAmountUp) precipKind = 'amountUp';
                                 else if (significantLonger) precipKind = 'longer';
-                                else if (significantShift) precipKind = (oldS.start == null) ? 'appeared' : 'shifted';
+                                else if (significantAppeared) precipKind = 'appeared';
 
                                 if (precipKind) {
                                     reasons.push("зміна опадів");
