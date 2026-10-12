@@ -218,14 +218,17 @@ function fmtHourBlocks(hours) {
 
 /**
  * Day summary for analysis (like Open-Meteo hourly view):
- * total mm, actual rain blocks (precip > 0), possible rain (0 mm but prob > threshold), min/max temp.
+ * total mm, actual rain blocks, possible rain (0.0 mm in table but prob > threshold), min/max temp.
+ *
+ * Classification uses 1-decimal precision (same as table display), so tiny intensity
+ * that rounds to 0.0 is treated as dry and can appear under «Можливий дощ».
  */
 function summarizeDayHours(dayHours, rainProbThreshold = 15) {
     const list = dayHours || [];
     let totalPrecip = 0;
     const temps = [];
-    const wetHours = [];      // precip > 0
-    const possibleHours = []; // precip == 0 && prob > threshold
+    const wetHours = [];      // displayed precip > 0.0
+    const possibleHours = []; // displayed 0.0 mm && prob > threshold
     for (const h of list) {
         const p = Number(h.precip) || 0;
         const pr = h.precipProb != null ? Number(h.precipProb) : 0;
@@ -237,7 +240,9 @@ function summarizeDayHours(dayHours, rainProbThreshold = 15) {
             ? h.hour
             : parseInt(String(h.timeLocal || '').slice(11, 13), 10);
         if (Number.isNaN(hour)) continue;
-        if (p > 0) {
+        // Match table: toFixed(1) — 0.04 → "0.0" → not «Дощитиме», maybe «Можливий дощ»
+        const pDisplay = Math.round(p * 10) / 10;
+        if (pDisplay > 0) {
             wetHours.push(hour);
         } else if (pr > rainProbThreshold) {
             possibleHours.push(hour);
