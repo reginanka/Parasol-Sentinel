@@ -1284,20 +1284,21 @@ bot.on("callback_query:data", async (ctx) => {
                 legendList +
                 `</details>`;
 
-            // Day nav: always yesterday / today / tomorrow (dates only)
-            const dayNavLocale = lang === 'uk' ? 'uk-UA' : 'en-US';
-            const fmtDayShort = (d) => d.toLocaleDateString(dayNavLocale, { day: '2-digit', month: '2-digit' });
-            const fmtDayYmd = (d) => d.toLocaleDateString('en-CA', { timeZone: timezone });
-            const baseToday = new Date(todayStr + 'T12:00:00');
-            // Yesterday / today / tomorrow — hide the day already open (fit on one row)
-            const navDays = [-1, 0, 1].map((off) => {
-                const d = new Date(baseToday);
-                d.setDate(d.getDate() + off);
-                const ymd = fmtDayYmd(d);
-                const short = fmtDayShort(d);
-                return { text: short, callback_data: `forecast_hourly|${ymd}`, _ymd: ymd };
-            }).filter((b) => b._ymd !== targetDateStr)
-              .map(({ text, callback_data }) => ({ text, callback_data }));
+            // Day nav: yesterday / today / tomorrow (dates), hide open day — one row
+            const addDaysYmd = (ymd, days) => {
+                const [y, m, d] = ymd.split('-').map(Number);
+                const dt = new Date(Date.UTC(y, m - 1, d + days));
+                return dt.toISOString().slice(0, 10);
+            };
+            const shortFromYmd = (ymd) => {
+                const [, m, d] = ymd.split('-');
+                return `${d}.${m}`;
+            };
+            const navRow = [-1, 0, 1]
+                .map((off) => addDaysYmd(todayStr, off))
+                .filter((ymd) => ymd !== targetDateStr)
+                .map((ymd) => ({ text: shortFromYmd(ymd), callback_data: `forecast_hourly|${ymd}` }));
+            navRow.push({ text: 'Tomorrow.io', callback_data: `forecast_verify|${targetDateStr}` });
 
             // sendRichMessage: native table via rich_message.html (Bot API 10.1+)
             await ctx.api.sendRichMessage(ctx.chat.id, {
@@ -1305,12 +1306,7 @@ bot.on("callback_query:data", async (ctx) => {
                 skip_entity_detection: true
             }, {
                 reply_markup: {
-                    inline_keyboard: [
-                        navDays,
-                        [
-                            { text: 'Tomorrow.io', callback_data: `forecast_verify|${targetDateStr}` }
-                        ]
-                    ]
+                    inline_keyboard: [navRow]
                 }
             });
         } catch (error) {
@@ -1521,32 +1517,28 @@ bot.on("callback_query:data", async (ctx) => {
                 legendList +
                 `</details>`;
 
-            // Day nav: always yesterday / today / tomorrow (dates only)
-            const dayNavLocale = lang === 'uk' ? 'uk-UA' : 'en-US';
-            const fmtDayShort = (d) => d.toLocaleDateString(dayNavLocale, { day: '2-digit', month: '2-digit' });
-            const fmtDayYmd = (d) => d.toLocaleDateString('en-CA', { timeZone: timezone });
-            const baseToday = new Date(todayStr + 'T12:00:00');
-            // Yesterday / today / tomorrow — hide the day already open
-            const navDays = [-1, 0, 1].map((off) => {
-                const d = new Date(baseToday);
-                d.setDate(d.getDate() + off);
-                const ymd = fmtDayYmd(d);
-                const short = fmtDayShort(d);
-                return { text: short, callback_data: `forecast_verify|${ymd}`, _ymd: ymd };
-            }).filter((b) => b._ymd !== targetDateStr)
-              .map(({ text, callback_data }) => ({ text, callback_data }));
+            // Day nav: yesterday / today / tomorrow (dates), hide open day — one row
+            const addDaysYmd = (ymd, days) => {
+                const [y, m, d] = ymd.split('-').map(Number);
+                const dt = new Date(Date.UTC(y, m - 1, d + days));
+                return dt.toISOString().slice(0, 10);
+            };
+            const shortFromYmd = (ymd) => {
+                const [, m, d] = ymd.split('-');
+                return `${d}.${m}`;
+            };
+            const navRow = [-1, 0, 1]
+                .map((off) => addDaysYmd(todayStr, off))
+                .filter((ymd) => ymd !== targetDateStr)
+                .map((ymd) => ({ text: shortFromYmd(ymd), callback_data: `forecast_verify|${ymd}` }));
+            navRow.push({ text: '🌤 Open-Meteo', callback_data: `forecast_hourly|${targetDateStr}` });
 
             await ctx.api.sendRichMessage(ctx.chat.id, {
                 html: msg,
                 skip_entity_detection: true
             }, {
                 reply_markup: {
-                    inline_keyboard: [
-                        navDays,
-                        [
-                            { text: '🌤 Open-Meteo', callback_data: `forecast_hourly|${targetDateStr}` }
-                        ]
-                    ]
+                    inline_keyboard: [navRow]
                 }
             });
         } catch (error) {
