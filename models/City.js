@@ -13,6 +13,9 @@ const CitySchema = new mongoose.Schema({
         forecast: Array,
         hourlyPrecip: Array,
         hourlyPrecipUpdatedAt: Date,
+        /** Tomorrow.io hourly cache: [{ timeLocal, temperature, precip, precipProb, windMs, weatherCode }, ...] */
+        hourlyTmr: Array,
+        hourlyTmrUpdatedAt: Date,
         days: { type: mongoose.Schema.Types.Mixed, default: {} },
         forecastedKp: Number,
         forecastedKpDate: String
