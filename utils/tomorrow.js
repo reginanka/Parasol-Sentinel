@@ -103,14 +103,42 @@ function parseHourlyInterval(interval, timezone) {
 }
 
 /**
+ * Local hour 0–23 and YYYY-MM-DD for "now" in timezone.
+ */
+function localNowParts(timezone = 'Europe/Kyiv') {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hour12: false
+    }).formatToParts(new Date());
+    const y = parts.find(p => p.type === 'year')?.value;
+    const m = parts.find(p => p.type === 'month')?.value;
+    const d = parts.find(p => p.type === 'day')?.value;
+    const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10) % 24;
+    return {
+        dateStr: (y && m && d) ? `${y}-${m}-${d}` : null,
+        hour: h
+    };
+}
+
+/**
  * Fetch hourly timeline from Tomorrow.io for lat/lon.
+ * By default includes PAST hours of today (from local midnight) + forecast ahead.
+ *
+ * Timelines API accepts startTime = now | nowMinusXh | ISO8601.
+ * We use nowMinus{localHour+1}h so the response covers 00:00 local → endTime.
+ *
  * @param {number} lat
  * @param {number} lon
  * @param {string} timezone IANA tz
  * @param {object} [opts]
+ * @param {string} [opts.startTime] override (default: from local midnight)
  * @param {string} [opts.endTime='nowPlus48h']
  * @param {string} [opts.apiKey]
- * @returns {Promise<{ hours: Array, fetchedAt: Date }>}
+ * @returns {Promise<{ hours: Array, fetchedAt: Date, rawCount: number }>}
  */
 async function fetchTomorrowHourly(lat, lon, timezone = 'Europe/Kyiv', opts = {}) {
     const apiKey = opts.apiKey || process.env.TOMORROW_IO_KEY;
@@ -126,7 +154,16 @@ async function fetchTomorrowHourly(lat, lon, timezone = 'Europe/Kyiv', opts = {}
         'windSpeed'
     ].join(',');
 
+    // Cover from local midnight today so past hours of the day are available
+    // (same idea as Open-Meteo full-day table). +1h margin for TZ edge cases.
+    let startTime = opts.startTime;
+    if (!startTime) {
+        const { hour } = localNowParts(timezone);
+        const hoursBack = Math.min(36, Math.max(1, hour + 1));
+        startTime = `nowMinus${hoursBack}h`;
+    }
     const endTime = opts.endTime || 'nowPlus48h';
+
     const url =
         `${TIO_BASE}` +
         `?location=${lat},${lon}` +
@@ -134,7 +171,7 @@ async function fetchTomorrowHourly(lat, lon, timezone = 'Europe/Kyiv', opts = {}
         `&timesteps=1h` +
         `&units=metric` +
         `&timezone=${encodeURIComponent(timezone)}` +
-        `&startTime=now` +
+        `&startTime=${encodeURIComponent(startTime)}` +
         `&endTime=${encodeURIComponent(endTime)}` +
         `&apikey=${encodeURIComponent(apiKey)}`;
 
@@ -156,7 +193,55 @@ async function fetchTomorrowHourly(lat, lon, timezone = 'Europe/Kyiv', opts = {}
  * Filter parsed hours to a single calendar day YYYY-MM-DD.
  */
 function filterHoursByDate(hours, dateStr) {
-    return (hours || []).filter(h => h.date === dateStr);
+    return (hours || []).filter(h => h.date === dateStr || (h.timeLocal || '').startsWith(dateStr));
+}
+
+/**
+ * Day summary for analysis (like Open-Meteo hourly view):
+ * total mm, rainy blocks (precip > 0 or prob > 15), min/max temp.
+ */
+function summarizeDayHours(dayHours, rainProbThreshold = 15) {
+    const list = dayHours || [];
+    let totalPrecip = 0;
+    const temps = [];
+    const wetHours = [];
+    for (const h of list) {
+        const p = Number(h.precip) || 0;
+        const pr = h.precipProb != null ? Number(h.precipProb) : 0;
+        totalPrecip += p;
+        if (h.temperature != null && !Number.isNaN(Number(h.temperature))) {
+            temps.push(Number(h.temperature));
+        }
+        const hour = h.hour != null
+            ? h.hour
+            : parseInt(String(h.timeLocal || '').slice(11, 13), 10);
+        if (!Number.isNaN(hour) && (p > 0 || pr > rainProbThreshold)) {
+            wetHours.push(hour);
+        }
+    }
+    wetHours.sort((a, b) => a - b);
+    const blocks = [];
+    for (const hr of wetHours) {
+        if (blocks.length && hr === blocks[blocks.length - 1][1] + 1) {
+            blocks[blocks.length - 1][1] = hr;
+        } else {
+            blocks.push([hr, hr]);
+        }
+    }
+    const fmtBlocks = blocks.map(([a, b]) => {
+        const from = `${String(a).padStart(2, '0')}:00`;
+        const to = `${String(b).padStart(2, '0')}:00`;
+        return a === b ? from : `${from}–${to}`;
+    }).join(', ');
+
+    return {
+        totalPrecip,
+        minTemp: temps.length ? Math.min(...temps) : null,
+        maxTemp: temps.length ? Math.max(...temps) : null,
+        wetHours,
+        precipBlocks: fmtBlocks,
+        hourCount: list.length
+    };
 }
 
 module.exports = {
@@ -164,5 +249,7 @@ module.exports = {
     tioWeatherEmoji,
     parseHourlyInterval,
     fetchTomorrowHourly,
-    filterHoursByDate
+    filterHoursByDate,
+    summarizeDayHours,
+    localNowParts
 };
