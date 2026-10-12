@@ -1278,7 +1278,7 @@ bot.on("callback_query:data", async (ctx) => {
                   `</ul>`;
 
             // Source always visible; only the column legend is collapsible
-            msg += `<p>${sourceLine}</p>`;
+            msg += `<footer>${sourceLine}</footer>`;
             msg += `<details>` +
                 `<summary>${lang === 'uk' ? '📖 Легенда заголовків' : '📖 Column legend'}</summary>` +
                 legendList +
@@ -1878,7 +1878,7 @@ bot.on("callback_query:data", async (ctx) => {
                 body += `</blockquote>`;
             }
             body += table;
-            body += `<p><i><small>${sourceLine}</small></i></p>`;
+            body += `<footer>${sourceLine}</footer>`;
 
             await ctx.api.sendRichMessage(ctx.chat.id, {
                 html: body,
