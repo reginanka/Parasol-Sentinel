@@ -457,8 +457,15 @@ module.exports = async (req, res) => {
             const level = getGeomagLevel(kp);
             if (level && kp >= 5) {
                 const label = isUk ? level.labelUk : level.labelEn;
-                // label часто починається з великої («Слабка буря…») — робимо маленьку для середини речення
-                const labelMid = label.charAt(0).toLowerCase() + label.slice(1);
+                // label часто з великої («Слабка буря…») — маленька + «магнітна» для ясності
+                let labelMid = label.charAt(0).toLowerCase() + label.slice(1);
+                if (isUk) {
+                    labelMid = labelMid
+                        .replace(/\bбуря\b/, 'магнітна буря')
+                        .replace(/\bшторм\b/, 'магнітний шторм');
+                } else {
+                    labelMid = labelMid.replace(/\bstorm\b/i, 'magnetic storm');
+                }
                 highlights.push(isUk
                     ? `у ${dayName} ${labelMid}`
                     : `on ${dayName} ${labelMid}`);

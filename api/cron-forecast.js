@@ -687,7 +687,15 @@ module.exports = async (req, res) => {
                         const level = getGeomagLevel(kp);
                         if (level && kp >= 5) {
                             const label = isUk ? level.labelUk : level.labelEn;
-                            const labelMid = label.charAt(0).toLowerCase() + label.slice(1);
+                            let labelMid = label.charAt(0).toLowerCase() + label.slice(1);
+                            // Clarify: «слабка буря» → «слабка магнітна буря»
+                            if (isUk) {
+                                labelMid = labelMid
+                                    .replace(/\bбуря\b/, 'магнітна буря')
+                                    .replace(/\bшторм\b/, 'магнітний шторм');
+                            } else {
+                                labelMid = labelMid.replace(/\bstorm\b/i, 'magnetic storm');
+                            }
                             highlights.push(isUk
                                 ? `у ${dayName} ${labelMid}`
                                 : `on ${dayName} ${labelMid}`);
