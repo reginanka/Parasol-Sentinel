@@ -11,7 +11,7 @@ const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../
 const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
 const { getGeomagLevel } = require('../utils/weather');
 
-/** 
+/**
  * Light weather check cron — identical alert logic to cron-check.js
  * but WITHOUT any Weatherbit API calls (to stay within free-tier limits).
  *
@@ -257,7 +257,7 @@ module.exports = async (req, res) => {
                     `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,apparent_temperature,wind_direction_10m,surface_pressure` +
                     `&daily=temperature_2m_min,temperature_2m_max,temperature_2m_mean` +
                     `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
-                    `&timezone=auto&forecast_days=3`;
+                    `&timezone=auto&forecast_days=3&past_days=1`;
 
                 const omRes = await axios.get(omUrl, { timeout: 12000 });
                 const om = omRes.data;

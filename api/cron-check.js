@@ -448,7 +448,7 @@ module.exports = async (req, res) => {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                         `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
                         `&daily=temperature_2m_mean` +
-                        `&timezone=auto&forecast_days=3`;
+                        `&timezone=auto&forecast_days=3&past_days=1`;
                     const omRes = await axios.get(omUrl);
                     if (omRes.data && omRes.data.hourly) {
                         const allTimes = omRes.data.hourly.time;

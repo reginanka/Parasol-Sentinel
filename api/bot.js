@@ -979,7 +979,7 @@ bot.on("callback_query:data", async (ctx) => {
                 const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
                     `&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
                     `&daily=temperature_2m_mean` +
-                    `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
+                    `&timezone=${encodeURIComponent(timezone)}&forecast_days=3&past_days=1`;
                 const omRes = await axios.get(omUrl);
                 if (!omRes.data || !omRes.data.hourly) {
                     return ctx.reply(lang === 'uk' ? '❌ Помилка отримання даних погоди.' : '❌ Failed to fetch weather data.');
@@ -1005,7 +1005,7 @@ bot.on("callback_query:data", async (ctx) => {
                     const omFrostUrl = `https://api.open-meteo.com/v1/forecast?latitude=${user.lat}&longitude=${user.lon}` +
                         `&hourly=soil_temperature_0cm,soil_temperature_6cm` +
                         `&daily=temperature_2m_mean` +
-                        `&timezone=${encodeURIComponent(timezone)}&forecast_days=3`;
+                        `&timezone=${encodeURIComponent(timezone)}&forecast_days=3&past_days=1`;
                     const omFrostRes = await axios.get(omFrostUrl);
                     if (omFrostRes.data?.hourly) {
                         if (!soil_temperature_0cm?.length) soil_temperature_0cm = omFrostRes.data.hourly.soil_temperature_0cm || [];
@@ -1284,20 +1284,20 @@ bot.on("callback_query:data", async (ctx) => {
                 legendList +
                 `</details>`;
 
-            // Button for the adjacent day (today ↔ tomorrow)
-            const otherDate = new Date(targetDate);
-            if (isToday) {
-                otherDate.setDate(otherDate.getDate() + 1);
-            } else {
-                otherDate.setDate(otherDate.getDate() - 1);
-            }
-            const otherDateStr = otherDate.toLocaleDateString('en-CA', { timeZone: timezone });
-            const otherShort = otherDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
-                day: '2-digit', month: '2-digit'
-            });
-            const otherLabel = lang === 'uk'
-                ? (isToday ? `➡️ На ${otherShort}` : `⬅️ На ${otherShort}`)
-                : (isToday ? `➡️ For ${otherShort}` : `⬅️ For ${otherShort}`);
+            // Day nav: always yesterday / today / tomorrow (dates only)
+            const dayNavLocale = lang === 'uk' ? 'uk-UA' : 'en-US';
+            const fmtDayShort = (d) => d.toLocaleDateString(dayNavLocale, { day: '2-digit', month: '2-digit' });
+            const fmtDayYmd = (d) => d.toLocaleDateString('en-CA', { timeZone: timezone });
+            const baseToday = new Date(todayStr + 'T12:00:00');
+            // Yesterday / today / tomorrow — hide the day already open (fit on one row)
+            const navDays = [-1, 0, 1].map((off) => {
+                const d = new Date(baseToday);
+                d.setDate(d.getDate() + off);
+                const ymd = fmtDayYmd(d);
+                const short = fmtDayShort(d);
+                return { text: short, callback_data: `forecast_hourly|${ymd}`, _ymd: ymd };
+            }).filter((b) => b._ymd !== targetDateStr)
+              .map(({ text, callback_data }) => ({ text, callback_data }));
 
             // sendRichMessage: native table via rich_message.html (Bot API 10.1+)
             await ctx.api.sendRichMessage(ctx.chat.id, {
@@ -1306,9 +1306,9 @@ bot.on("callback_query:data", async (ctx) => {
             }, {
                 reply_markup: {
                     inline_keyboard: [
+                        navDays,
                         [
-                            { text: otherLabel, callback_data: `forecast_hourly|${otherDateStr}` },
-                            { text: lang === 'uk' ? 'Tomorrow.io' : 'Tomorrow.io', callback_data: `forecast_verify|${targetDateStr}` }
+                            { text: 'Tomorrow.io', callback_data: `forecast_verify|${targetDateStr}` }
                         ]
                     ]
                 }
@@ -1521,20 +1521,20 @@ bot.on("callback_query:data", async (ctx) => {
                 legendList +
                 `</details>`;
 
-            // Day navigation: other day + back to Open-Meteo hourly
-            const otherDate = new Date(targetDate);
-            if (isToday) otherDate.setDate(otherDate.getDate() + 1);
-            else otherDate.setDate(otherDate.getDate() - 1);
-            const otherDateStr = otherDate.toLocaleDateString('en-CA', { timeZone: timezone });
-            const otherShort = otherDate.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
-                day: '2-digit', month: '2-digit'
-            });
-            const otherLabel = lang === 'uk'
-                ? (isToday ? `➡️ На ${otherShort}` : `⬅️ На ${otherShort}`)
-                : (isToday ? `➡️ For ${otherShort}` : `⬅️ For ${otherShort}`);
-
-            const omLabel = lang === 'uk' ? '🌤 Open-Meteo' : '🌤 Open-Meteo';
-            const backLabel = lang === 'uk' ? '⬅️ Назад' : '⬅️ Back';
+            // Day nav: always yesterday / today / tomorrow (dates only)
+            const dayNavLocale = lang === 'uk' ? 'uk-UA' : 'en-US';
+            const fmtDayShort = (d) => d.toLocaleDateString(dayNavLocale, { day: '2-digit', month: '2-digit' });
+            const fmtDayYmd = (d) => d.toLocaleDateString('en-CA', { timeZone: timezone });
+            const baseToday = new Date(todayStr + 'T12:00:00');
+            // Yesterday / today / tomorrow — hide the day already open
+            const navDays = [-1, 0, 1].map((off) => {
+                const d = new Date(baseToday);
+                d.setDate(d.getDate() + off);
+                const ymd = fmtDayYmd(d);
+                const short = fmtDayShort(d);
+                return { text: short, callback_data: `forecast_verify|${ymd}`, _ymd: ymd };
+            }).filter((b) => b._ymd !== targetDateStr)
+              .map(({ text, callback_data }) => ({ text, callback_data }));
 
             await ctx.api.sendRichMessage(ctx.chat.id, {
                 html: msg,
@@ -1542,9 +1542,9 @@ bot.on("callback_query:data", async (ctx) => {
             }, {
                 reply_markup: {
                     inline_keyboard: [
+                        navDays,
                         [
-                            { text: otherLabel, callback_data: `forecast_verify|${otherDateStr}` },
-                            { text: omLabel, callback_data: `forecast_hourly|${targetDateStr}` }
+                            { text: '🌤 Open-Meteo', callback_data: `forecast_hourly|${targetDateStr}` }
                         ]
                     ]
                 }
