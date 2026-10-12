@@ -1106,6 +1106,8 @@ bot.on("callback_query:data", async (ctx) => {
 
             const precipUnitStr = lang === 'uk' ? 'мм' : 'mm';
             const isToday = targetDateStr === todayStr;
+            const dayRelUk = isToday ? 'сьогодні' : (targetDateStr < todayStr ? 'вчора' : 'завтра');
+            const dayRelEn = isToday ? 'today' : (targetDateStr < todayStr ? 'yesterday' : 'tomorrow');
 
             // Soil frost: min soil_temperature_0cm for the day ≤ 0.5 AND temperature_2m_mean > 0
             let frostPlanned = false;
@@ -1160,9 +1162,9 @@ bot.on("callback_query:data", async (ctx) => {
 
             // Rich HTML: use <p>/<br/> — plain \n does not create line breaks in sendRichMessage
             let msg = lang === 'uk'
-                ? `<h3>🌤 Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate})</h3>` +
+                ? `<h3>🌤 Погодинний прогноз на ${dayRelUk} (${formattedDate})</h3>` +
                   `<p>📍 <b>${displayCity}</b></p>`
-                : `<h3>🌤 Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate})</h3>` +
+                : `<h3>🌤 Hourly forecast for ${dayRelEn} (${formattedDate})</h3>` +
                   `<p>📍 <b>${displayCity}</b></p>`;
 
             if (frostPlanned && isFrostSeason(new Date(), timezone || 'Europe/Kyiv')) {
@@ -1343,8 +1345,7 @@ bot.on("callback_query:data", async (ctx) => {
             let hours = cityDoc?.eveningState?.hourlyTmr || [];
             let tmrUpdated = cityDoc?.eveningState?.hourlyTmrUpdatedAt || null;
 
-            // Refresh if empty, older than 90 min, or today cache misses morning hours
-            // (older deploys used startTime=now → table started at "now", no 00:00–now)
+            // Refresh if empty, stale, today misses morning, or target day incomplete (e.g. only 23:00 of yesterday)
             const ageMin = tmrUpdated ? (Date.now() - new Date(tmrUpdated).getTime()) / 60000 : 999;
             const todayCached = (hours || []).filter(h => (h.timeLocal || '').startsWith(todayStr));
             const minCachedHour = todayCached.length
@@ -1354,7 +1355,9 @@ bot.on("callback_query:data", async (ctx) => {
                 }))
                 : 99;
             const missingMorning = targetDateStr === todayStr && minCachedHour > 0;
-            const needRefresh = !hours.length || ageMin > 90 || missingMorning;
+            const targetCached = (hours || []).filter(h => (h.timeLocal || '').startsWith(targetDateStr));
+            const incompleteTarget = targetCached.length > 0 && targetCached.length < 20;
+            const needRefresh = !hours.length || ageMin > 90 || missingMorning || incompleteTarget;
             if (needRefresh && process.env.TOMORROW_IO_KEY) {
                 try {
                     const { fetchTomorrowHourly } = require('../utils/tomorrow');
@@ -1397,6 +1400,8 @@ bot.on("callback_query:data", async (ctx) => {
                 day: '2-digit', month: '2-digit'
             });
             const isToday = targetDateStr === todayStr;
+            const dayRelUk = isToday ? 'сьогодні' : (targetDateStr < todayStr ? 'вчора' : 'завтра');
+            const dayRelEn = isToday ? 'today' : (targetDateStr < todayStr ? 'yesterday' : 'tomorrow');
 
             if (!dayHours.length) {
                 return ctx.reply(lang === 'uk'
@@ -1431,9 +1436,9 @@ bot.on("callback_query:data", async (ctx) => {
 
             // Header mirrors Open-Meteo hourly layout + «від Tomorrow.io»
             let msg = lang === 'uk'
-                ? `<h3>🌤 Погодинний прогноз на ${isToday ? 'сьогодні' : 'завтра'} (${formattedDate}) від Tomorrow.io</h3>` +
+                ? `<h3>🌤 Погодинний прогноз на ${dayRelUk} (${formattedDate}) від Tomorrow.io</h3>` +
                   `<p>📍 <b>${displayCity}</b></p>`
-                : `<h3>🌤 Hourly forecast for ${isToday ? 'today' : 'tomorrow'} (${formattedDate}) from Tomorrow.io</h3>` +
+                : `<h3>🌤 Hourly forecast for ${dayRelEn} (${formattedDate}) from Tomorrow.io</h3>` +
                   `<p>📍 <b>${displayCity}</b></p>`;
 
             const tMin = daySum.minTemp != null ? Math.round(daySum.minTemp) : '—';
