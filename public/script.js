@@ -830,8 +830,12 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 throw new Error('Internal API failed');
             }
             const data = await response.json();
-            // Successful personal load → keep credentials for PWA relaunch
-            if (userId && sig) {
+            // Persist durable HMAC from server (works after PWA install without Telegram initData)
+            if (data.auth?.user && data.auth?.sig) {
+                currentUserId = String(data.auth.user);
+                currentSig = String(data.auth.sig);
+                saveAuthCredentials(currentUserId, currentSig);
+            } else if (userId && sig) {
                 saveAuthCredentials(userId, sig);
             }
 
