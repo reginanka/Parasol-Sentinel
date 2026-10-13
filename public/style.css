@@ -833,20 +833,24 @@ main {
 
 .pwa-install-inner {
     max-width: 560px;
+    width: 100%;
     margin: 0 auto;
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem 1rem;
     flex-wrap: wrap;
+    text-align: center;
 }
 
 .pwa-install-copy {
-    flex: 1 1 200px;
+    flex: 1 1 100%;
     min-width: 0;
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 0.35rem;
+    text-align: center;
 }
 
 .pwa-install-title {
@@ -868,9 +872,28 @@ main {
 .pwa-install-actions {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.4rem;
     flex-shrink: 0;
     flex-wrap: wrap;
+    width: 100%;
+}
+
+@media (min-width: 480px) {
+    .pwa-install-inner {
+        flex-wrap: nowrap;
+        justify-content: space-between;
+        text-align: left;
+    }
+    .pwa-install-copy {
+        flex: 1 1 auto;
+        align-items: flex-start;
+        text-align: left;
+    }
+    .pwa-install-actions {
+        width: auto;
+        justify-content: flex-end;
+    }
 }
 
 .pwa-install-btn,
