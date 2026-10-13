@@ -12,6 +12,22 @@ let currentUserId = null;  // Telegram user ID (from URL param, WebApp, or local
 let currentSig = null;     // HMAC signature (only present with personal link)
 let deferredInstallPrompt = null; // beforeinstallprompt for PWA install banner
 
+// Capture install event as early as possible (before any UI setup)
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    console.log('[PWA] beforeinstallprompt captured');
+});
+window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    console.log('[PWA] appinstalled');
+    try {
+        document.getElementById('pwa-install-banner')?.setAttribute('hidden', '');
+        document.getElementById('footer-install-btn')?.setAttribute('hidden', '');
+        document.getElementById('footer-install-hint')?.setAttribute('hidden', '');
+    } catch (_) {}
+});
+
 const i18n = {
     uk: {
         actual: "Актуально",
@@ -88,6 +104,9 @@ const i18n = {
         pwaTgFallback: "Натисни ⋯ → «Відкрити в браузері», потім у Chrome: меню → Встановити додаток.",
         pwaFooterHint: "Відкриє персональне посилання в браузері — там можна встановити додаток на телефон.",
         pwaFooterHintTg: "Додає ярлик на головний екран. Якщо не спрацює — відкриємо в Chrome з твоїм доступом.",
+        pwaPromptMissing: "Меню Chrome → «Встановити додаток» (або ⋮ → Встановити).",
+        pwaOpeningBrowser: "Відкриваємо в браузері…",
+        pwaLinkCopiedInstall: "Посилання скопійовано. Відкрий у Chrome → ⋮ → Встановити додаток.",
         pwaReauth: "Відкрий посилання з бота, щоб відновити доступ",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
@@ -180,6 +199,9 @@ const i18n = {
         pwaTgFallback: "Tap ⋯ → Open in browser, then in Chrome: menu → Install app.",
         pwaFooterHint: "Opens your personal link in the browser — you can install the app from there.",
         pwaFooterHintTg: "Adds a home-screen shortcut. If it fails, we open Chrome with your access.",
+        pwaPromptMissing: "Chrome menu → “Install app” (or ⋮ → Install).",
+        pwaOpeningBrowser: "Opening in browser…",
+        pwaLinkCopiedInstall: "Link copied. Open in Chrome → ⋮ → Install app.",
         pwaReauth: "Open the link from the bot to restore access",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
@@ -314,10 +336,8 @@ function buildPersonalInstallUrl() {
     const origin = window.location.origin;
     const params = new URLSearchParams();
     params.set('source', 'pwa');
-    const uid = currentUserId || null;
-    const sig = currentSig || null;
-    if (uid) params.set('user', String(uid));
-    if (sig) params.set('sig', String(sig));
+    if (currentUserId) params.set('user', String(currentUserId));
+    if (currentSig) params.set('sig', String(currentSig));
     return `${origin}/?${params.toString()}`;
 }
 
@@ -327,11 +347,97 @@ function isAppAlreadyInstalled() {
     return false;
 }
 
+async function copyText(text) {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (_) {}
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
 /**
- * Footer "Install app" button:
- * - hidden if already installed
- * - Telegram: try native addToHomeScreen, else open personal link in external browser
- * - Chrome: use beforeinstallprompt if available, else open personal URL
+ * Single install entry for footer + bottom banner.
+ * Always gives user feedback (toast). Never silent no-op.
+ */
+async function triggerInstallFlow() {
+    const t = i18n[currentLang] || i18n.uk;
+    const tg = window.Telegram?.WebApp;
+    const inTelegram = isTelegramWebView();
+    const personalUrl = buildPersonalInstallUrl();
+
+    if (currentUserId && currentSig) {
+        saveAuthCredentials(currentUserId, currentSig);
+    }
+
+    // 1) Native Chrome / Edge install dialog
+    if (deferredInstallPrompt) {
+        try {
+            deferredInstallPrompt.prompt();
+            const choice = await deferredInstallPrompt.userChoice;
+            console.log('[PWA] userChoice', choice);
+            deferredInstallPrompt = null;
+            if (choice?.outcome === 'accepted') {
+                document.getElementById('pwa-install-banner')?.setAttribute('hidden', '');
+                document.getElementById('footer-install-btn')?.setAttribute('hidden', '');
+                document.getElementById('footer-install-hint')?.setAttribute('hidden', '');
+            }
+            return;
+        } catch (e) {
+            console.warn('[PWA] prompt() failed', e);
+            deferredInstallPrompt = null;
+        }
+    }
+
+    // 2) Telegram Mini App native home-screen shortcut
+    if (inTelegram && typeof tg?.addToHomeScreen === 'function') {
+        try {
+            tg.addToHomeScreen();
+            showToast(t.pwaTgHint || '…');
+        } catch (e) {
+            console.warn('[PWA] addToHomeScreen', e);
+        }
+        // Always also offer external browser path (native often no-ops on some devices)
+        setTimeout(() => {
+            if (isAppAlreadyInstalled()) return;
+            if (typeof tg.openLink === 'function') {
+                showToast(t.pwaOpeningBrowser || '…');
+                tg.openLink(personalUrl, { try_instant_view: false });
+            }
+        }, 1200);
+        return;
+    }
+
+    // 3) Inside Telegram without addToHomeScreen API
+    if (inTelegram && typeof tg?.openLink === 'function') {
+        showToast(t.pwaOpeningBrowser || '…');
+        tg.openLink(personalUrl, { try_instant_view: false });
+        return;
+    }
+
+    // 4) Regular browser but no deferred prompt — guide user + copy link
+    const copied = await copyText(personalUrl);
+    showToast(
+        copied
+            ? (t.pwaLinkCopiedInstall || t.pwaPromptMissing)
+            : (t.pwaPromptMissing || 'Chrome → ⋮ → Install app')
+    );
+}
+
+/**
+ * Footer "Install app" button
  */
 function setupFooterInstallCta() {
     const btn = document.getElementById('footer-install-btn');
@@ -347,12 +453,7 @@ function setupFooterInstallCta() {
     const t = () => i18n[currentLang] || i18n.uk;
     const tg = window.Telegram?.WebApp;
     const inTelegram = isTelegramWebView();
-    const hasAddToHome =
-        inTelegram &&
-        typeof tg?.addToHomeScreen === 'function' &&
-        (typeof tg.isVersionAtLeast !== 'function' || tg.isVersionAtLeast('8.0'));
 
-    // Show button
     btn.hidden = false;
     const label = btn.querySelector('[data-i18n="pwaInstallBtn"]') || btn.querySelector('span');
     if (label) label.textContent = t().pwaInstallBtn || 'Install';
@@ -364,7 +465,6 @@ function setupFooterInstallCta() {
             : (t().pwaFooterHint || '');
     }
 
-    // If Telegram already has shortcut — hide
     if (typeof tg?.checkHomeScreenStatus === 'function') {
         try {
             tg.checkHomeScreenStatus((status) => {
@@ -389,51 +489,10 @@ function setupFooterInstallCta() {
         } catch (e) {}
     }
 
-    btn.addEventListener('click', () => {
-        const personalUrl = buildPersonalInstallUrl();
-
-        // Save credentials so if they install from browser, PWA keeps access
-        if (currentUserId && currentSig) {
-            saveAuthCredentials(currentUserId, currentSig);
-        }
-
-        // 1) Telegram native shortcut
-        if (hasAddToHome) {
-            try {
-                tg.addToHomeScreen();
-                // Fallback after short delay: open external browser with personal link
-                setTimeout(() => {
-                    if (isAppAlreadyInstalled()) return;
-                    // Still visible → native likely failed; open in Chrome
-                    if (typeof tg.openLink === 'function') {
-                        tg.openLink(personalUrl, { try_instant_view: false });
-                    } else {
-                        window.open(personalUrl, '_blank');
-                    }
-                }, 1800);
-                return;
-            } catch (e) {
-                console.warn('[PWA] addToHomeScreen failed', e);
-            }
-        }
-
-        // 2) Chrome install prompt
-        if (deferredInstallPrompt) {
-            deferredInstallPrompt.prompt();
-            deferredInstallPrompt.userChoice.finally(() => {
-                deferredInstallPrompt = null;
-            });
-            return;
-        }
-
-        // 3) Open personal link outside Telegram / as fallback
-        if (inTelegram && typeof tg?.openLink === 'function') {
-            tg.openLink(personalUrl, { try_instant_view: false });
-            showToast(t().pwaFooterHint || t().pwaTgFallback || '');
-        } else {
-            // Already in browser — copy personal link or navigate
-            window.location.href = personalUrl;
-        }
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerInstallFlow();
     });
 }
 
@@ -574,18 +633,9 @@ function setupPwaInstallBanner() {
             });
         } catch (e) {}
 
-        installBtn.addEventListener('click', () => {
-            if (!hasAddToHome) return;
-            try {
-                console.log('[PWA] calling addToHomeScreen, version=', tg.version, 'platform=', tg.platform);
-                tg.addToHomeScreen();
-            } catch (e) {
-                console.error('[PWA] addToHomeScreen error', e);
-                showToast(i18n[currentLang]?.pwaTgFallback || 'Not supported');
-                applyPwaBannerTexts('telegram-fallback');
-                installBtn.hidden = true;
-                if (copyBtn) copyBtn.hidden = false;
-            }
+        installBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            triggerInstallFlow();
         });
         return;
     }
@@ -594,7 +644,7 @@ function setupPwaInstallBanner() {
     applyPwaBannerTexts('browser');
     if (copyBtn) copyBtn.hidden = true;
     installBtn.hidden = false;
-    // Stay hidden until browser fires beforeinstallprompt
+    // Banner stays hidden until beforeinstallprompt (listener is also global at top of file)
 
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
@@ -603,19 +653,20 @@ function setupPwaInstallBanner() {
         banner.hidden = false;
     });
 
+    // If event already captured early, show banner now
+    if (deferredInstallPrompt) {
+        applyPwaBannerTexts('browser');
+        banner.hidden = false;
+    }
+
     window.addEventListener('appinstalled', () => {
         deferredInstallPrompt = null;
         banner.hidden = true;
     });
 
-    installBtn.addEventListener('click', async () => {
-        if (!deferredInstallPrompt) return;
-        deferredInstallPrompt.prompt();
-        try {
-            await deferredInstallPrompt.userChoice;
-        } catch (e) {}
-        deferredInstallPrompt = null;
-        banner.hidden = true;
+    installBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        triggerInstallFlow();
     });
 }
 
