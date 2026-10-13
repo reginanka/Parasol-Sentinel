@@ -522,11 +522,38 @@ async function init() {
         if (saved) currentUnits = JSON.parse(saved);
     } catch(e) {}
 
-    setupPwaInstallBanner();
+    // PWA banner must never block weather loading
+    try {
+        setupPwaInstallBanner();
+    } catch (e) {
+        console.warn('[PWA] setup failed:', e);
+    }
 
     updateCurrentDate();
     updateCopyrightYear();
-    await loadWeatherData(currentUserId, currentSig);
+
+    // Stale personal credentials without a working session → free mode
+    // (avoids hanging on a 401/timeout when opened in plain browser)
+    try {
+        if (currentUserId && !currentSig && !window.Telegram?.WebApp?.initData) {
+            currentUserId = null;
+            currentSig = null;
+            localStorage.removeItem('parasol_user');
+            localStorage.removeItem('parasol_sig');
+        }
+    } catch (e) {}
+
+    try {
+        await loadWeatherData(currentUserId, currentSig);
+    } catch (e) {
+        console.error('[Weather] load failed:', e);
+        try {
+            await fetchOpenMeteo(DEFAULT_LAT, DEFAULT_LON, DEFAULT_CITY);
+        } catch (e2) {
+            console.error('[Weather] free fallback failed:', e2);
+            document.body.classList.remove('loading');
+        }
+    }
 
     // Search Binding
     document.getElementById('search-btn').addEventListener('click', () => searchCity());

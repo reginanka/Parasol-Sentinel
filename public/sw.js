@@ -1,21 +1,11 @@
-/* Parasol Sentinel — Service Worker (cache-first for shell, network-first for API) */
-const CACHE_NAME = 'parasol-v1';
-const SHELL = [
-  '/',
-  '/index.html',
-  '/style.css',
-  '/script.js',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/apple-touch-icon.png',
-  '/favicon.ico'
-];
+/* Parasol Sentinel — Service Worker
+ * Network-first for HTML/JS/CSS so deploys always apply.
+ * Cache fallback only when offline.
+ */
+const CACHE_NAME = 'parasol-v2';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())
-  );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -29,13 +19,34 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache API / weather endpoints
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+    event.respondWith(fetch(event.request));
     return;
   }
 
-  // Same-origin shell: cache-first, then network
+  const isShell =
+    url.origin === self.location.origin &&
+    (url.pathname === '/' ||
+      url.pathname.endsWith('.html') ||
+      url.pathname.endsWith('.js') ||
+      url.pathname.endsWith('.css') ||
+      url.pathname.endsWith('manifest.json'));
+
+  if (isShell) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200 && event.request.method === 'GET') {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
@@ -52,7 +63,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // External CDN assets: network with cache fallback
   event.respondWith(
     fetch(event.request)
       .then((response) => {
