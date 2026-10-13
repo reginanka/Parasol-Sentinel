@@ -32,12 +32,16 @@
 <body class="loading">
     <div class="background-overlay"></div>
 
-    <!-- PWA install banner -->
+    <!-- PWA install banner (Chrome prompt OR Telegram instructions) -->
     <div id="pwa-install-banner" class="pwa-install-banner" hidden>
         <div class="pwa-install-inner">
-            <span class="pwa-install-text" data-i18n="pwaInstall">Встановити Parasol на телефон</span>
+            <div class="pwa-install-copy">
+                <span class="pwa-install-title" data-i18n="pwaInstall">Встановити Parasol на телефон</span>
+                <span class="pwa-install-hint" id="pwa-install-hint" hidden></span>
+            </div>
             <div class="pwa-install-actions">
                 <button type="button" id="pwa-install-btn" class="pwa-install-btn" data-i18n="pwaInstallBtn">Встановити</button>
+                <button type="button" id="pwa-copy-link-btn" class="pwa-copy-btn" hidden data-i18n="pwaCopyLink">Скопіювати посилання</button>
                 <button type="button" id="pwa-install-dismiss" class="pwa-install-dismiss" aria-label="Close">✕</button>
             </div>
         </div>

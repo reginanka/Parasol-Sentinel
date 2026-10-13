@@ -82,6 +82,9 @@ const i18n = {
         settingsNote: "Налаштування синхронізуються з ботом",
         pwaInstall: "Встановити Parasol на телефон",
         pwaInstallBtn: "Встановити",
+        pwaCopyLink: "Скопіювати посилання",
+        pwaCopied: "Посилання скопійовано",
+        pwaTgHint: "У мініапі Telegram встановлення недоступне. Натисни ⋯ → «Відкрити в браузері», потім у Chrome: меню → Встановити додаток. Або скопіюй посилання.",
         pwaReauth: "Відкрий посилання з бота, щоб відновити доступ",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
@@ -168,6 +171,9 @@ const i18n = {
         settingsNote: "Settings sync with the bot",
         pwaInstall: "Install Parasol on your phone",
         pwaInstallBtn: "Install",
+        pwaCopyLink: "Copy link",
+        pwaCopied: "Link copied",
+        pwaTgHint: "Install is not available inside Telegram Mini App. Tap ⋯ → Open in browser, then in Chrome: menu → Install app. Or copy the link below.",
         pwaReauth: "Open the link from the bot to restore access",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
@@ -262,9 +268,42 @@ function loadAuthCredentials() {
     }
 }
 
+function isTelegramWebView() {
+    try {
+        if (window.Telegram?.WebApp?.initData) return true;
+        const ua = navigator.userAgent || '';
+        return /Telegram/i.test(ua);
+    } catch (e) {
+        return false;
+    }
+}
+
+function applyPwaBannerTexts(mode) {
+    const banner = document.getElementById('pwa-install-banner');
+    if (!banner) return;
+    const t = i18n[currentLang] || i18n.uk;
+    const titleEl = banner.querySelector('.pwa-install-title');
+    const hintEl = document.getElementById('pwa-install-hint');
+    const installBtn = document.getElementById('pwa-install-btn');
+    const copyBtn = document.getElementById('pwa-copy-link-btn');
+    if (titleEl) titleEl.textContent = t.pwaInstall || 'Install';
+    if (installBtn) installBtn.textContent = t.pwaInstallBtn || 'Install';
+    if (copyBtn) copyBtn.textContent = t.pwaCopyLink || 'Copy link';
+    if (hintEl) {
+        if (mode === 'telegram') {
+            hintEl.hidden = false;
+            hintEl.textContent = t.pwaTgHint || '';
+        } else {
+            hintEl.hidden = true;
+            hintEl.textContent = '';
+        }
+    }
+}
+
 function setupPwaInstallBanner() {
     const banner = document.getElementById('pwa-install-banner');
     const installBtn = document.getElementById('pwa-install-btn');
+    const copyBtn = document.getElementById('pwa-copy-link-btn');
     const dismissBtn = document.getElementById('pwa-install-dismiss');
     if (!banner || !installBtn) return;
 
@@ -277,7 +316,7 @@ function setupPwaInstallBanner() {
         return;
     }
 
-    // User dismissed this session / recently
+    // User dismissed recently
     try {
         if (localStorage.getItem('pwa_install_dismissed') === '1') {
             banner.hidden = true;
@@ -285,14 +324,50 @@ function setupPwaInstallBanner() {
         }
     } catch (e) {}
 
+    const inTelegram = isTelegramWebView();
+
+    // --- Telegram Mini App: show instructional banner (native install is blocked) ---
+    if (inTelegram) {
+        applyPwaBannerTexts('telegram');
+        installBtn.hidden = true; // no beforeinstallprompt inside TG
+        if (copyBtn) copyBtn.hidden = false;
+        banner.hidden = false;
+
+        copyBtn?.addEventListener('click', async () => {
+            const url = window.location.href;
+            try {
+                await navigator.clipboard.writeText(url);
+                showToast(i18n[currentLang]?.pwaCopied || 'Copied');
+            } catch (e) {
+                // Fallback for older WebViews
+                const ta = document.createElement('textarea');
+                ta.value = url;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); showToast(i18n[currentLang]?.pwaCopied || 'Copied'); } catch (_) {}
+                document.body.removeChild(ta);
+            }
+        });
+
+        dismissBtn?.addEventListener('click', () => {
+            banner.hidden = true;
+            try { localStorage.setItem('pwa_install_dismissed', '1'); } catch (e) {}
+        });
+        return;
+    }
+
+    // --- Regular browser: wait for Chrome install prompt ---
+    applyPwaBannerTexts('browser');
+    if (copyBtn) copyBtn.hidden = true;
+    installBtn.hidden = false;
+
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredInstallPrompt = e;
+        applyPwaBannerTexts('browser');
         banner.hidden = false;
-        // apply i18n after texts loaded
-        const textEl = banner.querySelector('.pwa-install-text');
-        if (textEl && i18n[currentLang]?.pwaInstall) textEl.textContent = i18n[currentLang].pwaInstall;
-        if (installBtn && i18n[currentLang]?.pwaInstallBtn) installBtn.textContent = i18n[currentLang].pwaInstallBtn;
     });
 
     window.addEventListener('appinstalled', () => {
