@@ -308,7 +308,48 @@ function applyPwaBannerTexts(mode) {
 function dismissPwaBanner() {
     const banner = document.getElementById('pwa-install-banner');
     if (banner) banner.hidden = true;
-    try { localStorage.setItem('pwa_install_dismissed', '1'); } catch (e) {}
+    // Dismiss only for 7 days (not forever)
+    try {
+        localStorage.setItem('pwa_install_dismissed_until', String(Date.now() + 7 * 24 * 60 * 60 * 1000));
+    } catch (e) {}
+}
+
+function isPwaDismissed() {
+    try {
+        const until = localStorage.getItem('pwa_install_dismissed_until');
+        if (until && Date.now() < Number(until)) return true;
+        // Legacy permanent flag from older builds — clear it so banner can show again
+        if (localStorage.getItem('pwa_install_dismissed') === '1') {
+            localStorage.removeItem('pwa_install_dismissed');
+        }
+    } catch (e) {}
+    return false;
+}
+
+function copyPageUrl() {
+    const url = window.location.href;
+    const done = () => showToast(i18n[currentLang]?.pwaCopied || 'Copied');
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(url).then(done).catch(() => {
+            const ta = document.createElement('textarea');
+            ta.value = url;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); done(); } catch (_) {}
+            document.body.removeChild(ta);
+        });
+    } else {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); } catch (_) {}
+        document.body.removeChild(ta);
+    }
 }
 
 function setupPwaInstallBanner() {
@@ -327,127 +368,101 @@ function setupPwaInstallBanner() {
         return;
     }
 
-    // User dismissed
-    try {
-        if (localStorage.getItem('pwa_install_dismissed') === '1') {
-            banner.hidden = true;
-            return;
-        }
-    } catch (e) {}
+    if (isPwaDismissed()) {
+        banner.hidden = true;
+        return;
+    }
 
     const tg = window.Telegram?.WebApp;
     const inTelegram = isTelegramWebView();
-    const supportsTgHomeScreen =
+    const hasAddToHome =
         inTelegram &&
         typeof tg?.addToHomeScreen === 'function' &&
-        typeof tg?.checkHomeScreenStatus === 'function' &&
         (typeof tg.isVersionAtLeast !== 'function' || tg.isVersionAtLeast('8.0'));
 
-    // --- Telegram Mini App: native home-screen shortcut (Bot API 8.0+) ---
-    if (inTelegram && supportsTgHomeScreen) {
-        applyPwaBannerTexts('telegram');
-        installBtn.hidden = false;
-        if (copyBtn) copyBtn.hidden = true;
+    // Shared dismiss / copy handlers
+    dismissBtn?.addEventListener('click', dismissPwaBanner);
+    copyBtn?.addEventListener('click', copyPageUrl);
 
-        const showBannerIfMissed = (status) => {
-            // status: 'unsupported' | 'unknown' | 'added' | 'missed'
-            if (status === 'added') {
-                banner.hidden = true;
-                return;
-            }
-            if (status === 'unsupported') {
-                // Fallback to copy-link instructions
-                applyPwaBannerTexts('telegram-fallback');
-                installBtn.hidden = true;
-                if (copyBtn) copyBtn.hidden = false;
-                banner.hidden = false;
-                return;
-            }
-            // 'missed' or 'unknown' → show install button
-            banner.hidden = false;
-        };
-
-        try {
-            tg.checkHomeScreenStatus(showBannerIfMissed);
-        } catch (e) {
-            // Older clients may throw — fall back
+    // ─── Telegram Mini App ───────────────────────────────────────────
+    if (inTelegram) {
+        // ALWAYS show banner immediately — don't wait for async status check
+        if (hasAddToHome) {
+            applyPwaBannerTexts('telegram');
+            installBtn.hidden = false;
+            if (copyBtn) copyBtn.hidden = false; // keep copy as secondary option
+        } else {
             applyPwaBannerTexts('telegram-fallback');
             installBtn.hidden = true;
             if (copyBtn) copyBtn.hidden = false;
-            banner.hidden = false;
+        }
+        banner.hidden = false;
+
+        // Optionally refine after status check (hide if already added)
+        if (typeof tg?.checkHomeScreenStatus === 'function') {
+            const onStatus = (status) => {
+                console.log('[PWA] homeScreenStatus:', status);
+                if (status === 'added') {
+                    banner.hidden = true;
+                    return;
+                }
+                if (status === 'unsupported') {
+                    applyPwaBannerTexts('telegram-fallback');
+                    installBtn.hidden = true;
+                    if (copyBtn) copyBtn.hidden = false;
+                    banner.hidden = false;
+                }
+                // missed / unknown → keep current UI
+            };
+            try {
+                tg.checkHomeScreenStatus(onStatus);
+            } catch (e) {
+                console.warn('[PWA] checkHomeScreenStatus error', e);
+            }
+            // Also listen for event-based response (some clients use events only)
+            try {
+                tg.onEvent?.('homeScreenChecked', (data) => {
+                    const status = typeof data === 'string' ? data : data?.status;
+                    if (status) onStatus(status);
+                });
+            } catch (e) {}
         }
 
-        // Events when user accepts / fails
         try {
             tg.onEvent?.('homeScreenAdded', () => {
                 banner.hidden = true;
+                showToast(currentLang === 'uk' ? '✅ Додано на головний екран' : '✅ Added to home screen');
             });
-            tg.onEvent?.('homeScreenFailed', () => {
-                // Keep banner, user declined or platform failed
+            tg.onEvent?.('homeScreenFailed', (data) => {
+                console.warn('[PWA] homeScreenFailed', data);
+                showToast(i18n[currentLang]?.pwaTgFallback || 'Not supported on this device');
+                applyPwaBannerTexts('telegram-fallback');
+                installBtn.hidden = true;
+                if (copyBtn) copyBtn.hidden = false;
             });
         } catch (e) {}
 
         installBtn.addEventListener('click', () => {
+            if (!hasAddToHome) return;
             try {
+                console.log('[PWA] calling addToHomeScreen, version=', tg.version, 'platform=', tg.platform);
                 tg.addToHomeScreen();
             } catch (e) {
+                console.error('[PWA] addToHomeScreen error', e);
                 showToast(i18n[currentLang]?.pwaTgFallback || 'Not supported');
+                applyPwaBannerTexts('telegram-fallback');
+                installBtn.hidden = true;
+                if (copyBtn) copyBtn.hidden = false;
             }
         });
-
-        copyBtn?.addEventListener('click', async () => {
-            const url = window.location.href;
-            try {
-                await navigator.clipboard.writeText(url);
-                showToast(i18n[currentLang]?.pwaCopied || 'Copied');
-            } catch (e) {
-                const ta = document.createElement('textarea');
-                ta.value = url;
-                ta.style.position = 'fixed';
-                ta.style.left = '-9999px';
-                document.body.appendChild(ta);
-                ta.select();
-                try { document.execCommand('copy'); showToast(i18n[currentLang]?.pwaCopied || 'Copied'); } catch (_) {}
-                document.body.removeChild(ta);
-            }
-        });
-
-        dismissBtn?.addEventListener('click', dismissPwaBanner);
         return;
     }
 
-    // --- Telegram without Bot API 8.0: instructional fallback ---
-    if (inTelegram) {
-        applyPwaBannerTexts('telegram-fallback');
-        installBtn.hidden = true;
-        if (copyBtn) copyBtn.hidden = false;
-        banner.hidden = false;
-
-        copyBtn?.addEventListener('click', async () => {
-            const url = window.location.href;
-            try {
-                await navigator.clipboard.writeText(url);
-                showToast(i18n[currentLang]?.pwaCopied || 'Copied');
-            } catch (e) {
-                const ta = document.createElement('textarea');
-                ta.value = url;
-                ta.style.position = 'fixed';
-                ta.style.left = '-9999px';
-                document.body.appendChild(ta);
-                ta.select();
-                try { document.execCommand('copy'); showToast(i18n[currentLang]?.pwaCopied || 'Copied'); } catch (_) {}
-                document.body.removeChild(ta);
-            }
-        });
-
-        dismissBtn?.addEventListener('click', dismissPwaBanner);
-        return;
-    }
-
-    // --- Regular browser: Chrome / Edge beforeinstallprompt ---
+    // ─── Regular browser: Chrome / Edge beforeinstallprompt ──────────
     applyPwaBannerTexts('browser');
     if (copyBtn) copyBtn.hidden = true;
     installBtn.hidden = false;
+    // Stay hidden until browser fires beforeinstallprompt
 
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
@@ -470,8 +485,6 @@ function setupPwaInstallBanner() {
         deferredInstallPrompt = null;
         banner.hidden = true;
     });
-
-    dismissBtn?.addEventListener('click', dismissPwaBanner);
 }
 
 async function init() {
