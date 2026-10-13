@@ -49,6 +49,15 @@ module.exports = async (req, res) => {
             userData = await User.findOne({ telegramId: Number(userId) });
         }
 
+        // Durable HMAC for PWA / browser (initData only works inside Telegram)
+        let persistentAuth = null;
+        if (userId && SECRET) {
+            persistentAuth = {
+                user: String(userId),
+                sig: generateSignature(userId, SECRET)
+            };
+        }
+
         const city = userData ? userData.city : DEFAULT_CITY;
         const lat = userData ? userData.lat : 50.4501;
         const lon = userData ? userData.lon : 30.5234;
@@ -114,6 +123,7 @@ module.exports = async (req, res) => {
                         },
                         user: { city, lat, lon }
                     };
+                    if (persistentAuth) responseData.auth = persistentAuth;
 
                     if (userData) {
                         await User.updateOne(
@@ -377,6 +387,7 @@ module.exports = async (req, res) => {
         responseData.fromSnapshot = false;
         responseData.units = unitsToReturn;
         responseData.user = { city, lat, lon };
+        if (persistentAuth) responseData.auth = persistentAuth;
 
         if (cityKey) {
             const setFields = {
