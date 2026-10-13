@@ -307,27 +307,59 @@ module.exports = async (req, res) => {
                 series.sort((a, b) => parseNoaaTime(a.time) - parseNoaaTime(b.time));
                 responseData.geomagSeries = series;
 
-                // Badge = current 3h bin only (not max of forecast window)
-                const nowMs = Date.now();
-                let currentPt = series.find(r => {
-                    const t = parseNoaaTime(r.time);
-                    return t <= nowMs && nowMs < t + 3 * 3600 * 1000 && r.observed !== 'outlook';
-                });
-                if (!currentPt || currentPt.observed === 'predicted' || currentPt.observed === 'outlook') {
-                    const past = series
-                        .filter(r => {
-                            const t = parseNoaaTime(r.time);
-                            return t <= nowMs && r.observed !== 'predicted' && r.observed !== 'outlook';
-                        })
-                        .sort((a, b) => parseNoaaTime(b.time) - parseNoaaTime(a.time));
-                    currentPt = past[0] || null;
+                // Badge: prefer 1-min live Kp (what is happening now), not inflated 3h estimated
+                let liveKp = null;
+                try {
+                    const liveRes = await axios.get(
+                        'https://services.swpc.noaa.gov/json/planetary_k_index_1m.json',
+                        { timeout: 8000 }
+                    );
+                    const liveArr = Array.isArray(liveRes.data) ? liveRes.data : [];
+                    if (liveArr.length) {
+                        const last = liveArr[liveArr.length - 1];
+                        const v = parseFloat(
+                            last.estimated_kp != null ? last.estimated_kp
+                                : (last.kp_index != null ? last.kp_index : last.kp)
+                        );
+                        if (!isNaN(v)) liveKp = v;
+                    }
+                } catch (liveErr) {
+                    console.error('NOAA 1-min Kp Error:', liveErr.message);
                 }
-                if (currentPt && currentPt.observed !== 'predicted' && currentPt.observed !== 'outlook') {
-                    const maxKp = currentPt.kp;
+
+                if (liveKp != null) {
                     let badge = '🟢';
-                    if (maxKp >= 5) badge = '🔴';
-                    else if (maxKp >= 4) badge = '🟡';
-                    responseData.geomag = { maxKp, badge, updatedAt: new Date() };
+                    if (liveKp >= 5) badge = '🔴';
+                    else if (liveKp >= 4) badge = '🟡';
+                    responseData.geomag = {
+                        maxKp: liveKp,
+                        badge,
+                        source: 'live_1m',
+                        updatedAt: new Date()
+                    };
+                } else {
+                    // Fallback: current 3h bin (observed preferred over estimated)
+                    const nowMs = Date.now();
+                    let currentPt = series.find(r => {
+                        const t = parseNoaaTime(r.time);
+                        return t <= nowMs && nowMs < t + 3 * 3600 * 1000 && r.observed !== 'outlook';
+                    });
+                    if (!currentPt || currentPt.observed === 'predicted' || currentPt.observed === 'outlook') {
+                        const past = series
+                            .filter(r => {
+                                const t = parseNoaaTime(r.time);
+                                return t <= nowMs && r.observed !== 'predicted' && r.observed !== 'outlook';
+                            })
+                            .sort((a, b) => parseNoaaTime(b.time) - parseNoaaTime(a.time));
+                        currentPt = past[0] || null;
+                    }
+                    if (currentPt && currentPt.observed !== 'predicted' && currentPt.observed !== 'outlook') {
+                        const maxKp = currentPt.kp;
+                        let badge = '🟢';
+                        if (maxKp >= 5) badge = '🔴';
+                        else if (maxKp >= 4) badge = '🟡';
+                        responseData.geomag = { maxKp, badge, source: '3h', updatedAt: new Date() };
+                    }
                 }
             }
         } catch (e) {

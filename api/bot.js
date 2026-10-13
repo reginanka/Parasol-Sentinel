@@ -1915,14 +1915,22 @@ bot.on("callback_query:data", async (ctx) => {
             const tz = user?.timezone || 'Europe/Kyiv';
             const isUk = userLang === 'uk';
 
-            const noaaRes = await axios.get(
-                'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
-                { timeout: 10000 }
-            );
+            // 3h forecast/history + 1-min live Kp (for the in-progress bin)
+            const [noaaRes, liveRes] = await Promise.all([
+                axios.get(
+                    'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
+                    { timeout: 10000 }
+                ),
+                axios.get(
+                    'https://services.swpc.noaa.gov/json/planetary_k_index_1m.json',
+                    { timeout: 10000 }
+                ).catch(() => null)
+            ]);
             const rows = Array.isArray(noaaRes.data) ? noaaRes.data : [];
             if (!rows.length) {
                 return ctx.reply(dict[userLang].geomagForecastEmpty);
             }
+            const liveRows = (liveRes && Array.isArray(liveRes.data)) ? liveRes.data : [];
 
             // Local YYYY-MM-DD
             const fmtLocal = (d) => {
@@ -1974,9 +1982,35 @@ bot.on("callback_query:data", async (ctx) => {
                 }
             };
 
-            // Collect slots: { dateStr -> { hour (0|3|6|9|12|15|18|21) -> { kp, level, observed } } }
+            // Collect slots: { dateStr -> { hour -> { kp, level, observed } } }
+            // Rules for "honest" table:
+            // - observed  → official closed 3h Kp
+            // - current bin still estimated → replace with max 1-min Kp in that window (live)
+            // - future estimated/predicted → keep as forecast (not "now")
             const slots = {};
             for (const key of dayKeys) slots[key] = {};
+            const nowMs = now.getTime();
+
+            const liveKpInWindow = (startMs, endMs) => {
+                if (!liveRows.length) return null;
+                let maxK = null;
+                let lastK = null;
+                for (const lr of liveRows) {
+                    const lt = parseNoaaTime(lr.time_tag);
+                    if (!lt) continue;
+                    const ms = lt.getTime();
+                    if (ms < startMs || ms >= endMs) continue;
+                    const v = parseFloat(
+                        lr.estimated_kp != null ? lr.estimated_kp
+                            : (lr.kp_index != null ? lr.kp_index : lr.kp)
+                    );
+                    if (isNaN(v)) continue;
+                    lastK = v;
+                    if (maxK == null || v > maxK) maxK = v;
+                }
+                // Prefer peak in the open window; fallback to latest sample
+                return maxK != null ? maxK : lastK;
+            };
 
             for (const r of rows) {
                 const t = parseNoaaTime(r.time_tag);
@@ -1992,18 +2026,30 @@ bot.on("callback_query:data", async (ctx) => {
                 } catch {
                     hour = t.getUTCHours();
                 }
-                // Normalize to 3-hour bins
                 const bin = Math.floor(hour / 3) * 3;
                 if (![0, 3, 6, 9, 12, 15, 18, 21].includes(bin)) continue;
 
-                const kp = parseFloat(r.kp != null ? r.kp : r.Kp);
+                let kp = parseFloat(r.kp != null ? r.kp : r.Kp);
                 if (isNaN(kp)) continue;
+                let obsFlag = r.observed || '';
+
+                const tMs = t.getTime();
+                const inProgress = tMs <= nowMs && nowMs < tMs + 3 * 3600 * 1000;
+                // Don't scare with inflated 3h "estimated" while the bin is still open
+                if (inProgress && obsFlag !== 'observed') {
+                    const liveK = liveKpInWindow(tMs, tMs + 3 * 3600 * 1000);
+                    if (liveK != null && !isNaN(liveK)) {
+                        kp = liveK;
+                        obsFlag = 'live';
+                    }
+                }
+
                 const level = getGeomagLevel(Math.round(kp));
                 slots[localDate][bin] = {
                     kp,
                     kpRounded: level ? level.kpRounded : Math.round(kp),
                     level,
-                    observed: r.observed || ''
+                    observed: obsFlag
                 };
             }
 
@@ -2124,8 +2170,8 @@ bot.on("callback_query:data", async (ctx) => {
             })();
 
             const sourceLine = isUk
-                ? `ℹ️ Джерело: NOAA SWPC, оновлено ${nowLocal}.`
-                : `ℹ️ Source: NOAA SWPC, updated ${nowLocal}.`;
+                ? `ℹ️ Джерело: NOAA SWPC (3h + live 1-хв для поточного слоту), оновлено ${nowLocal}.`
+                : `ℹ️ Source: NOAA SWPC (3h + live 1-min for current bin), updated ${nowLocal}.`;
 
             let body = `<h1>${dict[userLang].geomagForecastTitle}</h1>`;
             if (summaries.length) {
