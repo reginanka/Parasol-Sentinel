@@ -559,7 +559,7 @@ function geomagPointStatus(pt) {
     const t = pt.t != null ? pt.t : parseNoaaTime(pt.time);
     const nowMs = Date.now();
     // "now" = closest hour mark within ±45 min, or exact current interpolate marker
-    if (pt.isNow) return 'now';
+    if (pt.isNow || pt.observed === 'live') return 'now';
     const isNearNow = Math.abs(t - nowMs) < 45 * 60 * 1000;
     // 27-day outlook & predicted 3h slots are always "forecast"
     if (pt.observed === 'predicted' || pt.observed === 'outlook') return 'forecast';
@@ -1093,18 +1093,32 @@ function renderChart(dayOffset = 0) {
                 if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
             });
             if (bestIdx >= 0 && bestDiff < 90 * 60 * 1000) {
-                // Snap "now" marker to interpolated value at exact now (smoother pill match)
-                const at = interpolateKpAt(series, nowMs);
-                if (at) {
+                // Prefer live 1-min Kp (same as the header pill) — not 3h interpolate
+                const liveKp = (weatherData.geomag?.source === 'live_1m'
+                    && weatherData.geomag.maxKp != null)
+                    ? Number(weatherData.geomag.maxKp)
+                    : null;
+                if (liveKp != null && !isNaN(liveKp)) {
                     points[bestIdx] = {
                         ...points[bestIdx],
-                        kp: at.kp,
-                        observed: at.observed,
-                        interpolated: at.interpolated,
+                        kp: liveKp,
+                        observed: 'live',
+                        interpolated: false,
                         isNow: true
                     };
                 } else {
-                    points[bestIdx] = { ...points[bestIdx], isNow: true };
+                    const at = interpolateKpAt(series, nowMs);
+                    if (at) {
+                        points[bestIdx] = {
+                            ...points[bestIdx],
+                            kp: at.kp,
+                            observed: at.observed,
+                            interpolated: at.interpolated,
+                            isNow: true
+                        };
+                    } else {
+                        points[bestIdx] = { ...points[bestIdx], isNow: true };
+                    }
                 }
             }
         }
