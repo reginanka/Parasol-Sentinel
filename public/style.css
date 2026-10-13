@@ -916,3 +916,63 @@ main {
 .pwa-install-dismiss:hover {
     color: #fff;
 }
+
+/* Footer install CTA */
+.footer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.25rem;
+}
+
+.install-app-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0.8rem 1.8rem;
+    background: linear-gradient(135deg, #00F260, #0575E6);
+    color: #0a0e14;
+    border: none;
+    border-radius: 14px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    transition: var(--transition);
+    box-shadow: 0 4px 15px rgba(0, 242, 96, 0.25);
+    width: fit-content;
+}
+
+.install-app-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0, 242, 96, 0.4);
+    filter: brightness(1.05);
+}
+
+.install-app-btn[hidden] {
+    display: none !important;
+}
+
+.footer-install-hint {
+    margin-top: 0.6rem;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--text-dim, rgba(255,255,255,0.55));
+    max-width: 320px;
+}
+
+.footer-install-hint[hidden] {
+    display: none !important;
+}
+
+@media (max-width: 700px) {
+    .footer-actions {
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+    }
+    .install-app-btn {
+        align-self: center;
+    }
+}
