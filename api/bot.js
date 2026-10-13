@@ -2070,9 +2070,21 @@ bot.on("callback_query:data", async (ctx) => {
                 return `• <b>${label}:</b> Unsettled ${periodEn} (Kp ${lvl.kpRounded})`;
             };
 
-            const todayLabel = isUk ? 'Сьогодні' : 'Today';
-            const tomLabel = isUk ? 'Завтра' : 'Tomorrow';
-            const day3Label = isUk ? 'Післязавтра' : 'Day after';
+            // Short date from local YYYY-MM-DD → "13.10"
+            const shortDate = (dateStr) => {
+                const parts = String(dateStr).split('-');
+                if (parts.length < 3) return dateStr;
+                return `${parts[2]}.${parts[1]}`;
+            };
+            const todayLabel = isUk
+                ? `Сьогодні (${shortDate(dayKeys[0])})`
+                : `Today (${shortDate(dayKeys[0])})`;
+            const tomLabel = isUk
+                ? `Завтра (${shortDate(dayKeys[1])})`
+                : `Tomorrow (${shortDate(dayKeys[1])})`;
+            const day3Label = isUk
+                ? `Післязавтра (${shortDate(dayKeys[2])})`
+                : `Day after (${shortDate(dayKeys[2])})`;
 
             const summaries = [
                 daySummary(dayKeys[0], todayLabel),
