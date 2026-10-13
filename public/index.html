@@ -2,9 +2,15 @@
 <html lang="uk">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weather Sentinel | Intelligence Monitoring</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Parasol Sentinel</title>
     <meta name="description" content="Premium weather ecosystem with real-time tracking, alerts, and analytics.">
+    <meta name="theme-color" content="#0a0e14">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Parasol">
+    <link rel="manifest" href="/manifest.json">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,13 +24,24 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Font Awesome (Latest version for Threads icon) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="icon" type="image/x-icon" href="favicon.ico">
-    <link rel="icon" type="image/png" href="favicon.png">
-    <link rel="apple-touch-icon" href="favicon.png">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="loading">
     <div class="background-overlay"></div>
+
+    <!-- PWA install banner -->
+    <div id="pwa-install-banner" class="pwa-install-banner" hidden>
+        <div class="pwa-install-inner">
+            <span class="pwa-install-text" data-i18n="pwaInstall">Встановити Parasol на телефон</span>
+            <div class="pwa-install-actions">
+                <button type="button" id="pwa-install-btn" class="pwa-install-btn" data-i18n="pwaInstallBtn">Встановити</button>
+                <button type="button" id="pwa-install-dismiss" class="pwa-install-dismiss" aria-label="Close">✕</button>
+            </div>
+        </div>
+    </div>
     
     <main class="dashboard">
         <header class="header fade-in">
@@ -246,5 +263,14 @@
 
     <div id="toast-container" class="toast-container"></div>
     <script src="script.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch((err) => {
+            console.warn('SW registration failed:', err);
+          });
+        });
+      }
+    </script>
 </body>
 </html>

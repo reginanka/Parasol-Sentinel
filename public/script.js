@@ -8,8 +8,9 @@ let currentMode = 'temp';
 let weatherData = null; // Store fetched data globally for switching
 let currentStatusKey = 'freeAccess';
 let currentUnits = { wind: 'ms', pressure: 'mmhg', temp: 'c' }; // single source of truth (synced with bot)
-let currentUserId = null;  // Telegram user ID (from URL param or WebApp)
+let currentUserId = null;  // Telegram user ID (from URL param, WebApp, or localStorage)
 let currentSig = null;     // HMAC signature (only present with personal link)
+let deferredInstallPrompt = null; // beforeinstallprompt for PWA install banner
 
 const i18n = {
     uk: {
@@ -79,6 +80,9 @@ const i18n = {
         settingsPress: "🌡 Тиск",
         settingsTemp: "🌡 Температура",
         settingsNote: "Налаштування синхронізуються з ботом",
+        pwaInstall: "Встановити Parasol на телефон",
+        pwaInstallBtn: "Встановити",
+        pwaReauth: "Відкрий посилання з бота, щоб відновити доступ",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
             300: 'Мряка', 301: 'Мряка', 302: 'Сильна мряка',
@@ -162,6 +166,9 @@ const i18n = {
         settingsPress: "🌡 Pressure",
         settingsTemp: "🌡 Temperature",
         settingsNote: "Settings sync with the bot",
+        pwaInstall: "Install Parasol on your phone",
+        pwaInstallBtn: "Install",
+        pwaReauth: "Open the link from the bot to restore access",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
             300: 'Drizzle', 301: 'Drizzle', 302: 'Heavy drizzle',
@@ -235,12 +242,87 @@ const weatherIcon = document.getElementById('weather-icon');
 const dailyForecastContainer = document.getElementById('daily-forecast');
 const accessType = document.getElementById('access-type');
 
+function saveAuthCredentials(userId, sig) {
+    try {
+        if (userId && sig) {
+            localStorage.setItem('parasol_user', String(userId));
+            localStorage.setItem('parasol_sig', String(sig));
+        }
+    } catch (e) {}
+}
+
+function loadAuthCredentials() {
+    try {
+        return {
+            user: localStorage.getItem('parasol_user'),
+            sig: localStorage.getItem('parasol_sig')
+        };
+    } catch (e) {
+        return { user: null, sig: null };
+    }
+}
+
+function setupPwaInstallBanner() {
+    const banner = document.getElementById('pwa-install-banner');
+    const installBtn = document.getElementById('pwa-install-btn');
+    const dismissBtn = document.getElementById('pwa-install-dismiss');
+    if (!banner || !installBtn) return;
+
+    // Already installed (standalone / iOS home screen)
+    const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true;
+    if (isStandalone) {
+        banner.hidden = true;
+        return;
+    }
+
+    // User dismissed this session / recently
+    try {
+        if (localStorage.getItem('pwa_install_dismissed') === '1') {
+            banner.hidden = true;
+            return;
+        }
+    } catch (e) {}
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredInstallPrompt = e;
+        banner.hidden = false;
+        // apply i18n after texts loaded
+        const textEl = banner.querySelector('.pwa-install-text');
+        if (textEl && i18n[currentLang]?.pwaInstall) textEl.textContent = i18n[currentLang].pwaInstall;
+        if (installBtn && i18n[currentLang]?.pwaInstallBtn) installBtn.textContent = i18n[currentLang].pwaInstallBtn;
+    });
+
+    window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null;
+        banner.hidden = true;
+    });
+
+    installBtn.addEventListener('click', async () => {
+        if (!deferredInstallPrompt) return;
+        deferredInstallPrompt.prompt();
+        try {
+            await deferredInstallPrompt.userChoice;
+        } catch (e) {}
+        deferredInstallPrompt = null;
+        banner.hidden = true;
+    });
+
+    dismissBtn?.addEventListener('click', () => {
+        banner.hidden = true;
+        try { localStorage.setItem('pwa_install_dismissed', '1'); } catch (e) {}
+    });
+}
+
 async function init() {
     const urlParams = new URLSearchParams(window.location.search);
 
     // Detect how the page was opened:
     // 1. Via Telegram WebApp button → TG passes user data automatically
     // 2. Via personal link → ?user=ID&sig=SIG in URL
+    // 3. Via installed PWA → restore user+sig from localStorage
     const tgWebApp = window.Telegram?.WebApp;
     const tgUser = tgWebApp?.initDataUnsafe?.user;
 
@@ -249,14 +331,27 @@ async function init() {
         tgWebApp.expand(); // Expand to full height
     }
 
-    currentUserId = tgUser?.id?.toString() || urlParams.get('user');
-    currentSig    = urlParams.get('sig'); // null when opened from WebApp button without params
+    const fromUrlUser = urlParams.get('user');
+    const fromUrlSig = urlParams.get('sig');
+    const stored = loadAuthCredentials();
+
+    currentUserId = tgUser?.id?.toString() || fromUrlUser || stored.user || null;
+    currentSig = fromUrlSig || (fromUrlUser ? null : stored.sig) || null;
+
+    // Persist credentials when we have a signed personal link
+    if (fromUrlUser && fromUrlSig) {
+        saveAuthCredentials(fromUrlUser, fromUrlSig);
+        currentUserId = fromUrlUser;
+        currentSig = fromUrlSig;
+    }
 
     // Load units from localStorage as fallback (until API responds)
     try {
         const saved = localStorage.getItem('units');
         if (saved) currentUnits = JSON.parse(saved);
     } catch(e) {}
+
+    setupPwaInstallBanner();
 
     updateCurrentDate();
     updateCopyrightYear();
@@ -341,11 +436,22 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
                 // FALLBACK: if not authorized (missing/invalid sig), show free version instead of error
                 if (response.status === 401) {
                     console.info('Unauthorized or missing signature: Falling back to Open-Meteo free engine.');
+                    // Clear stale credentials so next launch does not keep failing silently
+                    try {
+                        localStorage.removeItem('parasol_user');
+                        localStorage.removeItem('parasol_sig');
+                    } catch (e) {}
+                    currentUserId = null;
+                    currentSig = null;
                     return await fetchOpenMeteo(DEFAULT_LAT, DEFAULT_LON, DEFAULT_CITY);
                 }
                 throw new Error('Internal API failed');
             }
             const data = await response.json();
+            // Successful personal load → keep credentials for PWA relaunch
+            if (userId && sig) {
+                saveAuthCredentials(userId, sig);
+            }
 
             if (data.cached && data.lastState && data.lastState.fullData) {
                 // Legacy user-cache shape
