@@ -84,7 +84,8 @@ const i18n = {
         pwaInstallBtn: "Встановити",
         pwaCopyLink: "Скопіювати посилання",
         pwaCopied: "Посилання скопійовано",
-        pwaTgHint: "У мініапі Telegram встановлення недоступне. Натисни ⋯ → «Відкрити в браузері», потім у Chrome: меню → Встановити додаток. Або скопіюй посилання.",
+        pwaTgHint: "Додай ярлик на головний екран — відкривай без Telegram.",
+        pwaTgFallback: "Натисни ⋯ → «Відкрити в браузері», потім у Chrome: меню → Встановити додаток.",
         pwaReauth: "Відкрий посилання з бота, щоб відновити доступ",
         transl: { // weather translation
             200: 'Гроза', 201: 'Гроза з дощем', 202: 'Сильна гроза', 233: 'Гроза',
@@ -173,7 +174,8 @@ const i18n = {
         pwaInstallBtn: "Install",
         pwaCopyLink: "Copy link",
         pwaCopied: "Link copied",
-        pwaTgHint: "Install is not available inside Telegram Mini App. Tap ⋯ → Open in browser, then in Chrome: menu → Install app. Or copy the link below.",
+        pwaTgHint: "Add a home-screen shortcut — open without Telegram.",
+        pwaTgFallback: "Tap ⋯ → Open in browser, then in Chrome: menu → Install app.",
         pwaReauth: "Open the link from the bot to restore access",
         transl: {
             200: 'Thunderstorm', 201: 'Thunderstorm with rain', 202: 'Heavy thunderstorm', 233: 'Thunderstorm',
@@ -293,11 +295,20 @@ function applyPwaBannerTexts(mode) {
         if (mode === 'telegram') {
             hintEl.hidden = false;
             hintEl.textContent = t.pwaTgHint || '';
+        } else if (mode === 'telegram-fallback') {
+            hintEl.hidden = false;
+            hintEl.textContent = t.pwaTgFallback || t.pwaTgHint || '';
         } else {
             hintEl.hidden = true;
             hintEl.textContent = '';
         }
     }
+}
+
+function dismissPwaBanner() {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) banner.hidden = true;
+    try { localStorage.setItem('pwa_install_dismissed', '1'); } catch (e) {}
 }
 
 function setupPwaInstallBanner() {
@@ -316,7 +327,7 @@ function setupPwaInstallBanner() {
         return;
     }
 
-    // User dismissed recently
+    // User dismissed
     try {
         if (localStorage.getItem('pwa_install_dismissed') === '1') {
             banner.hidden = true;
@@ -324,14 +335,65 @@ function setupPwaInstallBanner() {
         }
     } catch (e) {}
 
+    const tg = window.Telegram?.WebApp;
     const inTelegram = isTelegramWebView();
+    const supportsTgHomeScreen =
+        inTelegram &&
+        typeof tg?.addToHomeScreen === 'function' &&
+        typeof tg?.checkHomeScreenStatus === 'function' &&
+        (typeof tg.isVersionAtLeast !== 'function' || tg.isVersionAtLeast('8.0'));
 
-    // --- Telegram Mini App: show instructional banner (native install is blocked) ---
-    if (inTelegram) {
+    // --- Telegram Mini App: native home-screen shortcut (Bot API 8.0+) ---
+    if (inTelegram && supportsTgHomeScreen) {
         applyPwaBannerTexts('telegram');
-        installBtn.hidden = true; // no beforeinstallprompt inside TG
-        if (copyBtn) copyBtn.hidden = false;
-        banner.hidden = false;
+        installBtn.hidden = false;
+        if (copyBtn) copyBtn.hidden = true;
+
+        const showBannerIfMissed = (status) => {
+            // status: 'unsupported' | 'unknown' | 'added' | 'missed'
+            if (status === 'added') {
+                banner.hidden = true;
+                return;
+            }
+            if (status === 'unsupported') {
+                // Fallback to copy-link instructions
+                applyPwaBannerTexts('telegram-fallback');
+                installBtn.hidden = true;
+                if (copyBtn) copyBtn.hidden = false;
+                banner.hidden = false;
+                return;
+            }
+            // 'missed' or 'unknown' → show install button
+            banner.hidden = false;
+        };
+
+        try {
+            tg.checkHomeScreenStatus(showBannerIfMissed);
+        } catch (e) {
+            // Older clients may throw — fall back
+            applyPwaBannerTexts('telegram-fallback');
+            installBtn.hidden = true;
+            if (copyBtn) copyBtn.hidden = false;
+            banner.hidden = false;
+        }
+
+        // Events when user accepts / fails
+        try {
+            tg.onEvent?.('homeScreenAdded', () => {
+                banner.hidden = true;
+            });
+            tg.onEvent?.('homeScreenFailed', () => {
+                // Keep banner, user declined or platform failed
+            });
+        } catch (e) {}
+
+        installBtn.addEventListener('click', () => {
+            try {
+                tg.addToHomeScreen();
+            } catch (e) {
+                showToast(i18n[currentLang]?.pwaTgFallback || 'Not supported');
+            }
+        });
 
         copyBtn?.addEventListener('click', async () => {
             const url = window.location.href;
@@ -339,7 +401,6 @@ function setupPwaInstallBanner() {
                 await navigator.clipboard.writeText(url);
                 showToast(i18n[currentLang]?.pwaCopied || 'Copied');
             } catch (e) {
-                // Fallback for older WebViews
                 const ta = document.createElement('textarea');
                 ta.value = url;
                 ta.style.position = 'fixed';
@@ -351,14 +412,39 @@ function setupPwaInstallBanner() {
             }
         });
 
-        dismissBtn?.addEventListener('click', () => {
-            banner.hidden = true;
-            try { localStorage.setItem('pwa_install_dismissed', '1'); } catch (e) {}
-        });
+        dismissBtn?.addEventListener('click', dismissPwaBanner);
         return;
     }
 
-    // --- Regular browser: wait for Chrome install prompt ---
+    // --- Telegram without Bot API 8.0: instructional fallback ---
+    if (inTelegram) {
+        applyPwaBannerTexts('telegram-fallback');
+        installBtn.hidden = true;
+        if (copyBtn) copyBtn.hidden = false;
+        banner.hidden = false;
+
+        copyBtn?.addEventListener('click', async () => {
+            const url = window.location.href;
+            try {
+                await navigator.clipboard.writeText(url);
+                showToast(i18n[currentLang]?.pwaCopied || 'Copied');
+            } catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = url;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); showToast(i18n[currentLang]?.pwaCopied || 'Copied'); } catch (_) {}
+                document.body.removeChild(ta);
+            }
+        });
+
+        dismissBtn?.addEventListener('click', dismissPwaBanner);
+        return;
+    }
+
+    // --- Regular browser: Chrome / Edge beforeinstallprompt ---
     applyPwaBannerTexts('browser');
     if (copyBtn) copyBtn.hidden = true;
     installBtn.hidden = false;
@@ -385,10 +471,7 @@ function setupPwaInstallBanner() {
         banner.hidden = true;
     });
 
-    dismissBtn?.addEventListener('click', () => {
-        banner.hidden = true;
-        try { localStorage.setItem('pwa_install_dismissed', '1'); } catch (e) {}
-    });
+    dismissBtn?.addEventListener('click', dismissPwaBanner);
 }
 
 async function init() {
