@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Parasol Sentinel</title>
+    <meta name="description" content="Premium weather ecosystem with real-time tracking, alerts, and analytics.">
+    <meta name="theme-color" content="#0a0e14">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Parasol">
+    <link rel="manifest" href="/manifest.json">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Telegram Mini App SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Leaflet for RainViewer -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Font Awesome (Latest version for Threads icon) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="loading">
+    <div class="background-overlay"></div>
+
+    <!-- PWA install banner -->
+    <div id="pwa-install-banner" class="pwa-install-banner" hidden>
+        <div class="pwa-install-inner">
+            <span class="pwa-install-text" data-i18n="pwaInstall">Встановити Parasol на телефон</span>
+            <div class="pwa-install-actions">
+                <button type="button" id="pwa-install-btn" class="pwa-install-btn" data-i18n="pwaInstallBtn">Встановити</button>
+                <button type="button" id="pwa-install-dismiss" class="pwa-install-dismiss" aria-label="Close">✕</button>
+            </div>
+        </div>
+    </div>
+    
+    <main class="dashboard">
+        <header class="header fade-in">
+            <div class="logo">
+                <div class="pulse-container"><span class="pulse"></span></div>
+                <h1>Parasol <span data-i18n="sentinel">Sentinel</span></h1>
+                <div id="access-type" class="access-type">Free Access</div>
+                <div class="lang-toggle-btn desktop-only" style="cursor: pointer; margin-top: 6px; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; width: fit-content; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15); transition: background 0.2s;">EN</div>
+            </div>
+            <div id="city-info" class="city-info">
+                <h2 id="current-city" class="text-glow">Київ (Дефолт)</h2>
+                <div class="date-badge"><p id="current-date">Четвер, 2 квітня</p></div>
+            </div>
+            <div class="status-badge">
+                <div class="status-row-wrapper">
+                    <div class="lang-toggle-btn mobile-only" style="cursor: pointer; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15);">EN</div>
+                    <div class="live-status" style="margin-bottom: 0;">
+                        <span class="status-dot"></span>
+                        <span class="status-label" data-i18n="actual">Актуально</span>
+                        <small id="update-time">--:--</small>
+                    </div>
+                </div>
+                <div class="search-wrapper">
+                    <div class="search-box">
+                        <input type="text" id="city-search" data-i18n="placeholder:searchCity" placeholder="Пошук міста...">
+                        <button id="search-btn" type="button" aria-label="Search">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+                        </button>
+                    </div>
+                    <button id="settings-btn" class="glass-btn" type="button" title="Налаштування" aria-label="Settings">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Settings Panel -->
+        <div id="settings-panel" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;z-index:1000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);justify-content:center;align-items:center;">
+            <div style="background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);border:1px solid rgba(255,255,255,0.15);border-radius:20px;padding:28px;max-width:360px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                    <h3 data-i18n="settingsTitle" style="margin:0;font-size:1.1rem;">⚙️ Налаштування</h3>
+                    <button id="settings-close" style="background:none;border:none;color:white;font-size:1.4rem;cursor:pointer;opacity:0.7;">✕</button>
+                </div>
+                <!-- Wind Units -->
+                <div style="margin-bottom:16px;">
+                    <p data-i18n="settingsWind" style="margin:0 0 8px;opacity:0.7;font-size:0.85rem;">🌬 Вітер</p>
+                    <div style="display:flex;gap:8px;">
+                        <button class="unit-btn" id="unit-wind-ms" data-type="wind" data-val="ms" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:white;cursor:pointer;font-size:0.9rem;transition:all 0.2s;">м/с</button>
+                        <button class="unit-btn" id="unit-wind-kmh" data-type="wind" data-val="kmh" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:white;cursor:pointer;font-size:0.9rem;transition:all 0.2s;">км/год</button>
+                    </div>
+                </div>
+                <!-- Pressure Units -->
+                <div style="margin-bottom:20px;">
+                    <p data-i18n="settingsPress" style="margin:0 0 8px;opacity:0.7;font-size:0.85rem;">🌡 Тиск</p>
+                    <div style="display:flex;gap:8px;">
+                        <button class="unit-btn" id="unit-pressure-mmhg" data-type="pressure" data-val="mmhg" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:white;cursor:pointer;font-size:0.9rem;transition:all 0.2s;">мм рт.ст.</button>
+                        <button class="unit-btn" id="unit-pressure-hpa" data-type="pressure" data-val="hpa" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:white;cursor:pointer;font-size:0.9rem;transition:all 0.2s;">гПа</button>
+                    </div>
+                </div>
+                <!-- Temperature Units -->
+                <div style="margin-bottom:20px;">
+                    <p data-i18n="settingsTemp" style="margin:0 0 8px;opacity:0.7;font-size:0.85rem;">🌡 Температура</p>
+                    <div style="display:flex;gap:8px;">
+                        <button class="unit-btn" id="unit-temp-c" data-type="temp" data-val="c" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:white;cursor:pointer;font-size:0.9rem;transition:all 0.2s;">°C</button>
+                        <button class="unit-btn" id="unit-temp-f" data-type="temp" data-val="f" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:white;cursor:pointer;font-size:0.9rem;transition:all 0.2s;">°F</button>
+                    </div>
+                </div>
+                <p data-i18n="settingsNote" style="font-size:0.75rem;opacity:0.5;text-align:center;margin:0;">Налаштування синхронізуються з ботом</p>
+            </div>
+        </div>
+
+        <!-- Top Section: Stats + Chart in a Row -->
+        <section class="top-row">
+            <div class="glass card main-weather-card fade-in-up">
+                <div class="weather-main">
+                    <img id="weather-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/clear-day.svg" alt="icon">
+                    <span id="current-temp" class="temp-display">--°C</span>
+                </div>
+                <div class="weather-desc">
+                    <h3 id="weather-condition">Аналізуємо...</h3>
+                    <p id="weather-feels">Відчувається як --°C</p>
+                </div>
+                <!-- Live-only metrics (now / today) -->
+                <div id="now-extras" class="now-extras" style="display:none;">
+                    <div id="aqi-pill" class="now-pill" title="Якість повітря зараз" style="display:none;">
+                        <span class="now-dot" aria-hidden="true"></span>
+                        <span class="now-pill-label" data-i18n="airQuality">Повітря</span>
+                        <strong id="aqi-val">--</strong>
+                    </div>
+                    <div id="geomag-pill" class="now-pill" title="Геомагнітна активність зараз" style="display:none;">
+                        <span class="now-dot" aria-hidden="true"></span>
+                        <span class="now-pill-label" data-i18n="geomag">Магнітка</span>
+                        <strong id="geomag-val">--</strong>
+                    </div>
+                </div>
+                <div class="sun-times">
+                    <div class="sun-item">🌅 <span data-i18n="sunrise">Схід</span>: <strong id="sunrise-val">--:--</strong></div>
+                    <div class="sun-item">🌇 <span data-i18n="sunset">Захід</span>: <strong id="sunset-val">--:--</strong></div>
+                </div>
+            </div>
+            
+            <!-- (Chart remains as before) -->
+            <div class="glass card chart-card fade-in-up" style="animation-delay: 0.1s;">
+                <div class="chart-header">
+                    <div class="chart-tabs">
+                        <button class="tab-btn active" data-mode="temp" data-i18n="tabTemp">Темп</button>
+                        <button class="tab-btn" data-mode="precip_prob" data-i18n="tabProb">Шанс (%)</button>
+                        <button class="tab-btn" data-mode="precip" data-i18n="tabVol">Об'єм (мм)</button>
+                        <button class="tab-btn" data-mode="wind" data-i18n="tabWind">Вітер</button>
+                        <button class="tab-btn" data-mode="gusts" data-i18n="tabGusts">Пориви</button>
+                        <button class="tab-btn" data-mode="press" data-i18n="tabPress">Тиск</button>
+                        <button class="tab-btn" data-mode="geomag" data-i18n="tabGeomag">Магнітка</button>
+                    </div>
+                </div>
+                <div class="canvas-wrapper">
+                    <canvas id="weatherChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Expanded Compact Stats Row with Clear Labels -->
+        <section class="compact-stats fade-in-up" style="animation-delay: 0.15s;">
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="uv-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/uv-index.svg" alt="uv"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="uvIndex">UV-Індекс</span> 
+                    <span class="stat-value" id="uv-val">--</span>
+                </div>
+            </div>
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="wind-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/wind.svg" alt="wind"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="windGusts">Пориви вітру</span> 
+                    <span class="stat-value" id="wind-gust">--</span>
+                </div>
+            </div>
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="humidity-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/humidity.svg" alt="humidity"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="humidity">Вологість</span> 
+                    <span class="stat-value" id="humidity-val">--</span>
+                </div>
+            </div>
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="dew-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/thermometer-mercury.svg" alt="dew point"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="dewPoint">Точка роси</span> 
+                    <span class="stat-value" id="dew-val">--</span>
+                </div>
+            </div>
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="precip-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/raindrop.svg" alt="precip"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="precipChance">Шанс опадів</span> 
+                    <span class="stat-value" id="precip-prob">--</span>
+                </div>
+            </div>
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="vis-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/horizon.svg" alt="visibility"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="visibility">Видимість</span> 
+                    <span class="stat-value" id="vis-val">--</span>
+                </div>
+            </div>
+            <div class="stats-pill fade-in-up">
+                <div class="stat-icon"><img id="press-icon" src="https://cdn.jsdelivr.net/npm/@meteocons/svg/fill/barometer.svg" alt="pressure"></div>
+                <div class="stat-info">
+                    <span class="stat-label" data-i18n="pressure">Тиск</span> 
+                    <span class="stat-value" id="press-val">--</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Weekly Forecast Selector -->
+        <section class="forecast-row fade-in-up" style="animation-delay: 0.18s;" id="daily-forecast">
+            <!-- Items injected by JS -->
+        </section>
+
+        <!-- Map Section -->
+        <section class="glass map-section fade-in-up" style="animation-delay: 0.25s;">
+            <iframe id="windy-iframe" 
+                width="100%" height="450" 
+                src="https://embed.windy.com/embed2.html?lat=50.4501&lon=30.5234&zoom=5&level=surface&overlay=radar&menu=&message=true" 
+                frameborder="0">
+            </iframe>
+        </section>
+
+        <footer class="footer glass fade-in">
+            <div class="footer-container">
+                <div class="footer-left">
+                    <p class="copyright">© <span id="copyright-year"></span> Parasol Sentinel — <span data-i18n="intelMonitoring">Інтелектуальний моніторинг</span></p>
+                    <p class="data-sources" data-i18n="dataSources">Weather data: Weatherbit, Open-Meteo · Air quality: WAQI (aqicn.org) · Geomagnetic: NOAA SWPC</p>
+                    <a href="https://t.me/parasol_wbot" target="_blank" class="bot-btn">
+                        <i class="fab fa-telegram-plane"></i> <span data-i18n="openBot">Відкрити Parasol Bot</span>
+                    </a>
+                </div>
+                
+                <div class="footer-right">
+                    <div class="dev-brand">
+                        <span>Developed by <strong>Gearberry</strong></span>
+                        <p>Feel free to connect with me:</p>
+                    </div>
+                    <div class="social-grid">
+                        <a href="https://t.me/Gearberry" target="_blank" class="social-icon telegram" title="Telegram"><i class="fab fa-telegram-plane"></i></a>
+                        <a href="https://www.youtube.com/@Gearberry" target="_blank" class="social-icon youtube" title="YouTube"><i class="fab fa-youtube"></i></a>
+                        <a href="https://www.instagram.com/gearberry_" target="_blank" class="social-icon instagram" title="Instagram"><i class="fab fa-instagram"></i></a>
+                        <a href="https://www.facebook.com/profile.php?id=61586878866628" target="_blank" class="social-icon facebook" title="Facebook"><i class="fab fa-facebook-f"></i></a>
+                        <a href="https://www.threads.com/@gearberry_" target="_blank" class="social-icon threads" title="Threads"><i class="fa-brands fa-threads"></i></a>
+                        <a href="https://github.com/reginanka" target="_blank" class="social-icon github" title="GitHub"><i class="fab fa-github"></i></a>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </main>
+
+    <div class="loader-overlay">
+        <div class="loader"></div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+    <script src="script.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch((err) => {
+            console.warn('SW registration failed:', err);
+          });
+        });
+      }
+    </script>
+</body>
+</html>
