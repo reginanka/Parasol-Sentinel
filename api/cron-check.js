@@ -176,12 +176,23 @@ module.exports = async (req, res) => {
                 }
             };
 
-            if (kind === 'worse') {
+            if (kind === 'worse' || kind === 'worse_unplanned') {
                 if (levelInfo.level === 'quiet') return null;
+
+                const unplanned = kind === 'worse_unplanned';
+                const unplannedNote = unplanned
+                    ? (isUk
+                        ? '<p>⚠️ <b>Незаплановане підвищення</b> — рівень вищий за вечірній прогноз.</p>'
+                        : '<p>⚠️ <b>Unplanned rise</b> — stronger than the evening forecast.</p>')
+                    : '';
 
                 if (levelInfo.level === 'unsettled') {
                     const c = copy.unsettled;
-                    return `<h3>🧲 ${label}</h3>` +
+                    const title = unplanned
+                        ? (isUk ? `🧲 Незаплановано: ${label}` : `🧲 Unplanned: ${label}`)
+                        : `🧲 ${label}`;
+                    return `<h3>${title}</h3>` +
+                        unplannedNote +
                         `<p>${isUk ? c.descUk : c.descEn}</p>` +
                         `<blockquote>${isUk ? 'Рекомендації' : 'Recommendations'}: ${isUk ? c.adviceUk : c.adviceEn}</blockquote>`;
                 }
@@ -189,8 +200,11 @@ module.exports = async (req, res) => {
                 // Storm G1–G5
                 const key = `g${g}`;
                 const c = copy[key] || copy.g1;
-                const title = isUk ? `🧲 Увага! ${label}` : `🧲 Alert! ${label}`;
+                const title = unplanned
+                    ? (isUk ? `🧲 Незаплановано! ${label}` : `🧲 Unplanned! ${label}`)
+                    : (isUk ? `🧲 Увага! ${label}` : `🧲 Alert! ${label}`);
                 return `<h3>${title}</h3>` +
+                    unplannedNote +
                     `<p>${isUk ? c.descUk : c.descEn}</p>` +
                     `<blockquote>${isUk ? 'Рекомендації' : 'Recommendations'}: ${isUk ? c.adviceUk : c.adviceEn}</blockquote>`;
             }
@@ -740,17 +754,20 @@ module.exports = async (req, res) => {
                     console.error('Tomorrow.io hourly cache error:', tioErr.message);
                 }
 
-// --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
+                // --- LOGIC E: Real-time Geomagnetic Activity (Magnetic Storms) ---
                 // Rules (state machine by rank):
-                // - Alert ONLY on the CURRENT 3-hour Kp slot (observed/estimated "now"),
-                //   never on future forecast peaks within +12h (that misled users).
+                // - Alert ONLY on the CURRENT 3-hour Kp slot from OBSERVED data
+                //   (never pure predicted; estimated of the incomplete bin is used only
+                //   for dashboard snap — it is too noisy for alerts).
                 // - Evening forecast does NOT write geomag state to DB
                 // - Check owns lastGeomagAlert { date, maxKp, rank, level }
-                // - Same rank today → silent (no re-send, no overwrite spam)
+                // - lastRank is taken from the LAST stored alert REGARDLESS of date
+                //   (so midnight does not look like a fresh "worse from -1")
+                // - Same rank as last → silent (only refresh date in DB)
                 // - Rank increased → alert worse (unsettled / storm) + recommendations
                 // - Rank decreased → alert improved (to unsettled / to quiet)
-                // - First observation of the day always seeds lastGeomagAlert;
-                //   alert only if rank >= 1 (unsettled+) so we don't spam "calm" at midnight
+                // - First-ever observation (no last at all): seed DB, alert only if rank >= 1
+                //   and source is observed (not estimated-only)
                 let snapGeomag = null;
                 let snapWaqi = null;
                 try {
@@ -768,51 +785,81 @@ module.exports = async (req, res) => {
                             const normalized = s.includes('T') ? s : s.replace(' ', 'T');
                             return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z').getTime();
                         };
-                        // Current 3h bin: time_tag <= now < time_tag + 3h (NOAA bins start on the hour)
-                        // Prefer observed/estimated; pure predicted for "now" is ignored.
-                        let currentRow = null;
+
+                        // displayRow = whatever NOAA marks for the current 3h window (may be estimated)
+                        // alertRow  = observed only (current bin if finished/observed, else last past observed)
+                        let displayRow = null;
+                        let alertRow = null;
                         for (const r of noaaRes.data) {
                             const t = parseNoaaTime(r.time_tag);
                             if (isNaN(t)) continue;
                             if (t <= now && now < t + 3 * 3600 * 1000) {
-                                currentRow = r;
+                                displayRow = r;
+                                if (r.observed === 'observed') alertRow = r;
                                 break;
                             }
                         }
-                        // Fallback: latest non-future observed/estimated point
-                        if (!currentRow) {
-                            const past = noaaRes.data
+                        // Fallback for alerts: latest fully observed point in the past
+                        if (!alertRow) {
+                            const pastObs = noaaRes.data
                                 .map(r => ({ r, t: parseNoaaTime(r.time_tag) }))
-                                .filter(({ r, t }) => !isNaN(t) && t <= now && r.observed !== 'predicted')
+                                .filter(({ r, t }) => !isNaN(t) && t <= now && r.observed === 'observed')
                                 .sort((a, b) => b.t - a.t);
-                            if (past.length) currentRow = past[0].r;
+                            if (pastObs.length) alertRow = pastObs[0].r;
                         }
-                        // Pure "predicted" never counts as current — only observed/estimated
-                        const rawKp = (currentRow && currentRow.observed !== 'predicted')
-                            ? parseFloat(currentRow.kp != null ? currentRow.kp : currentRow.Kp)
+
+                        // Dashboard snap may still show estimated "now" when available
+                        const snapSource = (displayRow && displayRow.observed !== 'predicted')
+                            ? displayRow
+                            : alertRow;
+                        const snapKpRaw = snapSource
+                            ? parseFloat(snapSource.kp != null ? snapSource.kp : snapSource.Kp)
+                            : null;
+                        const snapLevel = (snapKpRaw != null && !isNaN(snapKpRaw))
+                            ? getGeomagLevel(Math.round(Number(snapKpRaw)))
+                            : null;
+                        if (snapLevel) {
+                            snapGeomag = {
+                                maxKp: snapLevel.kp,
+                                badge: snapLevel.badge,
+                                level: snapLevel.level,
+                                rank: snapLevel.rank,
+                                updatedAt: new Date()
+                            };
+                        }
+
+                        // Alerts: ONLY observed rows (never estimated / predicted)
+                        const rawKp = alertRow
+                            ? parseFloat(alertRow.kp != null ? alertRow.kp : alertRow.Kp)
                             : null;
                         const currentKp = (rawKp != null && !isNaN(rawKp)) ? rawKp : null;
                         // Classify by rounded Kp so "Kp 5" in the header always maps to G1 advice
-                        // (raw 4.5–4.9 would otherwise stay "unsettled" while displaying Kp 5).
                         const current = getGeomagLevel(
                             currentKp == null ? null : Math.round(Number(currentKp))
                         );
 
                         if (current) {
-                            snapGeomag = {
-                                maxKp: current.kp,
-                                badge: current.badge,
-                                level: current.level,
-                                rank: current.rank,
-                                updatedAt: new Date()
-                            };
-
                             const last = cityDoc?.lastGeomagAlert;
-                            const lastRank = (last?.date === todayStr && last?.rank != null)
-                                ? Number(last.rank)
-                                : (last?.date === todayStr && last?.maxKp != null
-                                    ? (getGeomagLevel(Math.round(Number(last.maxKp)))?.rank ?? -1)
-                                    : -1);
+                            // lastRank: last *current* state (any day) — for recovery / same-level silence
+                            // peakRank: highest rank already seen *today* — anti-spam on drop→re-rise
+                            let lastRank = -1;
+                            if (last != null) {
+                                if (last.rank != null) {
+                                    lastRank = Number(last.rank);
+                                } else if (last.maxKp != null) {
+                                    lastRank = getGeomagLevel(Math.round(Number(last.maxKp)))?.rank ?? -1;
+                                }
+                            }
+                            const sameDay = last?.date === todayStr;
+                            let peakRank = -1;
+                            if (sameDay) {
+                                if (last.maxRank != null) {
+                                    peakRank = Number(last.maxRank);
+                                } else if (last.rank != null) {
+                                    // migrate: treat previous today's rank as peak so far
+                                    peakRank = Number(last.rank);
+                                }
+                            }
 
                             // Evening plan for quiet mode (seeded by cron-forecast; key = local YYYY-MM-DD)
                             const planEntry = cityDoc?.eveningGeomag?.[todayStr];
@@ -820,17 +867,18 @@ module.exports = async (req, res) => {
                                 ? Number(planEntry.maxRank)
                                 : -1;
 
-                            // Same rank today → silent (dashboard snap only)
-                            if (last?.date === todayStr && current.rank === lastRank) {
-                                // no-op
+                            // Same rank as last known state → silent (still refresh date / peak below)
+                            if (lastRank >= 0 && current.rank === lastRank) {
+                                // no-op for alerts
                             } else {
                                 // kind candidates from rank delta (city-level)
-                                // - worse: rank rose and is at least unsettled
+                                // - worse: NEW daily peak (strictly above peakRank), rank >= 1
+                                //   so 6→4→6 does NOT re-alert; 6→4→7 does
                                 // - better_full: full calm after any disturbance
                                 // - better_partial: intermediate drop (active mode only)
                                 let kindBase = null; // 'worse' | 'better' | null
                                 let isPartialBetter = false;
-                                if (current.rank > lastRank && current.rank >= 1) {
+                                if (current.rank > peakRank && current.rank >= 1) {
                                     kindBase = 'worse';
                                 } else if (current.rank === 0 && lastRank > 0) {
                                     kindBase = 'better';
@@ -869,8 +917,15 @@ module.exports = async (req, res) => {
                                             if (mode === 'active') {
                                                 kind = 'worse';
                                             } else if (mode === 'quiet') {
-                                                // only above lastAlerted AND above evening plan
-                                                if (current.rank > lastRank && current.rank > planRank) {
+                                                // Quiet (kindBase already means new daily peak):
+                                                // - no evening plan → alert
+                                                // - reaches plan (rank >= planRank) → planned
+                                                // - exceeds plan (rank > planRank) → unplanned
+                                                if (planRank < 0) {
+                                                    kind = 'worse';
+                                                } else if (current.rank > planRank) {
+                                                    kind = 'worse_unplanned';
+                                                } else if (current.rank >= planRank) {
                                                     kind = 'worse';
                                                 }
                                             }
@@ -899,28 +954,34 @@ module.exports = async (req, res) => {
                                         alertTriggered = true;
                                     }
                                 }
+                            }
 
-                                // Always persist current level so next pass can detect change
-                                await City.findOneAndUpdate(
-                                    { externalId: key },
-                                    {
-                                        $set: {
-                                            lastGeomagAlert: {
-                                                date: todayStr,
-                                                maxKp: current.kp,
-                                                rank: current.rank,
-                                                level: current.level
-                                            }
+                            // Persist current state + daily peak (anti-spam on drop→re-rise)
+                            const newPeakRank = Math.max(peakRank, current.rank);
+                            const newPeakKp = (current.rank >= newPeakRank && current.rank > peakRank)
+                                ? current.kp
+                                : (sameDay && last?.maxKp != null && peakRank >= current.rank
+                                    ? last.maxKp
+                                    : current.kp);
+                            await City.findOneAndUpdate(
+                                { externalId: key },
+                                {
+                                    $set: {
+                                        lastGeomagAlert: {
+                                            date: todayStr,
+                                            maxKp: newPeakKp,
+                                            maxRank: newPeakRank,
+                                            rank: current.rank,
+                                            level: current.level
                                         }
                                     }
-                                );
-                            }
+                                }
+                            );
                         }
                     }
                 } catch (geomagErr) {
                     console.error('Geomag check error in cron-check:', geomagErr.message);
                 }
-
                 // --- LOGIC F: Real-time AQI Transition Check (worsen OR improve to safe) ---
                 // Rules:
                 // - Alert only on transitions: safe → worse, or worse → safe
