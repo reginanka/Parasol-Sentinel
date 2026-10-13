@@ -366,8 +366,8 @@ async function loadWeatherData(userId, sig = '', forceRefresh = false) {
             accessType.textContent = i18n[currentLang][currentStatusKey];
             // Ensure full Kp time series for the Mag tab (API may only send maxKp)
             await ensureGeomagSeries();
-            // Always recompute pill from current 3h slot (snapshot may still hold old max-window Kp)
-            syncGeomagBadgeFromSeries();
+            // Pill = live 1-min Kp when available
+            await syncGeomagBadgeFromSeries();
             prunePastDays();
             updateUI(findTodayIndex());
             const lat = data.user?.lat || data.lat || DEFAULT_LAT;
@@ -569,23 +569,60 @@ function geomagPointStatus(pt) {
     return 'forecast';
 }
 
-/** Pill = interpolated Kp at this moment (more responsive than flat 3h bin). */
-function syncGeomagBadgeFromSeries() {
-    if (!weatherData?.geomagSeries?.length) return;
+/** Latest NOAA 1-min estimated Kp (true "right now"). */
+async function fetchLiveKp1m() {
+    try {
+        const res = await fetch('https://services.swpc.noaa.gov/json/planetary_k_index_1m.json');
+        if (!res.ok) return null;
+        const arr = await res.json();
+        if (!Array.isArray(arr) || !arr.length) return null;
+        const last = arr[arr.length - 1];
+        const v = parseFloat(
+            last.estimated_kp != null ? last.estimated_kp
+                : (last.kp_index != null ? last.kp_index : last.kp)
+        );
+        return isNaN(v) ? null : v;
+    } catch (e) {
+        console.warn('fetchLiveKp1m failed:', e.message);
+        return null;
+    }
+}
+
+/** Pill = live 1-min Kp when available; else 3h slot / interpolate fallback. */
+async function syncGeomagBadgeFromSeries() {
+    if (!weatherData) return;
+    const liveKp = await fetchLiveKp1m();
+    if (liveKp != null) {
+        weatherData.geomag = {
+            maxKp: liveKp,
+            badge: geomagBadgeFromKp(liveKp),
+            source: 'live_1m'
+        };
+        return;
+    }
+    if (!weatherData.geomagSeries?.length) return;
+    const currentPt = pickCurrentGeomagPoint(weatherData.geomagSeries);
+    if (currentPt && currentPt.observed === 'observed') {
+        weatherData.geomag = {
+            maxKp: currentPt.kp,
+            badge: geomagBadgeFromKp(currentPt.kp),
+            source: '3h_observed'
+        };
+        return;
+    }
     const at = interpolateKpAt(weatherData.geomagSeries, Date.now());
     if (at && at.observed !== 'predicted' && at.observed !== 'outlook') {
         weatherData.geomag = {
             maxKp: at.kp,
-            badge: geomagBadgeFromKp(at.kp)
+            badge: geomagBadgeFromKp(at.kp),
+            source: '3h'
         };
-    } else {
-        const currentPt = pickCurrentGeomagPoint(weatherData.geomagSeries);
-        if (currentPt) {
-            weatherData.geomag = {
-                maxKp: currentPt.kp,
-                badge: geomagBadgeFromKp(currentPt.kp)
-            };
-        }
+    } else if (currentPt) {
+        weatherData.geomag = {
+            maxKp: currentPt.kp,
+            badge: geomagBadgeFromKp(currentPt.kp),
+            source: '3h'
+        };
     }
 }
 
@@ -663,7 +700,7 @@ async function ensureGeomagSeries() {
         }
         if (series.length) {
             weatherData.geomagSeries = series;
-            syncGeomagBadgeFromSeries();
+            await syncGeomagBadgeFromSeries();
         }
     } catch (e) {
         console.warn('ensureGeomagSeries failed:', e.message);
@@ -701,7 +738,7 @@ async function fetchOpenMeteo(lat, lon, name) {
                         .filter(r => !isNaN(r.kp));
                     series = await extendGeomagWith27DayOutlook(series);
                     weatherData.geomagSeries = series;
-                    syncGeomagBadgeFromSeries();
+                    await syncGeomagBadgeFromSeries();
                 }
             }
         } catch (extraErr) {
@@ -858,7 +895,7 @@ function updateNowExtras(isToday) {
         aqiPill.style.display = 'none';
     }
 
-    // --- Geomagnetic activity (interpolated "now" from 3h slots) ---
+    // --- Geomagnetic activity (live 1-min Kp when available) ---
     const geo = weatherData.geomag;
     if (geo && geo.maxKp != null) {
         const kp = Number(geo.maxKp);
@@ -867,11 +904,13 @@ function updateNowExtras(isToday) {
         let lvl = 'lvl-good';
         if (kp >= 5) { label = t.geomagStorm; lvl = 'lvl-bad'; }
         else if (kp >= 4) { label = t.geomagUnsettled; lvl = 'lvl-mod'; }
-        // One decimal when fractional (hourly interpolate); integer when whole
         const kpStr = Math.abs(kp - Math.round(kp)) < 0.05 ? String(Math.round(kp)) : kp.toFixed(1);
         document.getElementById('geomag-val').textContent = `Kp ${kpStr} · ${label}`;
         setLvl(geoPill, lvl);
         geoPill.style.display = 'inline-flex';
+        geoPill.title = geo.source === 'live_1m'
+            ? (currentLang === 'uk' ? 'NOAA 1-хв (зараз)' : 'NOAA 1-min (now)')
+            : (currentLang === 'uk' ? 'NOAA 3h Kp' : 'NOAA 3h Kp');
         showAny = true;
     } else {
         geoPill.style.display = 'none';
