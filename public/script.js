@@ -90,11 +90,13 @@ const i18n = {
         freeAccess: "Безкоштовний доступ",
         premiumStatus: "Преміум статус",
         sentinelDashboard: "Преміум статус",
-        settingsTitle: "⚙️ Налаштування",
-        settingsWind: "🌬 Вітер",
-        settingsPress: "🌡 Тиск",
-        settingsTemp: "🌡 Температура",
+        settingsTitle: "Налаштування",
+        settingsWind: "Вітер",
+        settingsPress: "Тиск",
+        settingsTemp: "Температура",
         settingsNote: "Налаштування синхронізуються з ботом",
+        advancedStats: "Розширені показники",
+        advancedStatsHide: "Сховати показники",
         pwaInstall: "Встановити Parasol на телефон",
         pwaInstallBtn: "Встановити додаток",
         pwaCopyLink: "Скопіювати посилання",
@@ -185,11 +187,13 @@ const i18n = {
         freeAccess: "Free Access",
         premiumStatus: "Premium Status",
         sentinelDashboard: "Premium Status",
-        settingsTitle: "⚙️ Settings",
-        settingsWind: "🌬 Wind",
-        settingsPress: "🌡 Pressure",
-        settingsTemp: "🌡 Temperature",
+        settingsTitle: "Settings",
+        settingsWind: "Wind",
+        settingsPress: "Pressure",
+        settingsTemp: "Temperature",
         settingsNote: "Settings sync with the bot",
+        advancedStats: "Advanced metrics",
+        advancedStatsHide: "Hide metrics",
         pwaInstall: "Install Parasol on your phone",
         pwaInstallBtn: "Install app",
         pwaCopyLink: "Copy link",
@@ -611,6 +615,24 @@ async function init() {
     document.querySelectorAll('.unit-btn').forEach(btn => {
         btn.addEventListener('click', () => saveUnitSetting(btn.dataset.type, btn.dataset.val));
     });
+
+    // Advanced stats accordion (mobile only)
+    const advToggle = document.getElementById('advanced-stats-toggle');
+    const compactStats = document.getElementById('compact-stats');
+    if (advToggle && compactStats) {
+        advToggle.addEventListener('click', () => {
+            const expanded = advToggle.getAttribute('aria-expanded') === 'true';
+            const next = !expanded;
+            advToggle.setAttribute('aria-expanded', String(next));
+            compactStats.classList.toggle('is-expanded', next);
+            const label = advToggle.querySelector('.advanced-stats-label');
+            if (label) {
+                label.textContent = next
+                    ? (i18n[currentLang].advancedStatsHide || 'Сховати показники')
+                    : (i18n[currentLang].advancedStats || 'Розширені показники');
+            }
+        });
+    }
 
     updateTexts();
 }
