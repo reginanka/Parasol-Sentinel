@@ -223,6 +223,11 @@ module.exports = async (req, res) => {
             enabledMetrics: ['condition', 'temp', 'precip', 'wind', 'pressure', 'aqi', 'geomag']
         };
         const metrics = settings.enabledMetrics || [];
+        // Якість повітря: три окремі опції (+ legacy 'aqi' = усі три)
+        const hasAqiNow  = metrics.includes('aqi_now')  || metrics.includes('aqi');
+        const hasAqiMain = metrics.includes('aqi_main') || metrics.includes('aqi');
+        const hasAqiExt  = metrics.includes('aqi_ext')  || metrics.includes('aqi');
+        const needOmAq   = hasAqiMain || hasAqiExt;
 
         // --- Weatherbit ---
         const response = await axios.get(
@@ -231,10 +236,10 @@ module.exports = async (req, res) => {
         const fullResponse = response.data.data;
         const apiCityName = response.data.city_name || user.city;
 
-        // --- WAQI (AQI) ---
+        // --- WAQI (AQI) — лише якщо увімкнено «Повітря зараз» ---
         let aqiData = null;
         const WAQI_TOKEN = process.env.WAQI_TOKEN;
-        if (WAQI_TOKEN) {
+        if (WAQI_TOKEN && hasAqiNow) {
             try {
                 const waqiRes = await axios.get(
                     `https://api.waqi.info/feed/geo:${user.lat};${user.lon}/?token=${WAQI_TOKEN}`,
@@ -325,9 +330,10 @@ module.exports = async (req, res) => {
             console.error('Test forecast MeteoAlarm error:', e.message);
         }
 
-        // --- Open-Meteo Air Quality (test: full set of metrics for table) ---
-        // Hourly CAMS → daily max/mean per calendar day
-        let omAqByDate = {}; // { 'YYYY-MM-DD': { eaqlMax, usAqiMax, pm25Max, pm10Max, no2Max, o3Max, so2Max, coMax, dustMax } }
+        // --- Open-Meteo Air Quality (лише якщо aqi_main / aqi_ext) ---
+        // Hourly CAMS → daily max per calendar day
+        let omAqByDate = {}; // { 'YYYY-MM-DD': { eaqiMax, usAqiMax, pm25Max, pm10Max, no2Max, o3Max, so2Max, coMax, dustMax } }
+        if (needOmAq) {
         try {
             const aqUrl =
                 `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}` +
@@ -367,6 +373,7 @@ module.exports = async (req, res) => {
         } catch (e) {
             console.error('Test forecast Open-Meteo AQ error:', e.message);
         }
+        } // end if (needOmAq)
 
         // --- Формування повідомлення (Rich Message) ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
@@ -375,7 +382,7 @@ module.exports = async (req, res) => {
 
         // ========== 1. AQI prefix ==========
         let aqiHtml = '';
-        if (metrics.includes('aqi') && aqiData) {
+        if (hasAqiNow && aqiData) {
             const aqiLabel = isUk ? '🍃 <b>Якість повітря (на момент зараз):</b>' : '🍃 <b>Air Quality (current moment):</b>';
             aqiHtml = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
             if (aqiData.pm25 != null) aqiHtml += ` | PM2.5: ${aqiData.pm25}`;
@@ -563,9 +570,9 @@ module.exports = async (req, res) => {
                 }
             }
 
-            // --- Open-Meteo Air Quality tips (модель CAMS, денний max) ---
+            // --- Open-Meteo Air Quality tips (якщо aqi_main) ---
             const dStrAq = String(day.valid_date || day.datetime || '').slice(0, 10);
-            const aq = omAqByDate[dStrAq];
+            const aq = (hasAqiMain || hasAqiExt) ? omAqByDate[dStrAq] : null;
             if (aq) {
                 const issues = [];
                 // М’якші пороги для підказки (коли вже є підвищений EAQI)
@@ -844,8 +851,9 @@ module.exports = async (req, res) => {
             rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн.<br>бурі' : 'Geomag'}</b></td>${cells}</tr>`);
         }
 
-        // --- Open-Meteo Air Quality rows (TEST only — always shown) ---
+        // --- Open-Meteo Air Quality rows (за опціями aqi_main / aqi_ext) ---
         // Пороги орієнтовні (WHO/EEA daily): 🟢 добре → 🟡 помірно → 🟠 погано → 🔴 небезпечно
+        if (hasAqiMain || hasAqiExt) {
         const aqBadgeFor = (key, v) => {
             if (v == null || Number.isNaN(Number(v))) return '';
             const n = Number(v);
@@ -876,21 +884,30 @@ module.exports = async (req, res) => {
             return `<td align="center" valign="middle">${badge}<br>${n}</td>`;
         };
 
-        const aqRows = [
+        // Основне: EAQI, US AQI, PM2.5, PM10
+        const aqRowsMain = [
             ['eaqiMax', isUk ? 'EAQI<br><small>OM max</small>' : 'EAQI<br><small>OM max</small>', 0],
             ['usAqiMax', isUk ? 'US AQI<br><small>OM max</small>' : 'US AQI<br><small>OM max</small>', 0],
             ['pm25Max', 'PM2.5<br><small>µg/m³</small>', 1],
-            ['pm10Max', 'PM10<br><small>µg/m³</small>', 1],
+            ['pm10Max', 'PM10<br><small>µg/m³</small>', 1]
+        ];
+        // Розширене: NO2, O3, SO2, CO, dust
+        const aqRowsExt = [
             ['no2Max', 'NO₂<br><small>µg/m³</small>', 1],
             ['o3Max', 'O₃<br><small>µg/m³</small>', 1],
             ['so2Max', 'SO₂<br><small>µg/m³</small>', 1],
             ['coMax', 'CO<br><small>µg/m³</small>', 0],
             ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1]
         ];
+        const aqRows = [
+            ...(hasAqiMain ? aqRowsMain : []),
+            ...(hasAqiExt ? aqRowsExt : [])
+        ];
         for (const [key, label, dec] of aqRows) {
             const cells = userForecast.map((day) => aqCell(day, key, dec)).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>🍃 ${label}</b></td>${cells}</tr>`);
         }
+        } // end hasAqiMain || hasAqiExt
 
         const tableHtml = `
 <table bordered striped>

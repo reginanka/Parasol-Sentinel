@@ -102,7 +102,9 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         metric_moon: "Місяць",
         metric_sun: "Схід/Захід сонця",
         agroAnalyticsBtn: "📉 Агро-аналітика",
-        metric_aqi: "🍃 Якість повітря",
+        metric_aqi_now: "🍃 Повітря зараз",
+        metric_aqi_main: "🍃 Повітря основне",
+        metric_aqi_ext: "🍃 Повітря розш.",
         metric_geomag: "🧲 Магнітні бурі",
         help_aqi: "🍃 Якість повітря",
         help_geomag: "🧲 Магнітні бурі",
@@ -239,7 +241,9 @@ help_how_desc: "<h3>ℹ️ How it works</h3><ol><li>Send a city name — the bot
         metric_moon: "Moon",
         metric_sun: "Sunrise/Sunset",
         agroAnalyticsBtn: "📉 Agro-Analytics",
-        metric_aqi: "🍃 Air Quality",
+        metric_aqi_now: "🍃 Air now",
+        metric_aqi_main: "🍃 Air main",
+        metric_aqi_ext: "🍃 Air extended",
         metric_geomag: "🧲 Magnetic Storms",
         help_aqi: "🍃 Air Quality",
         help_geomag: "🧲 Magnetic Storms",
@@ -406,12 +410,19 @@ function buildForecastSettingsKeyboard(lang, settings = {}, eveningForecastEnabl
         ['uv', 'visibility'],
         ['soil0', 'soil6'],
         ['moon', 'sun'],
-        ['aqi', 'geomag']
+        ['aqi_now', 'aqi_main'],
+        ['aqi_ext', 'geomag']
     ];
 
+    // legacy 'aqi' → вважаємо увімкненими всі три нові ключі
+    const hasMetric = (m) => {
+        if (metrics.includes(m)) return true;
+        if (metrics.includes('aqi') && (m === 'aqi_now' || m === 'aqi_main' || m === 'aqi_ext')) return true;
+        return false;
+    };
     const metricButtons = metricItems.map(row =>
         row.map(m => ({
-            text: `${metrics.includes(m) ? '✅ ' : '⬜️ '}${d['metric_' + m]}`,
+            text: `${hasMetric(m) ? '✅ ' : '⬜️ '}${d['metric_' + m]}`,
             callback_data: `forecast|toggle|${m}`
         }))
     );
@@ -2268,7 +2279,14 @@ bot.on("callback_query:data", async (ctx) => {
                 update = { $set: { 'forecastSettings.daysCount': parseInt(value) } };
             } else if (subType === 'toggle') {
                 const user = await User.findOne({ telegramId: ctx.from.id });
-                const currentMetrics = user.forecastSettings?.enabledMetrics || [];
+                let currentMetrics = user.forecastSettings?.enabledMetrics || [];
+                // Міграція legacy 'aqi' → три окремі ключі при першому кліку по новим
+                if (currentMetrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(value)) {
+                    currentMetrics = currentMetrics.filter(m => m !== 'aqi');
+                    for (const k of ['aqi_now', 'aqi_main', 'aqi_ext']) {
+                        if (!currentMetrics.includes(k)) currentMetrics.push(k);
+                    }
+                }
                 const newMetrics = currentMetrics.includes(value)
                     ? currentMetrics.filter(m => m !== value)
                     : [...currentMetrics, value];
