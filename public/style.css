@@ -811,12 +811,8 @@ main {
         margin: 0;
         width: 100%;
         box-sizing: border-box;
-        /* Same paint as page body (solid + accent gradient) */
-        background-color: var(--background);
-        background-image: var(--background-accent);
-        background-repeat: no-repeat;
-        background-size: 100vw 100vh;
-        background-position: top center;
+        background-color: #1C2B35;
+        background-image: none;
         border-bottom: 1px solid var(--border);
         box-shadow: none;
     }
