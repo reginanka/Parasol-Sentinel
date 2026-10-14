@@ -777,7 +777,7 @@ main {
     .desktop-only { display: none !important; }
     .mobile-only { display: flex !important; }
 
-    /* Sticky needs no overflow/fixed-bg ancestors — disable fixed bg on mobile */
+    /* Fixed mobile bar (sticky fails when parent .header scrolls away) */
     body {
         background-attachment: scroll;
         overflow-x: clip;
@@ -787,11 +787,16 @@ main {
         overflow: visible;
     }
 
-    /* Sticky strip only */
+    /* Reserve space so content is not hidden under fixed bar */
+    .header {
+        padding-top: calc(4.6rem + env(safe-area-inset-top, 0px));
+    }
+
     .header-sticky {
-        position: -webkit-sticky;
-        position: sticky;
+        position: fixed;
         top: 0;
+        left: 0;
+        right: 0;
         z-index: 900;
         display: grid;
         grid-template-columns: 1fr auto;
@@ -801,12 +806,17 @@ main {
         align-items: center;
         column-gap: 0.4rem;
         row-gap: 0.12rem;
-        padding: 0.38rem 0.5rem;
+        padding: 0.38rem 0.65rem;
         padding-top: max(0.38rem, env(safe-area-inset-top, 0px));
-        margin: 0 -0.4rem;
-        width: calc(100% + 0.8rem);
+        margin: 0;
+        width: 100%;
         box-sizing: border-box;
-        background: var(--background);
+        /* Same paint as page body (solid + accent gradient) */
+        background-color: var(--background);
+        background-image: var(--background-accent);
+        background-repeat: no-repeat;
+        background-size: 100vw 100vh;
+        background-position: top center;
         border-bottom: 1px solid var(--border);
         box-shadow: none;
     }
