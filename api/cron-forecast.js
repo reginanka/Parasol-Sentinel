@@ -622,21 +622,23 @@ module.exports = async (req, res) => {
                     }
 
                     // ========== 3. Smart highlights ==========
-                    const dayAccusativeUk = {
-                        'понеділок': 'понеділок',
-                        'вівторок': 'вівторок',
-                        'середа': 'середу',
-                        'четвер': 'четвер',
-                        "п'ятниця": "п'ятницю",
-                        'субота': 'суботу',
-                        'неділя': 'неділю'
-                    };
+                    // Знахідний відмінок через getDay() — locale інколи дає різний апостроф у «п'ятниця»
+                    const dayAccusativeByIndex = [
+                        'неділю', 'понеділок', 'вівторок', 'середу', 'четвер', "п'ятницю", 'суботу'
+                    ];
                     const getDayForPreposition = (dateObj) => {
                         if (!isUk) {
                             return dateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: cityTzForDays });
                         }
-                        const nominative = dateObj.toLocaleDateString('uk-UA', { weekday: 'long', timeZone: cityTzForDays }).toLowerCase();
-                        return dayAccusativeUk[nominative] || nominative;
+                        // weekday у локальному TZ міста
+                        const parts = new Intl.DateTimeFormat('en-US', {
+                            timeZone: cityTzForDays,
+                            weekday: 'short'
+                        }).formatToParts(dateObj);
+                        const wd = (parts.find((p) => p.type === 'weekday') || {}).value || '';
+                        const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+                        const idx = map[wd] != null ? map[wd] : dateObj.getDay();
+                        return dayAccusativeByIndex[idx] || dateObj.toLocaleDateString('uk-UA', { weekday: 'long', timeZone: cityTzForDays }).toLowerCase();
                     };
 
                     const highlights = [];
@@ -774,9 +776,10 @@ module.exports = async (req, res) => {
                     // Official UA Hydrometcenter alerts (MeteoAlarm) — prepend to tips block
                     if (cityMeteoAlerts.length > 0) {
                         const alertHeader = isUk
-                            ? '⚠️ Офіційні попередження Укргідрометцентру:'
-                            : '⚠️ Official Hydrometcenter warnings:';
+                            ? '⚠️ Офіційне попередження Укргідрометцентру:'
+                            : '⚠️ Official Hydrometcenter warning:';
                         const alertLines = cityMeteoAlerts.slice(0, 4).map((a) => a.line).join('\n');
+                        // Порожній рядок після алертів — відділяє від самарі «Парасоль»
                         highlightText = `${alertHeader}\n${alertLines}\n\n${highlightText}`;
                     }
 
@@ -962,7 +965,7 @@ module.exports = async (req, res) => {
                         : `${settings.daysCount}-day forecast for ${escapeHTML(displayCity)}`;
                     fullHtml += `<h1>🌆 ${titleText}</h1>\n\n`;
 
-                    fullHtml += `<aside>${escapeHTML(highlightText)}<br>
+                    fullHtml += `<aside>${escapeHTML(highlightText).replace(/\n/g, '<br>')}<br>
   <cite>${citeText}</cite>
 </aside>\n\n`;
 

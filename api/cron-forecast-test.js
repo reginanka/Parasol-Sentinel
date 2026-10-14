@@ -384,24 +384,24 @@ module.exports = async (req, res) => {
 
         // ========== 3. Smart highlights (на що звернути увагу) ==========
         // Українські дні у знахідному відмінку після прийменника «у»
-        // понеділок/вівторок/четвер — не змінюються; середа→середу, п'ятниця→п'ятницю, субота→суботу, неділя→неділю
-        const dayAccusativeUk = {
-            'понеділок': 'понеділок',
-            'вівторок': 'вівторок',
-            'середа': 'середу',
-            'четвер': 'четвер',
-            "п'ятниця": "п'ятницю",
-            'субота': 'суботу',
-            'неділя': 'неділю'
-        };
+        // Надійніше через getDay() — locale інколи віддає різний апостроф у «п'ятниця»
+        const dayAccusativeByIndex = [
+            'неділю',    // 0 Sunday
+            'понеділок', // 1
+            'вівторок',  // 2
+            'середу',    // 3
+            'четвер',    // 4
+            "п'ятницю",  // 5
+            'суботу'     // 6
+        ];
 
         const getDayForPreposition = (dateObj) => {
             if (!isUk) {
                 return dateObj.toLocaleDateString('en-US', { weekday: 'long' });
             }
-            // locale може повернути з великої літери
-            const nominative = dateObj.toLocaleDateString('uk-UA', { weekday: 'long' }).toLowerCase();
-            return dayAccusativeUk[nominative] || nominative;
+            const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
+            const idx = d.getDay();
+            return dayAccusativeByIndex[idx] || dateObj.toLocaleDateString('uk-UA', { weekday: 'long' }).toLowerCase();
         };
 
         const highlights = [];
@@ -410,7 +410,9 @@ module.exports = async (req, res) => {
         let highPressureEnd = null;
 
         userForecast.forEach((day) => {
-            const dateObj = new Date(day.valid_date || day.datetime);
+            const rawDate = day.valid_date || day.datetime || '';
+            // Полудень UTC-safe, щоб weekday не з’їжджав через TZ
+            const dateObj = new Date(rawDate.includes('T') ? rawDate : `${String(rawDate).slice(0, 10)}T12:00:00`);
             const dayName = getDayForPreposition(dateObj); // уже у потрібному відмінку
 
             // Дощ
@@ -549,9 +551,10 @@ module.exports = async (req, res) => {
         // Official UA Hydrometcenter alerts (MeteoAlarm) — prepend to tips block
         if (meteoAlerts.length > 0) {
             const alertHeader = isUk
-                ? '⚠️ Офіційні попередження Укргідрометцентру:'
-                : '⚠️ Official Hydrometcenter warnings:';
+                ? '⚠️ Офіційне попередження Укргідрометцентру:'
+                : '⚠️ Official Hydrometcenter warning:';
             const alertLines = meteoAlerts.slice(0, 4).map((a) => a.line).join('\n');
+            // Порожній рядок після алертів — відділяє від самарі «Парасоль»
             highlightText = `${alertHeader}\n${alertLines}\n\n${highlightText}`;
         }
 
@@ -764,7 +767,7 @@ module.exports = async (req, res) => {
 
         fullHtml += `<h1>🧪 ${isUk ? 'ТЕСТОВИЙ прогноз' : 'TEST forecast'} на ${settings.daysCount} дн. для ${escapeHTML(displayCity)}</h1>\n\n`;
 
-        fullHtml += `<aside>${escapeHTML(highlightText)}<br>
+        fullHtml += `<aside>${escapeHTML(highlightText).replace(/\n/g, '<br>')}<br>
   <cite>${citeText}</cite>
 </aside>\n\n`;
 
