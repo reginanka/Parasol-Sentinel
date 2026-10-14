@@ -75,9 +75,14 @@ function adminKeyboard() {
             ],
             [
                 { text: '🌆 Розсилка вечір. прогнозу', callback_data: 'adm|broadcast_evening' },
-                { text: '✉️ Написати користувачу', callback_data: 'adm|msg_user' }
+                { text: '🧪 Вечірній тест', callback_data: 'adm|evening_test' }
             ],
             [
+                { text: '🎯 Вечірній крон обраним', callback_data: 'adm|evening_one' },
+                { text: '🔍 Крон чек', callback_data: 'adm|cron_check' }
+            ],
+            [
+                { text: '✉️ Написати користувачу', callback_data: 'adm|msg_user' },
                 { text: '🔄 Оновити меню', callback_data: 'adm|menu' }
             ]
         ]
@@ -632,7 +637,218 @@ async function handleAdminCallback(ctx) {
                 });
                 await api.sendMessage(
                     chatId,
-                    `✅ Cron-forecast відповів: <code>${res.status}</code>\n${escapeHtml(String(res.data).slice(0, 500))}`,
+                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                        `┃  🌆 <b>Розсилка вечір. прогнозу</b>\n` +
+                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                        `Статус: <code>${res.status}</code>\n` +
+                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
+                    parse_mode: 'HTML'
+                });
+            }
+            return true;
+        }
+
+        // ─── Вечірній тест (cron-forecast-test, TEST_USER_ID) ───
+        if (sub === 'evening_test') {
+            await api.sendMessage(
+                chatId,
+                '🧪 <b>Вечірній тест</b>\n\n' +
+                    'Запускає <code>cron-forecast-test</code> для користувача з <code>TEST_USER_ID</code> (env).\n' +
+                    'Підтвердіть запуск:',
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✅ Запустити тест', callback_data: 'adm|do_evening_test' },
+                                { text: '❌ Скасувати', callback_data: 'adm|menu' }
+                            ]
+                        ]
+                    }
+                }
+            );
+            return true;
+        }
+
+        if (sub === 'do_evening_test') {
+            const DOMAIN = process.env.DOMAIN || '';
+            const secret = process.env.CRON_SECRET || '';
+            if (!DOMAIN || !secret) {
+                await api.sendMessage(
+                    chatId,
+                    '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast-test.'
+                );
+                return true;
+            }
+            await api.sendMessage(chatId, '⏳ Запускаю вечірній тест…');
+            try {
+                const axios = require('axios');
+                const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-forecast-test`;
+                const res = await axios.get(url, {
+                    headers: { Authorization: `Bearer ${secret}` },
+                    timeout: 55000,
+                    validateStatus: () => true
+                });
+                await api.sendMessage(
+                    chatId,
+                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                        `┃  🧪 <b>Вечірній тест</b>\n` +
+                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                        `Статус: <code>${res.status}</code>\n` +
+                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
+                    parse_mode: 'HTML'
+                });
+            }
+            return true;
+        }
+
+        // ─── Вечірній крон для одного обраного користувача ───
+        if (sub === 'evening_one') {
+            const users = await User.find({
+                notificationsEnabled: true,
+                eveningForecastEnabled: { $ne: false },
+                accessLevel: { $ne: 'none' },
+                lat: { $ne: null },
+                lon: { $ne: null }
+            })
+                .sort({ lastActivityAt: -1 })
+                .limit(20)
+                .lean();
+
+            if (!users.length) {
+                await api.sendMessage(chatId, '📭 Немає підходящих користувачів для вечірнього прогнозу.', {
+                    parse_mode: 'HTML'
+                });
+                return true;
+            }
+
+            const rows = users.map((u) => {
+                const label =
+                    (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+                    (u.city ? ` · ${u.city}` : '');
+                return [
+                    {
+                        text: label.slice(0, 60),
+                        callback_data: `adm|do_evening_one|${u.telegramId}`
+                    }
+                ];
+            });
+            rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
+
+            await api.sendMessage(
+                chatId,
+                '🎯 <b>Вечірній крон обраним</b>\n\n' +
+                    'Оберіть користувача — буде надіслано вечірній прогноз лише йому:\n',
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: rows }
+                }
+            );
+            return true;
+        }
+
+        if (sub === 'do_evening_one') {
+            const targetId = data[2];
+            if (!targetId) {
+                await api.sendMessage(chatId, '❌ Не вказано ID користувача.');
+                return true;
+            }
+            const DOMAIN = process.env.DOMAIN || '';
+            const secret = process.env.CRON_SECRET || '';
+            if (!DOMAIN || !secret) {
+                await api.sendMessage(
+                    chatId,
+                    '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast.'
+                );
+                return true;
+            }
+            await api.sendMessage(
+                chatId,
+                `⏳ Запускаю вечірній прогноз для <code>${escapeHtml(targetId)}</code>…`,
+                { parse_mode: 'HTML' }
+            );
+            try {
+                const axios = require('axios');
+                const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-forecast?userId=${encodeURIComponent(targetId)}`;
+                const res = await axios.get(url, {
+                    headers: { Authorization: `Bearer ${secret}` },
+                    timeout: 55000,
+                    validateStatus: () => true
+                });
+                await api.sendMessage(
+                    chatId,
+                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                        `┃  🎯 <b>Вечірній крон (1 юзер)</b>\n` +
+                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                        `Користувач: <code>${escapeHtml(targetId)}</code>\n` +
+                        `Статус: <code>${res.status}</code>\n` +
+                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
+                    parse_mode: 'HTML'
+                });
+            }
+            return true;
+        }
+
+        // ─── Крон чек (light) ───
+        if (sub === 'cron_check') {
+            await api.sendMessage(
+                chatId,
+                '🔍 <b>Крон чек (light)</b>\n\n' +
+                    'Запускає <code>cron-check-light</code> — легка перевірка алертів без Weatherbit.\n' +
+                    'Підтвердіть запуск:',
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✅ Запустити крон чек', callback_data: 'adm|do_cron_check' },
+                                { text: '❌ Скасувати', callback_data: 'adm|menu' }
+                            ]
+                        ]
+                    }
+                }
+            );
+            return true;
+        }
+
+        if (sub === 'do_cron_check') {
+            const DOMAIN = process.env.DOMAIN || '';
+            const secret = process.env.CRON_SECRET || '';
+            if (!DOMAIN || !secret) {
+                await api.sendMessage(
+                    chatId,
+                    '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-check-light.'
+                );
+                return true;
+            }
+            await api.sendMessage(chatId, '⏳ Запускаю крон чек (light)…');
+            try {
+                const axios = require('axios');
+                const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-check-light`;
+                const res = await axios.get(url, {
+                    headers: { Authorization: `Bearer ${secret}` },
+                    timeout: 55000,
+                    validateStatus: () => true
+                });
+                await api.sendMessage(
+                    chatId,
+                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                        `┃  🔍 <b>Крон чек (light)</b>\n` +
+                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                        `Статус: <code>${res.status}</code>\n` +
+                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
                     { parse_mode: 'HTML' }
                 );
             } catch (e) {

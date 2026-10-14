@@ -1327,19 +1327,28 @@ module.exports = async (req, res) => {
             }
         }
 
-        const summary = [
-            `📋 <b>Легка перевірка (без Weatherbit)</b> — ${startTime}`,
-            `👥 Користувачів перевірено: ${users.length}`,
-            `🚨 Сповіщень надіслано: ${alertsTotal}`,
-            `❌ Помилок: ${errorsCount}`,
-            ``,
-            ...logLines
-        ].join('\n');
+        const summary =
+            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+            `┃  🔍 <b>Крон чек (light)</b>\n` +
+            `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+            `🕐 ${escapeHTML(startTime)}\n` +
+            `\n` +
+            `👥 Користувачів: <b>${users.length}</b>\n` +
+            `🚨 Алертів надіслано: <b>${alertsTotal}</b>\n` +
+            `❌ Помилок: <b>${errorsCount}</b>\n` +
+            (logLines.length
+                ? `\n┌ <b>Міста</b>\n` + logLines.map((l) => `│ ${l}`).join('\n') + `\n└`
+                : '');
         await log(summary);
         res.status(200).send('Processed (light)');
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Light Weather Check FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
+        await log(
+            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  ❌ <b>Light Weather Check FAILED</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `<code>${escapeHTML(error.message)}</code>`
+        );
         res.status(500).send('Error');
     }
 };

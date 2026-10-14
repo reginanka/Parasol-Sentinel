@@ -1249,11 +1249,23 @@ module.exports = async (req, res) => {
             }).catch(() => {});
         }
 
-        await log(`🧪 <b>Тестовий прогноз (Rich)</b> — ${startTime}\nНадіслано тільки user ${TEST_USER_ID}`);
+        await log(
+            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  🧪 <b>Вечірній тест (Rich)</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `🕐 ${escapeHTML(startTime)}\n` +
+                `👤 User: <code>${TEST_USER_ID}</code>\n` +
+                `✅ Надіслано`
+        );
         res.status(200).send(`Test forecast (Rich Message) sent to ${TEST_USER_ID}`);
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Test forecast FAILED</b>\n<code>${escapeHTML(error.message)}</code>`);
+        await log(
+            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  ❌ <b>Test forecast FAILED</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `<code>${escapeHTML(error.message)}</code>`
+        );
         res.status(500).send('Test forecast error');
     }
 };

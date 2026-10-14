@@ -23,9 +23,24 @@ module.exports = async (req, res) => {
 
     const startTime = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
 
+    // Optional: single-user mode via ?userId=TELEGRAM_ID (admin «вечірній крон обраним»)
+    const singleUserId = req.query?.userId ? Number(req.query.userId) : null;
+
     try {
         await connectDB();
-        const users = await User.find({ notificationsEnabled: true, eveningForecastEnabled: { $ne: false }, accessLevel: { $ne: "none" } });
+        let users;
+        if (singleUserId && !isNaN(singleUserId)) {
+            const u = await User.findOne({ telegramId: singleUserId });
+            if (!u) {
+                return res.status(404).send(`User ${singleUserId} not found`);
+            }
+            if (!u.lat || !u.lon) {
+                return res.status(400).send('User has no coordinates');
+            }
+            users = [u];
+        } else {
+            users = await User.find({ notificationsEnabled: true, eveningForecastEnabled: { $ne: false }, accessLevel: { $ne: "none" } });
+        }
 
         // --- FETCH WEATHER ONCE PER UNIQUE CITY COORDINATES ---
         const uniqueCities = {};
@@ -1385,19 +1400,30 @@ module.exports = async (req, res) => {
             }
         }
 
-        const summary = [
-            `📋 <b>Вечірній прогноз</b> — ${startTime}`,
-            `👥 Користувачів перевірено: ${users.length}`,
-            `📨 Прогнозів надіслано: ${sent}`,
-            `❌ Помилок: ${errors}`,
-            ``,
-            ...logLines
-        ].join('\n');
+        const modeNote = singleUserId ? `\n🎯 <i>Режим: один користувач <code>${singleUserId}</code></i>` : '';
+        const summary =
+            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+            `┃  🌆 <b>Вечірній прогноз</b>\n` +
+            `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+            `🕐 ${escapeHTML(startTime)}${modeNote}\n` +
+            `\n` +
+            `👥 Користувачів: <b>${users.length}</b>\n` +
+            `📨 Надіслано: <b>${sent}</b>\n` +
+            `❌ Помилок: <b>${errors}</b>\n` +
+            (logLines.length
+                ? `\n┌ <b>Міста</b>\n` + logLines.map((l) => `│ ${l}`).join('\n') + `\n└`
+                : '');
         await log(summary);
-        res.status(200).send(`Sent ${sent} forecasts`);
+        res.status(200).send(`Sent ${sent} forecasts` + (singleUserId ? ` (user ${singleUserId})` : ''));
     } catch (error) {
         console.error(error);
-        await log(`❌ <b>Cron Forecast FAILED</b> — ${startTime}\n<code>${escapeHTML(error.message)}</code>`);
+        await log(
+            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  ❌ <b>Cron Forecast FAILED</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `🕐 ${escapeHTML(startTime)}\n` +
+                `<code>${escapeHTML(error.message)}</code>`
+        );
         res.status(500).send('Cron Forecast Error');
     }
 }
