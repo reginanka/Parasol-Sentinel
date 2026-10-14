@@ -410,7 +410,7 @@ async function triggerInstallFlow() {
 }
 
 /**
- * Footer CTAs: Install (conditional) + Copy link (always)
+ * Footer CTAs: Install (until installed) + Copy link (always)
  */
 function setupFooterInstallCta() {
     const btn = document.getElementById('footer-install-btn');
@@ -428,29 +428,27 @@ function setupFooterInstallCta() {
             if (hint) hint.hidden = true;
             return;
         }
-        // Show when browser can install OR we are inside Telegram
-        const canShow = !!deferredInstallPrompt || inTelegram;
-        btn.hidden = !canShow;
+        // Always show Install until the app is installed (do not wait for beforeinstallprompt)
+        btn.hidden = false;
         const label = btn.querySelector('[data-i18n="pwaInstallBtn"]') || btn.querySelector('span');
         if (label) label.textContent = t().pwaInstallBtn || 'Install';
         if (hint) {
-            if (canShow) {
-                hint.hidden = false;
-                hint.textContent = inTelegram
-                    ? (t().pwaFooterHintTg || t().pwaTgHint || '')
-                    : (t().pwaFooterHint || '');
-            } else {
-                hint.hidden = true;
-            }
+            hint.hidden = false;
+            hint.textContent = inTelegram
+                ? (t().pwaFooterHintTg || t().pwaTgHint || '')
+                : (t().pwaFooterHint || '');
         }
     };
 
     if (btn) {
         refreshInstallVisibility();
 
-        // If beforeinstallprompt arrives later — reveal button
         window.addEventListener('beforeinstallprompt', () => {
             refreshInstallVisibility();
+        });
+        window.addEventListener('appinstalled', () => {
+            btn.hidden = true;
+            if (hint) hint.hidden = true;
         });
 
         if (typeof tg?.checkHomeScreenStatus === 'function') {
