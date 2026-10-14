@@ -325,6 +325,49 @@ module.exports = async (req, res) => {
             console.error('Test forecast MeteoAlarm error:', e.message);
         }
 
+        // --- Open-Meteo Air Quality (test: full set of metrics for table) ---
+        // Hourly CAMS → daily max/mean per calendar day
+        let omAqByDate = {}; // { 'YYYY-MM-DD': { eaqlMax, usAqiMax, pm25Max, pm10Max, no2Max, o3Max, so2Max, coMax, dustMax } }
+        try {
+            const aqUrl =
+                `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}` +
+                `&hourly=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust` +
+                `&timezone=auto&forecast_days=7`;
+            const aqRes = await axios.get(aqUrl, { timeout: 12000 });
+            const h = aqRes.data?.hourly || {};
+            const times = h.time || [];
+            const pickMax = (arr, i) => {
+                const v = arr?.[i];
+                return v == null || Number.isNaN(Number(v)) ? null : Number(v);
+            };
+            for (let i = 0; i < times.length; i++) {
+                const dStr = String(times[i]).slice(0, 10);
+                if (!omAqByDate[dStr]) {
+                    omAqByDate[dStr] = {
+                        eaqiMax: null, usAqiMax: null,
+                        pm25Max: null, pm10Max: null,
+                        no2Max: null, o3Max: null, so2Max: null, coMax: null, dustMax: null
+                    };
+                }
+                const row = omAqByDate[dStr];
+                const bump = (key, val) => {
+                    if (val == null) return;
+                    if (row[key] == null || val > row[key]) row[key] = val;
+                };
+                bump('eaqiMax', pickMax(h.european_aqi, i));
+                bump('usAqiMax', pickMax(h.us_aqi, i));
+                bump('pm25Max', pickMax(h.pm2_5, i));
+                bump('pm10Max', pickMax(h.pm10, i));
+                bump('no2Max', pickMax(h.nitrogen_dioxide, i));
+                bump('o3Max', pickMax(h.ozone, i));
+                bump('so2Max', pickMax(h.sulphur_dioxide, i));
+                bump('coMax', pickMax(h.carbon_monoxide, i));
+                bump('dustMax', pickMax(h.dust, i));
+            }
+        } catch (e) {
+            console.error('Test forecast Open-Meteo AQ error:', e.message);
+        }
+
         // --- Формування повідомлення (Rich Message) ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
         const isUk = lang === 'uk';
@@ -740,6 +783,83 @@ module.exports = async (req, res) => {
                 return `<td align="center" valign="middle">—</td>`;
             }).join('');
             rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн.<br>бурі' : 'Geomag'}</b></td>${cells}</tr>`);
+        }
+
+        // --- Open-Meteo Air Quality rows (TEST only — always shown) ---
+        // Daily max from hourly CAMS series
+        const aqCell = (day, key, decimals = 0) => {
+            const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
+            const v = omAqByDate[dStr]?.[key];
+            if (v == null) return `<td align="center" valign="middle">—</td>`;
+            const n = decimals > 0 ? Number(v).toFixed(decimals) : Math.round(Number(v));
+            return `<td align="center" valign="middle">${n}</td>`;
+        };
+        const eaqiBadge = (v) => {
+            if (v == null) return '';
+            if (v > 100) return ' 🟣';
+            if (v > 80) return ' 🔴';
+            if (v > 60) return ' 🟠';
+            if (v > 40) return ' 🟡';
+            if (v > 20) return ' 🟢';
+            return ' 🟢';
+        };
+        const usAqiBadge = (v) => {
+            if (v == null) return '';
+            if (v > 150) return ' 🔴';
+            if (v > 100) return ' 🟠';
+            if (v > 50) return ' 🟡';
+            return ' 🟢';
+        };
+
+        // European AQI (max of day)
+        {
+            const cells = userForecast.map((day) => {
+                const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
+                const v = omAqByDate[dStr]?.eaqiMax;
+                if (v == null) return `<td align="center" valign="middle">—</td>`;
+                return `<td align="center" valign="middle">${Math.round(v)}${eaqiBadge(v)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 EAQI<br><small>OM max</small></b></td>${cells}</tr>`);
+        }
+        // US AQI
+        {
+            const cells = userForecast.map((day) => {
+                const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
+                const v = omAqByDate[dStr]?.usAqiMax;
+                if (v == null) return `<td align="center" valign="middle">—</td>`;
+                return `<td align="center" valign="middle">${Math.round(v)}${usAqiBadge(v)}</td>`;
+            }).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 US AQI<br><small>OM max</small></b></td>${cells}</tr>`);
+        }
+        // PM2.5 / PM10
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'pm25Max', 1)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 PM2.5<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
+        }
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'pm10Max', 1)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 PM10<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
+        }
+        // Gases
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'no2Max', 1)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 NO₂<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
+        }
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'o3Max', 1)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 O₃<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
+        }
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'so2Max', 1)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 SO₂<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
+        }
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'coMax', 0)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 CO<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
+        }
+        {
+            const cells = userForecast.map((day) => aqCell(day, 'dustMax', 1)).join('');
+            rows.push(`<tr><td align="left" valign="middle"><b>🍃 Dust<br><small>µg/m³ max</small></b></td>${cells}</tr>`);
         }
 
         const tableHtml = `
