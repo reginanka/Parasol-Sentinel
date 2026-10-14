@@ -33,20 +33,27 @@
     <div class="background-overlay"></div>
 
     <main class="dashboard">
-        <header class="header fade-in">
-            <div class="logo">
-                <div class="pulse-container"><span class="pulse"></span></div>
-                <h1>Parasol <span data-i18n="sentinel">Sentinel</span></h1>
-                <div id="access-type" class="access-type">Free Access</div>
-                <div class="lang-toggle-btn desktop-only" style="cursor: pointer; margin-top: 6px; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; width: fit-content; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15); transition: background 0.2s;">EN</div>
-            </div>
-            <div id="city-info" class="city-info">
-                <h2 id="current-city" class="text-glow">Київ (Дефолт)</h2>
-                <div class="date-badge"><p id="current-date">Четвер, 2 квітня</p></div>
+                <header class="header fade-in">
+            <div class="header-sticky">
+                <div class="logo">
+                    <div class="pulse-container"><span class="pulse"></span></div>
+                    <h1>Parasol <span data-i18n="sentinel">Sentinel</span></h1>
+                    <div id="access-type" class="access-type">Free Access</div>
+                    <div class="lang-toggle-btn desktop-only" style="cursor: pointer; margin-top: 6px; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; width: fit-content; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15); transition: background 0.2s;">EN</div>
+                </div>
+                <div id="city-info" class="city-info">
+                    <h2 id="current-city" class="text-glow">Київ (Дефолт)</h2>
+                    <div class="date-badge"><p id="current-date">Четвер, 2 квітня</p></div>
+                </div>
+                <div class="header-sticky-actions">
+                    <div class="lang-toggle-btn mobile-only" style="cursor: pointer; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15);">EN</div>
+                    <button id="settings-btn" class="glass-btn mobile-only" type="button" title="Налаштування" aria-label="Settings">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    </button>
+                </div>
             </div>
             <div class="status-badge">
                 <div class="status-row-wrapper">
-                    <div class="lang-toggle-btn mobile-only" style="cursor: pointer; font-weight: bold; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 8px; font-size: 0.85em; border: 1px solid rgba(255,255,255,0.15);">EN</div>
                     <div class="live-status" style="margin-bottom: 0;">
                         <span class="status-dot"></span>
                         <span class="status-label" data-i18n="actual">Актуально</span>
@@ -60,7 +67,7 @@
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
                         </button>
                     </div>
-                    <button id="settings-btn" class="glass-btn" type="button" title="Налаштування" aria-label="Settings">
+                    <button id="settings-btn-desktop" class="glass-btn desktop-only" type="button" title="Налаштування" aria-label="Settings">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     </button>
                 </div>

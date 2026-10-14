@@ -595,10 +595,11 @@ async function init() {
     });
 
     // Settings panel bindings
-    const settingsBtn   = document.getElementById('settings-btn');
     const settingsPanel = document.getElementById('settings-panel');
     const settingsClose = document.getElementById('settings-close');
-    if (settingsBtn)  settingsBtn.addEventListener('click', openSettingsPanel);
+    document.querySelectorAll('#settings-btn, #settings-btn-desktop').forEach((btn) => {
+        btn.addEventListener('click', openSettingsPanel);
+    });
     if (settingsClose) settingsClose.addEventListener('click', () => { settingsPanel.style.display = 'none'; });
     settingsPanel?.addEventListener('click', (e) => { if (e.target === settingsPanel) settingsPanel.style.display = 'none'; });
     document.querySelectorAll('.unit-btn').forEach(btn => {
