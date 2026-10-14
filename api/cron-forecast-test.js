@@ -5,7 +5,7 @@ const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, getGeomagLevel } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, getGeomagLevel, fetchMeteoAlarmAlerts } = require('../utils/weather');
 const { sleep, escapeHTML } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 
@@ -317,6 +317,14 @@ module.exports = async (req, res) => {
             console.error('Test forecast frost check error:', e.message);
         }
 
+        // --- Official weather alerts (UA Hydrometcenter via MeteoAlarm CAP) ---
+        let meteoAlerts = [];
+        try {
+            meteoAlerts = await fetchMeteoAlarmAlerts(user.lat, user.lon, lang);
+        } catch (e) {
+            console.error('Test forecast MeteoAlarm error:', e.message);
+        }
+
         // --- Формування повідомлення (Rich Message) ---
         const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
         const isUk = lang === 'uk';
@@ -536,6 +544,15 @@ module.exports = async (req, res) => {
             highlightText = isUk
                 ? 'Особливих небезпек не передбачається.'
                 : 'No significant hazards expected.';
+        }
+
+        // Official UA Hydrometcenter alerts (MeteoAlarm) — prepend to tips block
+        if (meteoAlerts.length > 0) {
+            const alertHeader = isUk
+                ? '⚠️ Офіційні попередження Укргідрометцентру:'
+                : '⚠️ Official Hydrometcenter warnings:';
+            const alertLines = meteoAlerts.slice(0, 4).map((a) => a.line).join('\n');
+            highlightText = `${alertHeader}\n${alertLines}\n\n${highlightText}`;
         }
 
         const citeText = isUk

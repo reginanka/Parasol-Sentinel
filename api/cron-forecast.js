@@ -8,7 +8,7 @@ const City = require('../models/City');
 
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, isFrostSeason, getGeomagLevel } = require('../utils/weather');
+const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, isFrostSeason, getGeomagLevel, fetchMeteoAlarmAlerts } = require('../utils/weather');
 const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 const { dayKey, daySetPaths, pruneDaysUnset, mergeHourlyFlat, getDayBaseline } = require('../utils/baseline');
@@ -300,6 +300,14 @@ module.exports = async (req, res) => {
                     }
                 } catch (omErr) {
                     console.error('Open-Meteo fetch error in evening forecast:', omErr.message);
+                }
+
+                // Official weather alerts (UA Hydrometcenter via MeteoAlarm) — once per city
+                let cityMeteoAlerts = [];
+                try {
+                    cityMeteoAlerts = await fetchMeteoAlarmAlerts(cityInfo.lat, cityInfo.lon, 'uk');
+                } catch (e) {
+                    console.error('MeteoAlarm evening fetch error:', e.message);
                 }
 
                 const tomorrowDaily = fullResponse.find(d => dayKey(d) === tomorrowStr) || fullResponse[1];
@@ -761,6 +769,15 @@ module.exports = async (req, res) => {
                         highlightText = isUk
                             ? 'Особливих небезпек не передбачається.'
                             : 'No significant hazards expected.';
+                    }
+
+                    // Official UA Hydrometcenter alerts (MeteoAlarm) — prepend to tips block
+                    if (cityMeteoAlerts.length > 0) {
+                        const alertHeader = isUk
+                            ? '⚠️ Офіційні попередження Укргідрометцентру:'
+                            : '⚠️ Official Hydrometcenter warnings:';
+                        const alertLines = cityMeteoAlerts.slice(0, 4).map((a) => a.line).join('\n');
+                        highlightText = `${alertHeader}\n${alertLines}\n\n${highlightText}`;
                     }
 
                     const citeText = isUk
