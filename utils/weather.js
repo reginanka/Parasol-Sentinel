@@ -402,6 +402,29 @@ const fetchMeteoAlarmAlerts = async (lat, lon, lang = 'uk') => {
             if (desc && desc.length < 120) line += ` — ${desc}`;
             else if (desc) line += ` — ${desc.slice(0, 100)}…`;
 
+            // Дати дії попередження (onset / expires)
+            const fmtAlertDate = (iso) => {
+                if (!iso) return null;
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return null;
+                return d.toLocaleString(preferUk ? 'uk-UA' : 'en-GB', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZone: 'Europe/Kyiv'
+                });
+            };
+            const from = fmtAlertDate(info.onset);
+            const to = fmtAlertDate(info.expires);
+            if (from && to) {
+                line += preferUk ? ` (діє ${from} – ${to})` : ` (valid ${from} – ${to})`;
+            } else if (to) {
+                line += preferUk ? ` (до ${to})` : ` (until ${to})`;
+            } else if (from) {
+                line += preferUk ? ` (з ${from})` : ` (from ${from})`;
+            }
+
             out.push({
                 event,
                 severity,
