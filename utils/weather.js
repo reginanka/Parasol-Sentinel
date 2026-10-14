@@ -292,6 +292,140 @@ const getGeomagLevel = (kp) => {
     };
 };
 
+/**
+ * Ray-casting point-in-polygon.
+ * polygonStr: "lat,lon lat,lon ..." (MeteoAlarm CAP style)
+ */
+const pointInPolygon = (lat, lon, polygonStr) => {
+    if (!polygonStr || typeof polygonStr !== 'string') return false;
+    const pts = [];
+    for (const pair of polygonStr.trim().split(/\s+/)) {
+        const [la, lo] = pair.split(',').map(Number);
+        if (!Number.isNaN(la) && !Number.isNaN(lo)) pts.push([la, lo]);
+    }
+    if (pts.length < 3) return false;
+
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const [yi, xi] = pts[i]; // lat, lon
+        const [yj, xj] = pts[j];
+        const intersect =
+            (yi > lat) !== (yj > lat) &&
+            lon < ((xj - xi) * (lat - yi)) / (yj - yi + 1e-12) + xi;
+        if (intersect) inside = !inside;
+    }
+    return inside;
+};
+
+/**
+ * Fetch active weather alerts for a point from MeteoAlarm (UA Hydrometcenter via CAP).
+ * Returns short human-readable lines for the "Парасоль підказує" block.
+ * Source: https://feeds.meteoalarm.org/api/v1/warnings/feeds-ukraine
+ */
+const fetchMeteoAlarmAlerts = async (lat, lon, lang = 'uk') => {
+    const preferUk = lang === 'uk';
+    const out = [];
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        const res = await fetch(
+            'https://feeds.meteoalarm.org/api/v1/warnings/feeds-ukraine',
+            { signal: controller.signal }
+        );
+        clearTimeout(timer);
+        if (!res.ok) throw new Error(`MeteoAlarm HTTP ${res.status}`);
+        const data = await res.json();
+        const warnings = data?.warnings || [];
+        const now = Date.now();
+
+        for (const w of warnings) {
+            const alert = w.alert || w;
+            const infos = alert.info || [];
+            if (!infos.length) continue;
+
+            // Prefer Ukrainian info block, else first
+            let info = infos.find((i) => {
+                const l = String(i.language || '').toLowerCase();
+                return preferUk
+                    ? l.startsWith('uk') || l.startsWith('ua')
+                    : l.startsWith('en');
+            });
+            if (!info) info = infos[0];
+
+            // Skip expired
+            if (info.expires) {
+                const exp = Date.parse(info.expires);
+                if (!Number.isNaN(exp) && exp < now) continue;
+            }
+
+            // Match location: any area polygon contains the point
+            const areas = info.area || [];
+            let matches = false;
+            let areaDesc = '';
+            for (const a of areas) {
+                areaDesc = a.areaDesc || areaDesc;
+                const polys = a.polygon || [];
+                for (const p of polys) {
+                    if (pointInPolygon(lat, lon, p)) {
+                        matches = true;
+                        break;
+                    }
+                }
+                if (matches) break;
+            }
+            // If no polygon matched but area is very broad / national — still skip
+            // (only show alerts whose geometry covers the user)
+            if (!matches) continue;
+
+            const severity = String(info.severity || '').toLowerCase();
+            let badge = '🟡';
+            if (severity === 'extreme') badge = '🔴';
+            else if (severity === 'severe') badge = '🟠';
+            else if (severity === 'moderate') badge = '🟡';
+            else if (severity === 'minor') badge = '🟢';
+
+            // awareness_level from parameters if present
+            const params = info.parameter || [];
+            for (const p of params) {
+                if (String(p.valueName || '').toLowerCase() === 'awareness_level') {
+                    const v = String(p.value || '').toLowerCase();
+                    if (v.includes('red') || v.includes('3;')) badge = '🔴';
+                    else if (v.includes('orange') || v.includes('2;')) badge = '🟠';
+                    else if (v.includes('yellow') || v.includes('1;')) badge = '🟡';
+                }
+            }
+
+            const event = (info.event || '').trim();
+            const desc = (info.description || '').trim().replace(/\s+/g, ' ');
+            // Short line
+            let line = `${badge} ${event}`;
+            if (desc && desc.length < 120) line += ` — ${desc}`;
+            else if (desc) line += ` — ${desc.slice(0, 100)}…`;
+
+            out.push({
+                event,
+                severity,
+                badge,
+                description: desc,
+                areaDesc,
+                onset: info.onset || null,
+                expires: info.expires || null,
+                line
+            });
+        }
+    } catch (e) {
+        console.error('MeteoAlarm fetch error:', e.message);
+    }
+    // Deduplicate by event+onset
+    const seen = new Set();
+    return out.filter((a) => {
+        const key = `${a.event}|${a.onset}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+};
+
 module.exports = {
     WEATHER_CODES,
     WIND_DIRECTIONS,
@@ -306,5 +440,8 @@ module.exports = {
     estimateSoilTemp0,
     formatSoilTemp,
     isFrostSeason,
-    getGeomagLevel
+    getGeomagLevel,
+    pointInPolygon,
+    fetchMeteoAlarmAlerts
 };
+
