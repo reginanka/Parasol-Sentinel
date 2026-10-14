@@ -1250,21 +1250,16 @@ module.exports = async (req, res) => {
         }
 
         await log(
-            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  🧪 <b>Вечірній тест (Rich)</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `🕐 ${escapeHTML(startTime)}\n` +
-                `👤 User: <code>${TEST_USER_ID}</code>\n` +
-                `✅ Надіслано`
+            `<h3>🧪 Вечірній тест (Rich)</h3>` +
+                `<p>🕐 ${escapeHTML(startTime)}</p>` +
+                `<p>👤 User: <code>${TEST_USER_ID}</code><br/>✅ Надіслано</p>`
         );
         res.status(200).send(`Test forecast (Rich Message) sent to ${TEST_USER_ID}`);
     } catch (error) {
         console.error(error);
         await log(
-            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  ❌ <b>Test forecast FAILED</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `<code>${escapeHTML(error.message)}</code>`
+            `<h3>❌ Test forecast FAILED</h3>` +
+                `<p><code>${escapeHTML(error.message)}</code></p>`
         );
         res.status(500).send('Test forecast error');
     }

@@ -1400,29 +1400,28 @@ module.exports = async (req, res) => {
             }
         }
 
-        const modeNote = singleUserId ? `\n🎯 <i>Режим: один користувач <code>${singleUserId}</code></i>` : '';
+        const modeNote = singleUserId
+            ? `<p>🎯 <i>Режим: один користувач <code>${singleUserId}</code></i></p>`
+            : '';
+        const citiesHtml = logLines.length
+            ? `<h3>Міста</h3><p>${logLines.map((l) => escapeHTML(l)).join('<br/>')}</p>`
+            : '';
         const summary =
-            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-            `┃  🌆 <b>Вечірній прогноз</b>\n` +
-            `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-            `🕐 ${escapeHTML(startTime)}${modeNote}\n` +
-            `\n` +
-            `👥 Користувачів: <b>${users.length}</b>\n` +
-            `📨 Надіслано: <b>${sent}</b>\n` +
-            `❌ Помилок: <b>${errors}</b>\n` +
-            (logLines.length
-                ? `\n┌ <b>Міста</b>\n` + logLines.map((l) => `│ ${l}`).join('\n') + `\n└`
-                : '');
+            `<h3>🌆 Вечірній прогноз</h3>` +
+            `<p>🕐 ${escapeHTML(startTime)}</p>` +
+            modeNote +
+            `<p>👥 Користувачів: <b>${users.length}</b><br/>` +
+            `📨 Надіслано: <b>${sent}</b><br/>` +
+            `❌ Помилок: <b>${errors}</b></p>` +
+            citiesHtml;
         await log(summary);
         res.status(200).send(`Sent ${sent} forecasts` + (singleUserId ? ` (user ${singleUserId})` : ''));
     } catch (error) {
         console.error(error);
         await log(
-            `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  ❌ <b>Cron Forecast FAILED</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `🕐 ${escapeHTML(startTime)}\n` +
-                `<code>${escapeHTML(error.message)}</code>`
+            `<h3>❌ Cron Forecast FAILED</h3>` +
+                `<p>🕐 ${escapeHTML(startTime)}</p>` +
+                `<p><code>${escapeHTML(error.message)}</code></p>`
         );
         res.status(500).send('Cron Forecast Error');
     }
