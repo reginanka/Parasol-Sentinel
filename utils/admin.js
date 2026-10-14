@@ -446,14 +446,14 @@ async function handleAdminCallback(ctx) {
             const maxActive = Math.max(active1, active7, active30, 1);
 
             const langRows = (langAgg || [])
-                .map((x) => `<tr><td>${escapeHtml(String(x._id))}</td><td align="right"><b>${x.n}</b></td></tr>`)
-                .join('') || '<tr><td colspan="2">—</td></tr>';
+                .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
+                .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
             const cityRows = (cityAgg || [])
-                .map((x) => `<tr><td>${escapeHtml(String(x._id))}</td><td align="right"><b>${x.n}</b></td></tr>`)
-                .join('') || '<tr><td colspan="2">—</td></tr>';
+                .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
+                .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
-            const errHtml = (recentErrors || []).length
+            const errLines = (recentErrors || []).length
                 ? recentErrors
                     .map((e) => {
                         const t = new Date(e.createdAt).toLocaleString('uk-UA', {
@@ -463,42 +463,81 @@ async function handleAdminCallback(ctx) {
                             hour: '2-digit',
                             minute: '2-digit'
                         });
-                        const msg = escapeHtml((e.message || '').slice(0, 100));
-                        return `<p>· <code>${t}</code> ${msg}</p>`;
+                        const msg = escapeHtml((e.message || '').slice(0, 80));
+                        return `· ${t} — ${msg}`;
                     })
-                    .join('')
-                : '<p>· Помилок ще не зафіксовано</p>';
+                    .join('<br/>')
+                : '· Помилок ще не зафіксовано';
 
-            // Native Rich Message HTML (Bot API 10.1+) — same style as evening forecasts
-            const html =
-                `<h3>📊 Аналітика Parasol Sentinel</h3>` +
-                `<p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>` +
-                `<h3>👥 Користувачі</h3>` +
-                `<p>Всього: <b>${total}</b> · з містом: <b>${withCity}</b><br/>` +
-                `Нові цього місяця: <b>${newThisMonth}</b><br/>` +
-                `✅ Безліміт: <b>${unlimited}</b> · 🚫 Немає доступу: <b>${blocked}</b><br/>` +
-                `🔔 Сповіщення: <b>${notifOn}</b> · 🌆 Вечірній: <b>${eveningOn}</b></p>` +
-                `<h3>🟢 Активність</h3>` +
-                `<p><code>${bar(active1, maxActive)}</code> 24 год — <b>${active1}</b><br/>` +
-                `<code>${bar(active7, maxActive)}</code> 7 днів — <b>${active7}</b><br/>` +
-                `<code>${bar(active30, maxActive)}</code> 30 днів — <b>${active30}</b></p>` +
-                `<h3>📬 Доставка (лічильники)</h3>` +
-                `<p><b>Цього місяця</b><br/>` +
-                `🌆 Вечірні прогнози: <b>${eveningM}</b><br/>` +
-                `🚨 Алерти: <b>${alertsM}</b><br/>` +
-                `Разом: <b>${eveningM + alertsM}</b></p>` +
-                `<p><b>За весь час</b><br/>` +
-                `🌆 Вечірні прогнози: <b>${eveningT}</b><br/>` +
-                `🚨 Алерти: <b>${alertsT}</b><br/>` +
-                `Разом: <b>${eveningT + alertsT}</b></p>` +
-                `<p><i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i></p>` +
-                `<h3>🌐 Мови</h3>` +
-                `<table bordered striped compact><tr><th>Мова</th><th>К-сть</th></tr>${langRows}</table>` +
-                `<h3>📍 Топ міст</h3>` +
-                `<table bordered striped compact><tr><th>Місто</th><th>К-сть</th></tr>${cityRows}</table>` +
-                `<h3>❌ Помилки</h3>` +
-                `<p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>` +
-                `<p><b>Останні:</b></p>${errHtml}`;
+            // Same Rich Message dialect as evening forecasts (h1/h3, p, table bordered striped)
+            const html = `
+<h1>📊 Аналітика Parasol Sentinel</h1>
+<p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
+
+<h3>👥 Користувачі</h3>
+<p>
+Всього: <b>${total}</b> · з містом: <b>${withCity}</b><br/>
+Нові цього місяця: <b>${newThisMonth}</b><br/>
+✅ Безліміт: <b>${unlimited}</b> · 🚫 Немає доступу: <b>${blocked}</b><br/>
+🔔 Сповіщення: <b>${notifOn}</b> · 🌆 Вечірній: <b>${eveningOn}</b>
+</p>
+
+<h3>🟢 Активність</h3>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Період</th>
+      <th align="center">К-сть</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">24 години</td><td align="center"><b>${active1}</b></td></tr>
+    <tr><td align="left">7 днів</td><td align="center"><b>${active7}</b></td></tr>
+    <tr><td align="left">30 днів</td><td align="center"><b>${active30}</b></td></tr>
+  </tbody>
+</table>
+
+<h3>📬 Доставка</h3>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Показник</th>
+      <th align="center">Місяць</th>
+      <th align="center">Всього</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">🌆 Вечірні</td><td align="center"><b>${eveningM}</b></td><td align="center"><b>${eveningT}</b></td></tr>
+    <tr><td align="left">🚨 Алерти</td><td align="center"><b>${alertsM}</b></td><td align="center"><b>${alertsT}</b></td></tr>
+    <tr><td align="left">Разом</td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
+  </tbody>
+</table>
+<p><i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i></p>
+
+<h3>🌐 Мови</h3>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Мова</th><th align="center">К-сть</th></tr>
+  </thead>
+  <tbody>
+    ${langRows}
+  </tbody>
+</table>
+
+<h3>📍 Топ міст</h3>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Місто</th><th align="center">К-сть</th></tr>
+  </thead>
+  <tbody>
+    ${cityRows}
+  </tbody>
+</table>
+
+<h3>❌ Помилки</h3>
+<p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>
+<p><b>Останні:</b><br/>${errLines}</p>
+`.trim();
 
             try {
                 await api.sendRichMessage(chatId, {
@@ -506,8 +545,19 @@ async function handleAdminCallback(ctx) {
                     skip_entity_detection: true
                 });
             } catch (richErr) {
-                console.warn('[admin] stats sendRichMessage failed, fallback HTML:', richErr.message);
-                await api.sendMessage(chatId, html.replace(/<\/?table[^>]*>/g, '').replace(/<\/?t[rdh][^>]*>/g, ' '), {
+                console.warn('[admin] stats sendRichMessage failed, fallback:', richErr.message);
+                // Plain fallback without tables
+                const plain =
+                    `📊 <b>Аналітика Parasol Sentinel</b>\n` +
+                    `<i>${escapeHtml(monthLabel)}</i>\n\n` +
+                    `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
+                    `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
+                    `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
+                    `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
+                    `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
+                    `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
+                    `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
+                await api.sendMessage(chatId, plain, {
                     parse_mode: 'HTML',
                     disable_web_page_preview: true
                 });
