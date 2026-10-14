@@ -24,7 +24,7 @@ module.exports = async (req, res) => {
 
     try {
         await connectDB();
-        const users = await User.find({ notificationsEnabled: true, eveningForecastEnabled: { $ne: false } });
+        const users = await User.find({ notificationsEnabled: true, eveningForecastEnabled: { $ne: false }, accessLevel: { $ne: "none" } });
 
         // --- FETCH WEATHER ONCE PER UNIQUE CITY COORDINATES ---
         const uniqueCities = {};

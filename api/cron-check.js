@@ -22,7 +22,7 @@ module.exports = async (req, res) => {
 
     try {
         await connectDB();
-        const users = await User.find({ notificationsEnabled: true });
+        const users = await User.find({ notificationsEnabled: true, accessLevel: { $ne: "none" } });
 
         const uniqueCities = {};
         for (const user of users) {

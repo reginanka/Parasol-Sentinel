@@ -18,6 +18,13 @@ const {
 } = require('../utils/agro');
 const { CROPS_DATA } = require('../utils/crops');
 const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason, getGeomagLevel } = require('../utils/weather');
+const {
+    notifyAdmin,
+    touchUserProfile,
+    isAdminChat,
+    handleAdminCallback,
+    handleAdminChannelText
+} = require('../utils/admin');
 
 /**
  * Parasol Sentinel Bot - Core logic handler.
@@ -575,7 +582,8 @@ bot.command("start", async (ctx) => {
     console.log('Start command from:', ctx.from.id);
     const lang = getLang(ctx);
     await connectDB();
-    const user = await User.findOne({ telegramId: ctx.from.id });
+    await touchUserProfile(ctx.from, lang);
+    await notifyAdmin(ctx.from, '/start', { chatId: ctx.chat?.id });
 
     // Reply keyboard: compact, dismissable with swipe — without is_persistent to avoid UI bugs
     const keyboard = {
@@ -636,6 +644,19 @@ bot.command('help', sendHelpMenu);
 bot.on("message:text", async (ctx) => {
     const query = ctx.message.text.trim();
     const lang = getLang(ctx);
+
+    // Admin channel commands / menu
+    if (isAdminChat(ctx.chat?.id)) {
+        await connectDB();
+        if (await handleAdminChannelText(ctx)) return;
+    }
+
+    // Notify admin about user activity (skip admin chat)
+    if (!isAdminChat(ctx.chat?.id) && ctx.from) {
+        await connectDB();
+        await touchUserProfile(ctx.from, lang);
+        await notifyAdmin(ctx.from, 'текст', { chatId: ctx.chat?.id, messageText: query });
+    }
 
     // Handle Menu Buttons
     const isSettings = query.includes(dict.uk.settingsBtn) || query.includes(dict.en.settingsBtn);
@@ -787,7 +808,38 @@ bot.on("message:text", async (ctx) => {
     }
 });
 
+// Channel posts in ADMIN_CHAT_ID → admin menu / commands
+bot.on("channel_post:text", async (ctx) => {
+    try {
+        if (!isAdminChat(ctx.chat?.id)) return;
+        await connectDB();
+        await handleAdminChannelText(ctx);
+    } catch (e) {
+        console.error('[admin] channel_post error:', e.message);
+    }
+});
+
 bot.on("callback_query:data", async (ctx) => {
+    // Admin panel callbacks
+    if ((ctx.callbackQuery?.data || '').startsWith('adm|')) {
+        await connectDB();
+        if (await handleAdminCallback(ctx)) return;
+    }
+
+    // Notify admin about user button presses
+    if (ctx.from && !isAdminChat(ctx.callbackQuery?.message?.chat?.id)) {
+        try {
+            await connectDB();
+            await touchUserProfile(ctx.from, getLang(ctx));
+            await notifyAdmin(ctx.from, 'callback', {
+                chatId: ctx.callbackQuery?.message?.chat?.id,
+                callbackData: ctx.callbackQuery?.data
+            });
+        } catch (e) {
+            console.error('[admin] notify on callback failed:', e.message);
+        }
+    }
+
     const data = ctx.callbackQuery.data.split('|');
     const lang = getLang(ctx);
 
@@ -831,11 +883,15 @@ bot.on("callback_query:data", async (ctx) => {
                 { telegramId: ctx.from.id },
                 {
                     username: ctx.from.username,
+                    firstName: ctx.from.first_name,
+                    lastName: ctx.from.last_name,
+                    languageCode: ctx.from.language_code,
                     city: weather.city_name,
                     lat: parseFloat(lat),
                     lon: parseFloat(lon),
                     timezone: weather.timezone,
                     language: lang,
+                    lastActivityAt: new Date(),
                     lastState: {
                         temp: weather.temp,
                         weatherCode: weather.weather.code,
