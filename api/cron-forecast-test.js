@@ -257,7 +257,13 @@ module.exports = async (req, res) => {
                         aqi: aqiVal,
                         badge,
                         pm25: d.iaqi?.pm25?.v ?? null,
-                        pm10: d.iaqi?.pm10?.v ?? null
+                        pm10: d.iaqi?.pm10?.v ?? null,
+                        station: d.city?.name || null,
+                        stationUrl: d.city?.url || null,
+                        stationGeo: Array.isArray(d.city?.geo) ? d.city.geo : null,
+                        stationId: d.idx ?? null,
+                        source: d.attributions?.[0]?.name || null,
+                        dominant: d.dominentpol || null
                     };
                 }
             } catch (e) {
@@ -384,10 +390,11 @@ module.exports = async (req, res) => {
         // ========== 1. AQI prefix ==========
         let aqiHtml = '';
         if (hasAqiNow && aqiData) {
-            const aqiLabel = isUk ? '🍃 <b>Якість повітря (на момент зараз):</b>' : '🍃 <b>Air Quality (current moment):</b>';
-            aqiHtml = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
-            if (aqiData.pm25 != null) aqiHtml += ` | PM2.5: ${aqiData.pm25}`;
-            if (aqiData.pm10 != null) aqiHtml += ` | PM10: ${aqiData.pm10}`;
+            let summaryLine = isUk
+                ? `🍃 <b>Якість повітря (на момент зараз):</b> ${aqiData.badge} AQI ${aqiData.aqi}`
+                : `🍃 <b>Air Quality (current moment):</b> ${aqiData.badge} AQI ${aqiData.aqi}`;
+            if (aqiData.pm25 != null) summaryLine += ` | PM2.5: ${aqiData.pm25}`;
+            if (aqiData.pm10 != null) summaryLine += ` | PM10: ${aqiData.pm10}`;
 
             const issues = [];
             if (aqiData.pm25 != null && aqiData.pm25 > 25) {
@@ -400,27 +407,63 @@ module.exports = async (req, res) => {
             let advice = '';
             if (aqiData.aqi > 150) {
                 advice = isUk
-                    ? '<br>🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
-                    : '<br>🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
+                    ? '🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
+                    : '🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
             } else if (aqiData.aqi > 100) {
                 advice = isUk
-                    ? '<br>🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
-                    : '<br>🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
+                    ? '🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
+                    : '🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
             } else if (aqiData.aqi > 50) {
                 advice = isUk
-                    ? '<br>🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
-                    : '<br>🟡 Air quality is acceptable, but sensitive groups should be cautious.';
+                    ? '🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
+                    : '🟡 Air quality is acceptable, but sensitive groups should be cautious.';
             } else if (issues.length > 0) {
                 advice = isUk
-                    ? '<br>⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
-                    : '<br>⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+                    ? '⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
+                    : '⚠️ AQI is low, but elevated levels of specific dust particles detected.';
             }
-
             if (issues.length > 0 && advice) {
                 advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
             }
 
-            aqiHtml += advice;
+            // Деталі станції WAQI (згортаються)
+            const detailParts = [];
+            if (aqiData.station) {
+                detailParts.push(isUk
+                    ? `📍 <b>Станція:</b> ${escapeHTML(String(aqiData.station))}`
+                    : `📍 <b>Station:</b> ${escapeHTML(String(aqiData.station))}`);
+            }
+            if (aqiData.stationGeo && aqiData.stationGeo.length >= 2) {
+                const [slat, slon] = aqiData.stationGeo;
+                detailParts.push(isUk
+                    ? `🗺 <b>Координати:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`
+                    : `🗺 <b>Coordinates:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`);
+            }
+            if (aqiData.source) {
+                detailParts.push(isUk
+                    ? `📡 <b>Джерело:</b> ${escapeHTML(String(aqiData.source))}`
+                    : `📡 <b>Source:</b> ${escapeHTML(String(aqiData.source))}`);
+            }
+            if (aqiData.dominant) {
+                detailParts.push(isUk
+                    ? `🧪 <b>Домінуючий забрудник:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`
+                    : `🧪 <b>Dominant pollutant:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`);
+            }
+            if (aqiData.stationUrl) {
+                const url = String(aqiData.stationUrl).startsWith('http')
+                    ? aqiData.stationUrl
+                    : `https://aqicn.org${aqiData.stationUrl}`;
+                detailParts.push(isUk
+                    ? `🔗 <a href="${escapeHTML(url)}">Сторінка станції</a>`
+                    : `🔗 <a href="${escapeHTML(url)}">Station page</a>`);
+            }
+            if (advice) detailParts.push(advice);
+
+            if (detailParts.length) {
+                aqiHtml = `<details><summary>${summaryLine}</summary><p>${detailParts.join('<br>')}</p></details>`;
+            } else {
+                aqiHtml = summaryLine;
+            }
         }
 
         // ========== 2. Frost prefix ==========
