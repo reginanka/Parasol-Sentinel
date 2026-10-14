@@ -1022,15 +1022,25 @@ module.exports = async (req, res) => {
         fullHtml += `<h1>🧪 ${isUk ? 'ТЕСТОВИЙ прогноз' : 'TEST forecast'} на ${settings.daysCount} дн. для ${escapeHTML(displayCity)}</h1>\n\n`;
 
         {
+            // Блок 1: завтра + післязавтра (+ гідромет)
             const nearHtml = escapeHTML(highlightText).replace(/\n/g, '<br>');
-            let farHtml = '';
+            const citeNear = isUk
+                ? 'Парасоль☔️ — найближчі дні'
+                : 'Parasol☔️ — next days';
+            fullHtml += `<blockquote>${nearHtml}<br>
+  <cite>${citeNear}</cite>
+</blockquote>\n\n`;
+
+            // Блок 2: решта днів
             if (farHighlightText) {
-                const farTitle = isUk ? '📅 Далі по днях' : '📅 Later days';
-                farHtml = `<details><summary>${farTitle}</summary>${escapeHTML(farHighlightText).replace(/\n/g, '<br>')}</details>`;
+                const farHtml = escapeHTML(farHighlightText).replace(/\n/g, '<br>');
+                const citeFar = isUk
+                    ? 'Парасоль☔️ — далі по днях. Гортай вбік, щоб переглянути таблицю'
+                    : 'Parasol☔️ — later days. Swipe to see the full table';
+                fullHtml += `<blockquote>${farHtml}<br>
+  <cite>${citeFar}</cite>
+</blockquote>\n\n`;
             }
-            fullHtml += `<aside>${nearHtml}${farHtml ? '<br><br>' + farHtml : ''}<br>
-  <cite>${citeText}</cite>
-</aside>\n\n`;
         }
 
         fullHtml += tableHtml;
