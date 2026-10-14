@@ -595,9 +595,12 @@ module.exports = async (req, res) => {
         // --- Текст «близьких» днів ---
         const nearLines = [];
         nearEvents.forEach((ev, idx) => {
+            const shortDate = ev.dateObj.toLocaleDateString(isUk ? 'uk-UA' : 'en-GB', {
+                day: '2-digit', month: '2-digit'
+            });
             const labelDay = idx === 0
-                ? (isUk ? 'Завтра' : 'Tomorrow')
-                : (isUk ? 'Післязавтра' : 'Day after tomorrow');
+                ? (isUk ? `Завтра (${shortDate})` : `Tomorrow (${shortDate})`)
+                : (isUk ? `Післязавтра (${shortDate})` : `Day after tomorrow (${shortDate})`);
             if (!hasHazard(ev) && isClearSky(ev.skyCode)) {
                 nearLines.push(isUk
                     ? `${labelDay} — чудовий ясний день ☀️`
@@ -1022,24 +1025,26 @@ module.exports = async (req, res) => {
         fullHtml += `<h1>🧪 ${isUk ? 'ТЕСТОВИЙ прогноз' : 'TEST forecast'} на ${settings.daysCount} дн. для ${escapeHTML(displayCity)}</h1>\n\n`;
 
         {
-            // Блок 1: завтра + післязавтра (+ гідромет)
+            // Блок 1: завтра + післязавтра (+ гідромет) — завжди видно
             const nearHtml = escapeHTML(highlightText).replace(/\n/g, '<br>');
             const citeNear = isUk
-                ? 'Парасоль☔️ — найближчі дні'
-                : 'Parasol☔️ — next days';
-            fullHtml += `<blockquote>${nearHtml}<br>
+                ? 'Парасоль☔️ підказує, на що звернути увагу'
+                : 'Parasol☔️ highlights what to watch';
+            fullHtml += `<aside>${nearHtml}<br>
   <cite>${citeNear}</cite>
-</blockquote>\n\n`;
+</aside>\n\n`;
 
-            // Блок 2: решта днів
+            // Блок 2: далекі дні — згортається (без attribute open)
             if (farHighlightText) {
                 const farHtml = escapeHTML(farHighlightText).replace(/\n/g, '<br>');
+                const farSummary = isUk ? '📅 Далекі дні' : '📅 Later days';
                 const citeFar = isUk
-                    ? 'Парасоль☔️ — далі по днях. Гортай вбік, щоб переглянути таблицю'
-                    : 'Parasol☔️ — later days. Swipe to see the full table';
-                fullHtml += `<blockquote>${farHtml}<br>
-  <cite>${citeFar}</cite>
-</blockquote>\n\n`;
+                    ? 'Гортай вбік таблицю, щоб переглянути прогноз на всі дні'
+                    : 'Swipe the table to see the full forecast';
+                fullHtml += `<blockquote><details><summary>${farSummary}</summary>
+<p>${farHtml}<br>
+  <cite>${citeFar}</cite></p>
+</details></blockquote>\n\n`;
             }
         }
 
