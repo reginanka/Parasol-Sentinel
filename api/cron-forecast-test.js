@@ -581,8 +581,9 @@ module.exports = async (req, res) => {
             dayEvents.push(ev);
         });
 
-        const nearEvents = dayEvents.slice(0, 2); // завтра + післязавтра
-        const farEvents = dayEvents.slice(2);
+        // Перші 3 дні — у aside; з 4-го — у згортаємий «далеке майбутнє» (лише якщо daysCount > 3)
+        const nearEvents = dayEvents.slice(0, 3);
+        const farEvents = dayEvents.slice(3);
 
         const isClearSky = (code) => {
             const c = Number(code);
@@ -593,14 +594,23 @@ module.exports = async (req, res) => {
             ev.geomagLabel || ev.eaqi != null || (ev.aqIssues && ev.aqIssues.length);
 
         // --- Текст «близьких» днів ---
+        const fmtShort = (d) => d.toLocaleDateString(isUk ? 'uk-UA' : 'en-GB', {
+            day: '2-digit', month: '2-digit'
+        });
         const nearLines = [];
         nearEvents.forEach((ev, idx) => {
-            const shortDate = ev.dateObj.toLocaleDateString(isUk ? 'uk-UA' : 'en-GB', {
-                day: '2-digit', month: '2-digit'
-            });
-            const labelDay = idx === 0
-                ? (isUk ? `Завтра (${shortDate})` : `Tomorrow (${shortDate})`)
-                : (isUk ? `Післязавтра (${shortDate})` : `Day after tomorrow (${shortDate})`);
+            const shortDate = fmtShort(ev.dateObj);
+            let labelDay;
+            if (idx === 0) {
+                labelDay = isUk ? `Завтра (${shortDate})` : `Tomorrow (${shortDate})`;
+            } else if (idx === 1) {
+                labelDay = isUk ? `Післязавтра (${shortDate})` : `Day after tomorrow (${shortDate})`;
+            } else {
+                // 3-й день: назва дня + дата
+                labelDay = isUk
+                    ? `${ev.dayName.charAt(0).toUpperCase() + ev.dayName.slice(1)} (${shortDate})`
+                    : `${ev.dayName.charAt(0).toUpperCase() + ev.dayName.slice(1)} (${shortDate})`;
+            }
             if (!hasHazard(ev) && isClearSky(ev.skyCode)) {
                 nearLines.push(isUk
                     ? `${labelDay} — чудовий ясний день ☀️`
@@ -656,34 +666,34 @@ module.exports = async (req, res) => {
         };
 
         farEvents.forEach((ev) => {
+            const d = fmtShort(ev.dateObj);
+            const dayLabel = `${ev.dayName} ${d}`;
             if (ev.precip > 0) {
                 groupPrecip.push(isUk
-                    ? `${ev.dayName} (${ev.precip.toFixed(1)} мм)`
-                    : `${ev.dayName} (${ev.precip.toFixed(1)} mm)`);
+                    ? `${dayLabel} (${ev.precip.toFixed(1)} мм)`
+                    : `${dayLabel} (${ev.precip.toFixed(1)} mm)`);
             }
             if (ev.gust >= 7) {
                 groupWind.push(isUk
-                    ? `${ev.dayName} до ${Math.round(ev.gust)} м/с`
-                    : `${ev.dayName} up to ${Math.round(ev.gust)} m/s`);
+                    ? `${dayLabel} до ${Math.round(ev.gust)} м/с`
+                    : `${dayLabel} up to ${Math.round(ev.gust)} m/s`);
             }
             if (ev.highPress) {
-                if (pressStart == null) { pressStart = pressEnd = ev.dayName; }
-                else pressEnd = ev.dayName;
+                if (pressStart == null) { pressStart = pressEnd = dayLabel; }
+                else pressEnd = dayLabel;
             } else {
                 flushPress();
             }
             if (ev.eaqi != null || ev.aqIssues.length) {
-                const tip = ev.aqIssues[0] || (ev.eaqi != null ? `EAQI ${ev.eaqi}` : '');
-                // коротко: лише день + тип (без повтору чисел у кожному)
                 if (ev.aqIssues.some(x => x.includes('PM2.5') || x.includes('пил') || x.includes('dust') || x.includes('smog'))) {
-                    groupAq.push(ev.dayName);
-                } else if (tip) {
-                    groupAq.push(`${ev.dayName}`);
+                    groupAq.push(dayLabel);
+                } else {
+                    groupAq.push(dayLabel);
                 }
             }
-            if (ev.uvLabel) groupUv.push(`${ev.dayName} (${ev.uvLabel})`);
-            if (ev.frostLabel) groupFrost.push(`${ev.dayName}`);
-            if (ev.geomagLabel) groupGeomag.push(`${ev.dayName}: ${ev.geomagLabel}`);
+            if (ev.uvLabel) groupUv.push(`${dayLabel} (${ev.uvLabel})`);
+            if (ev.frostLabel) groupFrost.push(dayLabel);
+            if (ev.geomagLabel) groupGeomag.push(`${dayLabel}: ${ev.geomagLabel}`);
         });
         flushPress();
 
@@ -1025,25 +1035,23 @@ module.exports = async (req, res) => {
         fullHtml += `<h1>🧪 ${isUk ? 'ТЕСТОВИЙ прогноз' : 'TEST forecast'} на ${settings.daysCount} дн. для ${escapeHTML(displayCity)}</h1>\n\n`;
 
         {
-            // Блок 1: завтра + післязавтра (+ гідромет) — завжди видно
+            // Блок 1: перші 3 дні (+ гідромет) — завжди видно
             const nearHtml = escapeHTML(highlightText).replace(/\n/g, '<br>');
             const citeNear = isUk
-                ? 'Парасоль☔️ підказує, на що звернути увагу'
-                : 'Parasol☔️ highlights what to watch';
+                ? 'Парасоль☔️ підказує, на що звернути увагу. Гортай вбік таблицю, щоб переглянути прогноз на всі дні'
+                : 'Parasol☔️ highlights what to watch. Swipe the table to see the full forecast';
             fullHtml += `<aside>${nearHtml}<br>
   <cite>${citeNear}</cite>
 </aside>\n\n`;
 
-            // Блок 2: далекі дні — згортається (без attribute open)
+            // Блок 2: з 4-го дня — лише якщо користувач обрав 4+ дні
             if (farHighlightText) {
                 const farHtml = escapeHTML(farHighlightText).replace(/\n/g, '<br>');
-                const farSummary = isUk ? '📅 Далекі дні' : '📅 Later days';
-                const citeFar = isUk
-                    ? 'Гортай вбік таблицю, щоб переглянути прогноз на всі дні'
-                    : 'Swipe the table to see the full forecast';
+                const farSummary = isUk
+                    ? '<b>4–6 день · може змінитись</b>'
+                    : '<b>Days 4–6 · may change</b>';
                 fullHtml += `<blockquote><details><summary>${farSummary}</summary>
-<p>${farHtml}<br>
-  <cite>${citeFar}</cite></p>
+<p>${farHtml}</p>
 </details></blockquote>\n\n`;
             }
         }
