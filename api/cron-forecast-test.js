@@ -568,48 +568,53 @@ module.exports = async (req, res) => {
             const aq = omAqByDate[dStrAq];
             if (aq) {
                 const issues = [];
-                // PM2.5 — дрібний пил / смог
-                if (aq.pm25Max != null && aq.pm25Max >= 25) {
+                // М’якші пороги для підказки (коли вже є підвищений EAQI)
+                if (aq.pm25Max != null && aq.pm25Max >= 12) {
                     issues.push(isUk
                         ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
                         : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
                 }
-                // PM10 — великий пил
-                if (aq.pm10Max != null && aq.pm10Max >= 50) {
+                if (aq.pm10Max != null && aq.pm10Max >= 25) {
                     issues.push(isUk
                         ? `великий пил PM10 до ${aq.pm10Max.toFixed(0)} µg/m³`
                         : `coarse dust PM10 up to ${aq.pm10Max.toFixed(0)} µg/m³`);
                 }
-                // Пил (Saharan / dust)
-                if (aq.dustMax != null && aq.dustMax >= 30) {
+                if (aq.dustMax != null && aq.dustMax >= 15) {
                     issues.push(isUk
                         ? `пилова хмара (dust) до ${aq.dustMax.toFixed(0)} µg/m³`
                         : `dust plume up to ${aq.dustMax.toFixed(0)} µg/m³`);
                 }
-                // NO2 — викиди транспорту / промисловості
-                if (aq.no2Max != null && aq.no2Max >= 50) {
+                if (aq.no2Max != null && aq.no2Max >= 40) {
                     issues.push(isUk
                         ? `викиди NO₂ до ${aq.no2Max.toFixed(0)} µg/m³`
                         : `NO₂ emissions up to ${aq.no2Max.toFixed(0)} µg/m³`);
                 }
-                // O3 — озон (літня спека / смог)
-                if (aq.o3Max != null && aq.o3Max >= 120) {
+                if (aq.o3Max != null && aq.o3Max >= 100) {
                     issues.push(isUk
                         ? `підвищений озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³`
                         : `elevated ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³`);
                 }
-                // SO2
-                if (aq.so2Max != null && aq.so2Max >= 40) {
+                if (aq.so2Max != null && aq.so2Max >= 30) {
                     issues.push(isUk
                         ? `SO₂ до ${aq.so2Max.toFixed(0)} µg/m³`
                         : `SO₂ up to ${aq.so2Max.toFixed(0)} µg/m³`);
                 }
-                // EAQI / US AQI як загальний рівень
+
+                // EAQI як загальний рівень
                 if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
                     const badge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
+                    // Якщо issues порожній — все одно показуємо головний вкладник (PM2.5)
+                    let detail = '';
+                    if (issues.length) {
+                        detail = ': ' + issues.join(', ');
+                    } else if (aq.pm25Max != null) {
+                        detail = isUk
+                            ? `: дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
+                            : `: fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`;
+                    }
                     highlights.push(isUk
-                        ? `у ${dayName} погана якість повітря (EAQI ${Math.round(aq.eaqiMax)}) ${badge}${issues.length ? ': ' + issues.join(', ') : ''}`
-                        : `on ${dayName} poor air quality (EAQI ${Math.round(aq.eaqiMax)}) ${badge}${issues.length ? ': ' + issues.join(', ') : ''}`);
+                        ? `у ${dayName} погана якість повітря (EAQI ${Math.round(aq.eaqiMax)}) ${badge}${detail}`
+                        : `on ${dayName} poor air quality (EAQI ${Math.round(aq.eaqiMax)}) ${badge}${detail}`);
                 } else if (issues.length) {
                     highlights.push(isUk
                         ? `у ${dayName} ${issues.join(', ')}`
