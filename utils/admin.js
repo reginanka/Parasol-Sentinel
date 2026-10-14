@@ -30,8 +30,7 @@ function accessLabel(level) {
 }
 
 /**
- * Format one user line as requested:
- * username - ID: 123 - Мова: en - Немає доступу/Безліміт | Обране гео та місто | Цього міс: N вечірніх прогнозів | M алертів | Всього: T
+ * Format one user line (plain HTML fallback / access updates).
  */
 function formatUserLine(u) {
     const name = u.username
@@ -52,6 +51,65 @@ function formatUserLine(u) {
         `<b>${access}</b> | ${escapeHtml(geo)} | ` +
         `Цього міс: ${eveningM} вечірніх прогнозів | ${alertsM} алертів | Всього: ${total}`
     );
+}
+
+/** One table row for user list / active list (Rich Message). */
+function formatUserRow(u) {
+    const name = u.username
+        ? `@${u.username}`
+        : [u.firstName, u.lastName].filter(Boolean).join(' ') || `id${u.telegramId}`;
+    const lang = u.language || u.languageCode || '—';
+    const access = accessLabel(u.accessLevel || 'unlimited');
+    const city = u.city || '—';
+    const usage = u.usage || {};
+    const eveningM = usage.eveningThisMonth || 0;
+    const alertsM = usage.alertsThisMonth || 0;
+    return (
+        `<tr>` +
+        `<td align="left">${escapeHtml(name)}<br/><small>${u.telegramId}</small></td>` +
+        `<td align="center">${escapeHtml(lang)}</td>` +
+        `<td align="left">${escapeHtml(access)}</td>` +
+        `<td align="left">${escapeHtml(city)}</td>` +
+        `<td align="center">${eveningM}</td>` +
+        `<td align="center">${alertsM}</td>` +
+        `</tr>`
+    );
+}
+
+/** Build users table HTML (Rich Message). */
+function usersTableHtml(title, users, totalHint) {
+    const rows = users.map(formatUserRow).join('\n');
+    const hint = totalHint ? `<p><i>${escapeHtml(totalHint)}</i></p>` : '';
+    return `
+<h1>${title}</h1>
+${hint}
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Користувач</th>
+      <th align="center">Мова</th>
+      <th align="left">Доступ</th>
+      <th align="left">Місто</th>
+      <th align="center">Веч.</th>
+      <th align="center">Алерт</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${rows}
+  </tbody>
+</table>
+`.trim();
+}
+
+async function sendUsersRich(api, chatId, title, users, totalHint) {
+    const html = usersTableHtml(title, users, totalHint);
+    try {
+        await api.sendRichMessage(chatId, { html, skip_entity_detection: true });
+    } catch (e) {
+        console.warn('[admin] users sendRichMessage failed:', e.message);
+        const body = users.map(formatUserLine).join('\n———————————————\n');
+        await api.sendMessage(chatId, `<b>${escapeHtml(title)}</b>\n\n${body}`, { parse_mode: 'HTML' });
+    }
 }
 
 function escapeHtml(s) {
@@ -320,15 +378,21 @@ async function handleAdminCallback(ctx) {
                 await api.sendMessage(chatId, '📭 Користувачів ще немає.', { parse_mode: 'HTML' });
                 return true;
             }
-            // Telegram message limit ~4096 — chunk by ~12 users
-            const chunkSize = 12;
+            // Rich Message tables — chunk ~15 rows to stay safe
+            const chunkSize = 15;
             for (let i = 0; i < users.length; i += chunkSize) {
                 const slice = users.slice(i, i + chunkSize);
-                const body = slice.map(formatUserLine).join('\n———————————————\n');
-                const header = i === 0
-                    ? `📋 <b>Користувачі</b> (показано ${Math.min(users.length, 80)} з ${users.length})\n\n`
-                    : '';
-                await api.sendMessage(chatId, header + body, { parse_mode: 'HTML' });
+                const part =
+                    users.length > chunkSize
+                        ? `показано ${i + 1}–${i + slice.length} з ${users.length}`
+                        : `показано ${users.length}`;
+                await sendUsersRich(
+                    api,
+                    chatId,
+                    i === 0 ? '📋 Користувачі' : `📋 Користувачі (прод.)`,
+                    slice,
+                    part
+                );
             }
             return true;
         }
@@ -343,11 +407,12 @@ async function handleAdminCallback(ctx) {
                 await api.sendMessage(chatId, '🟢 Немає активних за останні 7 днів.', { parse_mode: 'HTML' });
                 return true;
             }
-            const body = users.map(formatUserLine).join('\n———————————————\n');
-            await api.sendMessage(
+            await sendUsersRich(
+                api,
                 chatId,
-                `🟢 <b>Активні за 7 днів</b> (${users.length}):\n\n${body}`,
-                { parse_mode: 'HTML' }
+                '🟢 Активні за 7 днів',
+                users,
+                `${users.length} користувач(ів)`
             );
             return true;
         }
