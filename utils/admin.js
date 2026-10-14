@@ -57,19 +57,27 @@ function formatUserLine(u) {
 function formatUserRow(u) {
     const name = u.username
         ? `@${u.username}`
-        : [u.firstName, u.lastName].filter(Boolean).join(' ') || `id${u.telegramId}`;
+        : [u.firstName, u.lastName].filter(Boolean).join(' ') || '—';
     const lang = u.language || u.languageCode || '—';
     const access = accessLabel(u.accessLevel || 'unlimited');
     const city = u.city || '—';
+    // Separate cells — long-press in Telegram to copy
+    const idCell = String(u.telegramId);
+    const geoCell =
+        u.lat != null && u.lon != null
+            ? `${Number(u.lat).toFixed(5)}, ${Number(u.lon).toFixed(5)}`
+            : '—';
     const usage = u.usage || {};
     const eveningM = usage.eveningThisMonth || 0;
     const alertsM = usage.alertsThisMonth || 0;
     return (
         `<tr>` +
-        `<td align="left">${escapeHtml(name)}<br/><small>${u.telegramId}</small></td>` +
+        `<td align="left">${escapeHtml(name)}</td>` +
+        `<td align="left"><code>${idCell}</code></td>` +
         `<td align="center">${escapeHtml(lang)}</td>` +
         `<td align="left">${escapeHtml(access)}</td>` +
         `<td align="left">${escapeHtml(city)}</td>` +
+        `<td align="left"><code>${geoCell}</code></td>` +
         `<td align="center">${eveningM}</td>` +
         `<td align="center">${alertsM}</td>` +
         `</tr>`
@@ -79,17 +87,21 @@ function formatUserRow(u) {
 /** Build users table HTML (Rich Message). */
 function usersTableHtml(title, users, totalHint) {
     const rows = users.map(formatUserRow).join('\n');
-    const hint = totalHint ? `<p><i>${escapeHtml(totalHint)}</i></p>` : '';
+    const hint = totalHint
+        ? `<p><i>${escapeHtml(totalHint)}</i><br/>Натисни й тримай ID або гео — скопіювати</p>`
+        : `<p><i>Натисни й тримай ID або гео — скопіювати</i></p>`;
     return `
 <h1>${title}</h1>
 ${hint}
 <table bordered striped>
   <thead>
     <tr>
-      <th align="left">Користувач</th>
+      <th align="left">Ім'я</th>
+      <th align="left">ID</th>
       <th align="center">Мова</th>
       <th align="left">Доступ</th>
       <th align="left">Місто</th>
+      <th align="left">Гео</th>
       <th align="center">Веч.</th>
       <th align="center">Алерт</th>
     </tr>
@@ -378,8 +390,8 @@ async function handleAdminCallback(ctx) {
                 await api.sendMessage(chatId, '📭 Користувачів ще немає.', { parse_mode: 'HTML' });
                 return true;
             }
-            // Rich Message tables — chunk ~15 rows to stay safe
-            const chunkSize = 15;
+            // Rich Message tables — fewer rows (more columns: ID + geo)
+            const chunkSize = 10;
             for (let i = 0; i < users.length; i += chunkSize) {
                 const slice = users.slice(i, i + chunkSize);
                 const part =
@@ -996,7 +1008,61 @@ async function handleAdminCallback(ctx) {
 }
 
 /**
- * Handle text commands posted in admin channel: /msg, or any text → show menu.
+ * Send media (or text) from admin reply to a user.
+ * Supports: photo, document, video, animation, voice, audio, sticker + caption.
+ */
+async function sendAdminReplyToUser(api, targetId, msg) {
+    const caption = (msg.caption || msg.text || '').trim();
+    const header = '💬 Відповідь від підтримки Parasol:';
+    const fullCaption = caption ? `${header}\n\n${caption}` : header;
+
+    if (msg.photo && msg.photo.length) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        await api.sendPhoto(targetId, fileId, {
+            caption: fullCaption,
+            parse_mode: caption ? undefined : undefined
+        });
+        return 'photo';
+    }
+    if (msg.document) {
+        await api.sendDocument(targetId, msg.document.file_id, { caption: fullCaption });
+        return 'document';
+    }
+    if (msg.video) {
+        await api.sendVideo(targetId, msg.video.file_id, { caption: fullCaption });
+        return 'video';
+    }
+    if (msg.animation) {
+        await api.sendAnimation(targetId, msg.animation.file_id, { caption: fullCaption });
+        return 'animation';
+    }
+    if (msg.voice) {
+        await api.sendVoice(targetId, msg.voice.file_id, { caption: fullCaption });
+        return 'voice';
+    }
+    if (msg.audio) {
+        await api.sendAudio(targetId, msg.audio.file_id, { caption: fullCaption });
+        return 'audio';
+    }
+    if (msg.sticker) {
+        await api.sendSticker(targetId, msg.sticker.file_id);
+        if (caption) {
+            await api.sendMessage(targetId, fullCaption);
+        }
+        return 'sticker';
+    }
+    if (caption) {
+        await api.sendMessage(targetId, `💬 <b>Відповідь від підтримки Parasol:</b>\n\n${escapeHtml(caption)}`, {
+            parse_mode: 'HTML'
+        });
+        return 'text';
+    }
+    return null;
+}
+
+/**
+ * Handle posts in admin channel: reply to user (text/photo/media), /msg, /setaccess, or show menu.
+ * Works for both message and channel_post (text + media).
  */
 async function handleAdminChannelText(ctx) {
     const chatId = ctx.chat?.id || ctx.channelPost?.chat?.id;
@@ -1004,23 +1070,34 @@ async function handleAdminChannelText(ctx) {
 
     const msg = ctx.message || ctx.channelPost || {};
     const text = (msg.text || '').trim();
+    const caption = (msg.caption || '').trim();
     const api = ctx.api;
+    const hasMedia = !!(
+        (msg.photo && msg.photo.length) ||
+        msg.document ||
+        msg.video ||
+        msg.animation ||
+        msg.voice ||
+        msg.audio ||
+        msg.sticker
+    );
 
-    // ── Reply to a user-notification → send text to that user ──
+    // ── Reply to a user-notification → send text and/or media to that user ──
     const replyTo = msg.reply_to_message;
-    if (replyTo && text && !text.startsWith('/')) {
+    if (replyTo && (text || caption || hasMedia) && !(text || '').startsWith('/')) {
         const src = replyTo.text || replyTo.caption || '';
+        // Rich messages may put ID only in caption/entities — also scan full JSON-ish text
         const targetId = extractUserIdFromNotifyText(src);
         if (targetId) {
             try {
-                await api.sendMessage(
-                    targetId,
-                    `💬 <b>Відповідь від підтримки Parasol:</b>\n\n${escapeHtml(text)}`,
-                    { parse_mode: 'HTML' }
-                );
+                const kind = await sendAdminReplyToUser(api, targetId, msg);
+                if (!kind) {
+                    await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).');
+                    return true;
+                }
                 await api.sendMessage(
                     chatId,
-                    `✅ Відповідь надіслано користувачу <code>${targetId}</code>`,
+                    `✅ Відповідь (${kind}) надіслано користувачу <code>${targetId}</code>`,
                     { parse_mode: 'HTML' }
                 );
             } catch (e) {
@@ -1040,6 +1117,11 @@ async function handleAdminChannelText(ctx) {
                 '<code>/msg USER_ID текст</code>',
             { parse_mode: 'HTML' }
         );
+        return true;
+    }
+
+    // Media without reply in admin channel — ignore (don't open menu)
+    if (hasMedia && !replyTo) {
         return true;
     }
 
@@ -1083,7 +1165,9 @@ async function handleAdminChannelText(ctx) {
     }
 
     // Any other text in admin channel → show menu
-    await sendAdminMenu(api, chatId);
+    if (text) {
+        await sendAdminMenu(api, chatId);
+    }
     return true;
 }
 
