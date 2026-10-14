@@ -812,141 +812,14 @@ main {
     }
 }
 
-/* --- PWA install banner --- */
-.pwa-install-banner {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 10000;
-    padding: 0.85rem 1rem calc(0.85rem + env(safe-area-inset-bottom, 0px));
-    background: rgba(15, 32, 39, 0.96);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
-}
-
-.pwa-install-banner[hidden] {
-    display: none !important;
-}
-
-.pwa-install-inner {
-    max-width: 560px;
-    width: 100%;
-    margin: 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem 1rem;
-    flex-wrap: wrap;
-    text-align: center;
-}
-
-.pwa-install-copy {
-    flex: 1 1 100%;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.35rem;
-    text-align: center;
-}
-
-.pwa-install-title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #fff;
-}
-
-.pwa-install-hint {
-    font-size: 0.78rem;
-    line-height: 1.35;
-    color: rgba(255, 255, 255, 0.65);
-}
-
-.pwa-install-hint[hidden] {
-    display: none !important;
-}
-
-.pwa-install-actions {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-    width: 100%;
-}
-
-@media (min-width: 480px) {
-    .pwa-install-inner {
-        flex-wrap: nowrap;
-        justify-content: space-between;
-        text-align: left;
-    }
-    .pwa-install-copy {
-        flex: 1 1 auto;
-        align-items: flex-start;
-        text-align: left;
-    }
-    .pwa-install-actions {
-        width: auto;
-        justify-content: flex-end;
-    }
-}
-
-.pwa-install-btn,
-.pwa-copy-btn {
-    background: var(--primary, #00F260);
-    color: #0a0e14;
-    border: none;
-    border-radius: 10px;
-    padding: 0.5rem 0.9rem;
-    font-family: inherit;
-    font-weight: 700;
-    font-size: 0.85rem;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.pwa-copy-btn {
-    background: rgba(255, 255, 255, 0.12);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.pwa-install-btn:active,
-.pwa-copy-btn:active {
-    transform: scale(0.97);
-}
-
-.pwa-install-btn[hidden],
-.pwa-copy-btn[hidden] {
-    display: none !important;
-}
-
-.pwa-install-dismiss {
-    background: transparent;
-    border: none;
-    color: rgba(255, 255, 255, 0.55);
-    font-size: 1.1rem;
-    padding: 0.35rem 0.5rem;
-    cursor: pointer;
-    line-height: 1;
-}
-
-.pwa-install-dismiss:hover {
-    color: #fff;
-}
-
-/* Footer install CTA */
+/* Footer CTAs: bot / install / copy link */
 .footer-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: center;
-    margin-top: 0.25rem;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 0.55rem;
+    align-items: flex-start;
+    margin-top: 0.5rem;
 }
 
 .install-app-btn {
@@ -977,8 +850,22 @@ main {
     display: none !important;
 }
 
+/* Secondary style for "Copy link" */
+.copy-link-btn {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: none;
+}
+
+.copy-link-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    filter: none;
+}
+
 .footer-install-hint {
-    margin-top: 0.6rem;
+    margin-top: 0.35rem;
     font-size: 0.78rem;
     line-height: 1.4;
     color: var(--text-dim, rgba(255,255,255,0.55));

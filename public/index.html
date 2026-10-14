@@ -31,14 +31,6 @@
 </head>
 <body class="loading">
     <div class="background-overlay"></div>
-
-    <!-- PWA install banner (Chrome prompt OR Telegram instructions) -->
-    <div id="pwa-install-banner" class="pwa-install-banner" hidden>
-        <div class="pwa-install-inner">
-            <div class="pwa-install-copy">
-                <span class="pwa-install-title" data-i18n="pwaInstall">Встановити Parasol на телефон</span>
-                <span class="pwa-install-hint" id="pwa-install-hint" hidden></span>
-            </div>
             <div class="pwa-install-actions">
                 <button type="button" id="pwa-install-btn" class="pwa-install-btn" data-i18n="pwaInstallBtn">Встановити</button>
                 <button type="button" id="pwa-copy-link-btn" class="pwa-copy-btn" hidden data-i18n="pwaCopyLink">Скопіювати посилання</button>
@@ -243,7 +235,10 @@
                             <i class="fab fa-telegram-plane"></i> <span data-i18n="openBot">Відкрити Parasol Bot</span>
                         </a>
                         <button type="button" id="footer-install-btn" class="install-app-btn" hidden>
-                            <i class="fas fa-download"></i> <span data-i18n="pwaInstallBtn">Встановити</span>
+                            <i class="fas fa-download"></i> <span data-i18n="pwaInstallBtn">Встановити додаток</span>
+                        </button>
+                        <button type="button" id="footer-copy-link-btn" class="install-app-btn copy-link-btn">
+                            <i class="fas fa-link"></i> <span data-i18n="pwaCopyLink">Скопіювати посилання</span>
                         </button>
                     </div>
                     <p id="footer-install-hint" class="footer-install-hint" hidden></p>
