@@ -164,31 +164,141 @@ module.exports = async (req, res) => {
                 const apiCityName = response.data.city_name || cityInfo.name;
                 const todayData = fullResponse[0];
 
+                // --- AQI «зараз»: WAQI ≤ 10 км, інакше Open-Meteo current ---
                 let aqiData = null;
-                const WAQI_TOKEN = process.env.WAQI_TOKEN;
-                if (WAQI_TOKEN) {
-                    try {
-                        const waqiRes = await axios.get(
-                            `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
-                            { timeout: 8000 }
-                        );
-                        if (waqiRes.data?.status === 'ok') {
-                            const d = waqiRes.data.data;
-                            const aqiVal = d.aqi;
-                            let badge = '🟢';
-                            if (aqiVal > 150) badge = '🔴';
-                            else if (aqiVal > 100) badge = '🟠';
-                            else if (aqiVal > 50) badge = '🟡';
+                const WAQI_MAX_KM = 10;
+                const haversineKm = (lat1, lon1, lat2, lon2) => {
+                    const toRad = (x) => x * Math.PI / 180;
+                    const R = 6371;
+                    const dLat = toRad(lat2 - lat1);
+                    const dLon = toRad(lon2 - lon1);
+                    const a = Math.sin(dLat / 2) ** 2 +
+                        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+                    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                };
+                const badgeFromUsAqi = (v) => {
+                    if (v == null || Number.isNaN(Number(v))) return '🟢';
+                    const n = Number(v);
+                    if (n > 150) return '🔴';
+                    if (n > 100) return '🟠';
+                    if (n > 50) return '🟡';
+                    return '🟢';
+                };
+                const badgeFromEaqi = (v) => {
+                    if (v == null || Number.isNaN(Number(v))) return '🟢';
+                    const n = Number(v);
+                    if (n > 80) return '🔴';
+                    if (n > 60) return '🟠';
+                    if (n > 40) return '🟡';
+                    return '🟢';
+                };
+                {
+                    const WAQI_TOKEN = process.env.WAQI_TOKEN;
+                    if (WAQI_TOKEN) {
+                        try {
+                            const waqiRes = await axios.get(
+                                `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
+                                { timeout: 8000 }
+                            );
+                            if (waqiRes.data?.status === 'ok') {
+                                const d = waqiRes.data.data;
+                                const geo = Array.isArray(d.city?.geo) ? d.city.geo : null;
+                                let distKm = null;
+                                if (geo && geo.length >= 2) {
+                                    distKm = haversineKm(cityInfo.lat, cityInfo.lon, Number(geo[0]), Number(geo[1]));
+                                }
+                                if (distKm != null && distKm <= WAQI_MAX_KM) {
+                                    aqiData = {
+                                        provider: 'waqi',
+                                        aqi: d.aqi,
+                                        aqiLabel: 'AQI',
+                                        badge: badgeFromUsAqi(d.aqi),
+                                        pm25: d.iaqi?.pm25?.v ?? null,
+                                        pm10: d.iaqi?.pm10?.v ?? null,
+                                        station: d.city?.name || null,
+                                        stationUrl: d.city?.url || null,
+                                        stationGeo: geo,
+                                        source: d.attributions?.[0]?.name || null,
+                                        dominant: d.dominentpol || null,
+                                        distKm: Math.round(distKm * 10) / 10
+                                    };
+                                }
+                            }
+                        } catch (e) {
+                            console.error('WAQI error:', e.message);
+                        }
+                    }
+                    if (!aqiData) {
+                        try {
+                            const omCurUrl =
+                                `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                                `&current=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,dust&timezone=auto`;
+                            const omCurRes = await axios.get(omCurUrl, { timeout: 10000 });
+                            const cur = omCurRes.data?.current || {};
+                            const eaqi = cur.european_aqi != null ? Number(cur.european_aqi) : null;
+                            const usAqi = cur.us_aqi != null ? Number(cur.us_aqi) : null;
                             aqiData = {
-                                aqi: aqiVal,
-                                badge,
-                                pm25: d.iaqi?.pm25?.v ?? null,
-                                pm10: d.iaqi?.pm10?.v ?? null
+                                provider: 'open-meteo',
+                                aqi: eaqi != null ? eaqi : usAqi,
+                                aqiLabel: eaqi != null ? 'EAQI' : 'US AQI',
+                                badge: eaqi != null ? badgeFromEaqi(eaqi) : badgeFromUsAqi(usAqi),
+                                pm25: cur.pm2_5 != null ? Number(cur.pm2_5) : null,
+                                pm10: cur.pm10 != null ? Number(cur.pm10) : null,
+                                station: null,
+                                stationUrl: null,
+                                stationGeo: [cityInfo.lat, cityInfo.lon],
+                                source: 'Open-Meteo · CAMS (модель)',
+                                dominant: null,
+                                distKm: 0,
+                                eaqi,
+                                usAqi
+                            };
+                        } catch (e) {
+                            console.error('Open-Meteo current AQ error:', e.message);
+                        }
+                    }
+                }
+
+                // --- Open-Meteo Air Quality forecast (daily max for tips + table) ---
+                let omAqByDate = {};
+                try {
+                    const aqUrl =
+                        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                        `&hourly=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust` +
+                        `&timezone=auto&forecast_days=7`;
+                    const aqRes = await axios.get(aqUrl, { timeout: 12000 });
+                    const h = aqRes.data?.hourly || {};
+                    const times = h.time || [];
+                    const pickMax = (arr, i) => {
+                        const v = arr?.[i];
+                        return v == null || Number.isNaN(Number(v)) ? null : Number(v);
+                    };
+                    for (let i = 0; i < times.length; i++) {
+                        const dStr = String(times[i]).slice(0, 10);
+                        if (!omAqByDate[dStr]) {
+                            omAqByDate[dStr] = {
+                                eaqiMax: null, usAqiMax: null,
+                                pm25Max: null, pm10Max: null,
+                                no2Max: null, o3Max: null, so2Max: null, coMax: null, dustMax: null
                             };
                         }
-                    } catch (e) {
-                        console.error('WAQI error:', e.message);
+                        const row = omAqByDate[dStr];
+                        const bump = (key, val) => {
+                            if (val == null) return;
+                            if (row[key] == null || val > row[key]) row[key] = val;
+                        };
+                        bump('eaqiMax', pickMax(h.european_aqi, i));
+                        bump('usAqiMax', pickMax(h.us_aqi, i));
+                        bump('pm25Max', pickMax(h.pm2_5, i));
+                        bump('pm10Max', pickMax(h.pm10, i));
+                        bump('no2Max', pickMax(h.nitrogen_dioxide, i));
+                        bump('o3Max', pickMax(h.ozone, i));
+                        bump('so2Max', pickMax(h.sulphur_dioxide, i));
+                        bump('coMax', pickMax(h.carbon_monoxide, i));
+                        bump('dustMax', pickMax(h.dust, i));
                     }
+                } catch (e) {
+                    console.error('Open-Meteo AQ forecast error:', e.message);
                 }
 
                 // --- SYNC HISTORY ---
@@ -541,6 +651,9 @@ module.exports = async (req, res) => {
                     const tempUnit = user.units?.temp || 'c';
                     const settings = user.forecastSettings || { daysCount: 3, enabledMetrics: ['condition', 'temp', 'precip', 'wind', 'pressure'] };
                     const metrics = settings.enabledMetrics;
+                    const hasAqiNow  = metrics.includes('aqi_now')  || metrics.includes('aqi');
+                    const hasAqiMain = metrics.includes('aqi_main') || metrics.includes('aqi');
+                    const hasAqiExt  = metrics.includes('aqi_ext')  || metrics.includes('aqi');
 
                     const displayCity = (user.city && user.city !== '..') ? user.city : apiCityName;
                     const isUk = lang === 'uk';
@@ -573,11 +686,16 @@ module.exports = async (req, res) => {
 
                     // ========== 1. AQI (HTML) ==========
                     let aqiHtml = '';
-                    if (metrics.includes('aqi') && aqiData) {
-                        const aqiLabel = isUk ? '🍃 <b>Якість повітря (на момент зараз):</b>' : '🍃 <b>Air Quality (current moment):</b>';
-                        aqiHtml = `${aqiLabel} ${aqiData.badge} AQI ${aqiData.aqi}`;
-                        if (aqiData.pm25 != null) aqiHtml += ` | PM2.5: ${aqiData.pm25}`;
-                        if (aqiData.pm10 != null) aqiHtml += ` | PM10: ${aqiData.pm10}`;
+                    if (hasAqiNow && aqiData) {
+                        const idxName = aqiData.aqiLabel || 'AQI';
+                        const aqiShow = aqiData.aqi != null
+                            ? (Number.isInteger(aqiData.aqi) ? aqiData.aqi : Number(aqiData.aqi).toFixed(0))
+                            : '—';
+                        let summaryLine = isUk
+                            ? `🍃 <b>Якість повітря (на момент зараз):</b> ${aqiData.badge} ${idxName} ${aqiShow}`
+                            : `🍃 <b>Air Quality (current moment):</b> ${aqiData.badge} ${idxName} ${aqiShow}`;
+                        if (aqiData.pm25 != null) summaryLine += ` | PM2.5: ${Number(aqiData.pm25).toFixed(1)}`;
+                        if (aqiData.pm10 != null) summaryLine += ` | PM10: ${Number(aqiData.pm10).toFixed(1)}`;
 
                         const issues = [];
                         if (aqiData.pm25 != null && aqiData.pm25 > 25) {
@@ -588,28 +706,84 @@ module.exports = async (req, res) => {
                         }
 
                         let advice = '';
-                        if (aqiData.aqi > 150) {
+                        const isWaqi = aqiData.provider === 'waqi';
+                        const bad = isWaqi
+                            ? (aqiData.aqi > 150 ? 3 : aqiData.aqi > 100 ? 2 : aqiData.aqi > 50 ? 1 : 0)
+                            : (aqiData.aqi > 80 ? 3 : aqiData.aqi > 60 ? 2 : aqiData.aqi > 40 ? 1 : 0);
+                        if (bad === 3) {
                             advice = isUk
-                                ? '<br>🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
-                                : '<br>🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
-                        } else if (aqiData.aqi > 100) {
+                                ? '🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
+                                : '🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
+                        } else if (bad === 2) {
                             advice = isUk
-                                ? '<br>🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
-                                : '<br>🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
-                        } else if (aqiData.aqi > 50) {
+                                ? '🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
+                                : '🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
+                        } else if (bad === 1) {
                             advice = isUk
-                                ? '<br>🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
-                                : '<br>🟡 Air quality is acceptable, but sensitive groups should be cautious.';
+                                ? '🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
+                                : '🟡 Air quality is acceptable, but sensitive groups should be cautious.';
                         } else if (issues.length > 0) {
                             advice = isUk
-                                ? '<br>⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
-                                : '<br>⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+                                ? '⚠️ Повітря чисте за індексом, але спостерігається підвищення окремих фракцій пилу.'
+                                : '⚠️ Index is low, but elevated levels of specific dust particles detected.';
                         }
-
                         if (issues.length > 0 && advice) {
                             advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
                         }
-                        aqiHtml += advice;
+
+                        const detailParts = [];
+                        if (aqiData.provider === 'waqi') {
+                            if (aqiData.station) {
+                                detailParts.push(isUk
+                                    ? `📍 <b>Станція:</b> ${escapeHTML(String(aqiData.station))}`
+                                    : `📍 <b>Station:</b> ${escapeHTML(String(aqiData.station))}`);
+                            }
+                            if (aqiData.distKm != null) {
+                                detailParts.push(isUk
+                                    ? `📏 <b>Відстань:</b> ${aqiData.distKm} км`
+                                    : `📏 <b>Distance:</b> ${aqiData.distKm} km`);
+                            }
+                            if (aqiData.stationGeo && aqiData.stationGeo.length >= 2) {
+                                const [slat, slon] = aqiData.stationGeo;
+                                detailParts.push(isUk
+                                    ? `🗺 <b>Координати станції:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`
+                                    : `🗺 <b>Station coordinates:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`);
+                            }
+                            if (aqiData.source) {
+                                detailParts.push(isUk
+                                    ? `📡 <b>Джерело:</b> ${escapeHTML(String(aqiData.source))}`
+                                    : `📡 <b>Source:</b> ${escapeHTML(String(aqiData.source))}`);
+                            }
+                            if (aqiData.dominant) {
+                                detailParts.push(isUk
+                                    ? `🧪 <b>Домінуючий забрудник:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`
+                                    : `🧪 <b>Dominant pollutant:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`);
+                            }
+                            if (aqiData.stationUrl) {
+                                const url = String(aqiData.stationUrl).startsWith('http')
+                                    ? aqiData.stationUrl
+                                    : `https://aqicn.org${aqiData.stationUrl}`;
+                                detailParts.push(isUk
+                                    ? `🔗 <a href="${escapeHTML(url)}">Сторінка станції</a>`
+                                    : `🔗 <a href="${escapeHTML(url)}">Station page</a>`);
+                            }
+                        } else if (aqiData.provider === 'open-meteo') {
+                            detailParts.push(isUk
+                                ? `📡 <b>Джерело:</b> Open-Meteo · CAMS (атмосферна модель)`
+                                : `📡 <b>Source:</b> Open-Meteo · CAMS (atmospheric model)`);
+                            detailParts.push(isUk
+                                ? `ℹ️ Немає станції WAQI ближче 10 км — показано модельну оцінку для ваших координат`
+                                : `ℹ️ No WAQI station within 10 km — showing model estimate for your coordinates`);
+                            if (aqiData.eaqi != null) detailParts.push(`EAQI: ${Math.round(aqiData.eaqi)}`);
+                            if (aqiData.usAqi != null) detailParts.push(`US AQI: ${Math.round(aqiData.usAqi)}`);
+                        }
+                        if (advice) detailParts.push(advice);
+
+                        if (detailParts.length) {
+                            aqiHtml = `<details><summary>${summaryLine}</summary><p>${detailParts.join('<br>')}</p></details>`;
+                        } else {
+                            aqiHtml = summaryLine;
+                        }
                     }
 
                     // ========== 2. Frost prefix (HTML) ==========
@@ -621,8 +795,7 @@ module.exports = async (req, res) => {
                             .replace(/\n/g, '<br>');
                     }
 
-                    // ========== 3. Smart highlights ==========
-                    // Знахідний відмінок через getDay() — locale інколи дає різний апостроф у «п'ятниця»
+                    // ========== 3. Smart highlights (структуровані підказки) ==========
                     const dayAccusativeByIndex = [
                         'неділю', 'понеділок', 'вівторок', 'середу', 'четвер', "п'ятницю", 'суботу'
                     ];
@@ -630,7 +803,6 @@ module.exports = async (req, res) => {
                         if (!isUk) {
                             return dateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: cityTzForDays });
                         }
-                        // weekday у локальному TZ міста
                         const parts = new Intl.DateTimeFormat('en-US', {
                             timeZone: cityTzForDays,
                             weekday: 'short'
@@ -641,151 +813,270 @@ module.exports = async (req, res) => {
                         return dayAccusativeByIndex[idx] || dateObj.toLocaleDateString('uk-UA', { weekday: 'long', timeZone: cityTzForDays }).toLowerCase();
                     };
 
-                    const highlights = [];
-                    const highPressureDays = [];
-                    let highPressureStart = null;
-                    let highPressureEnd = null;
-
+                    const dayEvents = [];
                     userForecast.forEach((day) => {
                         const rawDate = day.valid_date || day.datetime || '';
-                        const dateObj = new Date(rawDate.includes('T') ? rawDate : `${rawDate}T12:00:00`);
+                        const dateObj = new Date(rawDate.includes('T') ? rawDate : `${String(rawDate).slice(0, 10)}T12:00:00`);
                         const dayName = getDayForPreposition(dateObj);
+                        const dayDate = String(day.valid_date || day.datetime || '').slice(0, 10);
+                        const ev = {
+                            dayName, dateObj, dayDate,
+                            precip: 0, precipHeavy: false, gust: 0, highPress: false,
+                            uvLabel: null, frostLabel: null, geomagLabel: null,
+                            aqIssues: [], eaqi: null, eaqiBadge: null,
+                            skyCode: day.weather?.code,
+                            skyDesc: (getWeatherDesc(day.weather?.code, lang) || '').replace(/\*\*/g, '')
+                        };
 
                         const precip = Number(day.precip) || 0;
                         const pop = Number(day.pop) || 0;
-                        if (precip >= 5) {
-                            highlights.push(isUk
-                                ? `у ${dayName} сильний дощ (${precip.toFixed(1)} мм)`
-                                : `on ${dayName} heavy rain (${precip.toFixed(1)} mm)`);
-                        } else if (precip >= 0.3 || pop >= 40) {
-                            highlights.push(isUk
-                                ? `у ${dayName} слабкий дощ (${precip.toFixed(1)} мм)`
-                                : `on ${dayName} light rain (${precip.toFixed(1)} mm)`);
-                        }
+                        if (precip >= 5) { ev.precip = precip; ev.precipHeavy = true; }
+                        else if (precip >= 0.3 || pop >= 40) { ev.precip = precip; }
 
                         const gust = Number(day.wind_gust_spd || day.wind_spd) || 0;
-                        if (gust >= 7) {
-                            highlights.push(isUk
-                                ? `у ${dayName} сильний вітер із поривами до ${Math.round(gust)} м/с`
-                                : `on ${dayName} strong wind with gusts up to ${Math.round(gust)} m/s`);
-                        }
+                        if (gust >= 7) ev.gust = gust;
 
                         const slp = Number(day.slp || day.pres) || 0;
-                        if (slp > 1018) {
-                            if (highPressureStart === null) {
-                                highPressureStart = dayName;
-                                highPressureEnd = dayName;
-                            } else {
-                                highPressureEnd = dayName;
-                            }
-                        } else if (highPressureStart !== null) {
-                            if (highPressureStart === highPressureEnd) {
-                                highPressureDays.push(isUk
-                                    ? `у ${highPressureStart} високий тиск 🔴`
-                                    : `on ${highPressureStart} high pressure 🔴`);
-                            } else {
-                                highPressureDays.push(isUk
-                                    ? `у ${highPressureStart}–${highPressureEnd} високий тиск 🔴`
-                                    : `on ${highPressureStart}–${highPressureEnd} high pressure 🔴`);
-                            }
-                            highPressureStart = null;
-                            highPressureEnd = null;
-                        }
+                        if (slp > 1018) ev.highPress = true;
 
-                        const dayDate = dayKeyFn(day);
                         const kp = geomagByDate[dayDate];
                         const level = getGeomagLevel(kp);
                         if (level && kp >= 5) {
-                            const label = isUk ? level.labelUk : level.labelEn;
-                            let labelMid = label.charAt(0).toLowerCase() + label.slice(1);
-                            // Clarify: «слабка буря» → «слабка магнітна буря»
-                            if (isUk) {
-                                // No \b — JS word boundaries ignore Cyrillic
-                                if (!labelMid.includes('магніт')) {
-                                    labelMid = labelMid
-                                        .replace('буря', 'магнітна буря')
-                                        .replace('шторм', 'магнітний шторм');
-                                }
-                            } else if (!/magnetic/i.test(labelMid)) {
+                            let labelMid = (isUk ? level.labelUk : level.labelEn);
+                            labelMid = labelMid.charAt(0).toLowerCase() + labelMid.slice(1);
+                            if (isUk && !labelMid.includes('магніт')) {
+                                labelMid = labelMid.replace('буря', 'магнітна буря').replace('шторм', 'магнітний шторм');
+                            } else if (!isUk && !/magnetic/i.test(labelMid)) {
                                 labelMid = labelMid.replace(/\bstorm\b/i, 'magnetic storm');
                             }
-                            highlights.push(isUk
-                                ? `у ${dayName} ${labelMid}`
-                                : `on ${dayName} ${labelMid}`);
+                            ev.geomagLabel = labelMid;
                         }
 
-                        const dStrSoil = dayKeyFn(day);
-                        const vals0Frost = [];
+                        const vals0 = [];
                         for (let i = 0; i < omSoilTimes.length; i++) {
-                            if (String(omSoilTimes[i]).startsWith(dStrSoil) && omSoil0[i] != null) {
-                                vals0Frost.push(Number(omSoil0[i]));
+                            if (String(omSoilTimes[i]).startsWith(dayDate) && omSoil0[i] != null) {
+                                vals0.push(Number(omSoil0[i]));
                             }
                         }
-                        if (vals0Frost.length) {
-                            const minSoil = Math.min(...vals0Frost);
+                        if (vals0.length) {
+                            const minSoil = Math.min(...vals0);
                             if (minSoil <= 0) {
-                                highlights.push(isUk
-                                    ? `у ${dayName} заморозки на ґрунті (до ${minSoil.toFixed(1)}°C)`
-                                    : `on ${dayName} soil frost (down to ${minSoil.toFixed(1)}°C)`);
+                                ev.frostLabel = isUk
+                                    ? `заморозки на ґрунті (до ${minSoil.toFixed(1)}°C)`
+                                    : `soil frost (down to ${minSoil.toFixed(1)}°C)`;
                             }
                         }
 
-                        // УФ-індекс (≥6 високий, ≥8 дуже високий, >10 екстремальний)
                         const uv = Number(day.uv);
                         if (!Number.isNaN(uv) && uv >= 6) {
                             const uvR = Math.round(uv);
-                            if (uv > 10) {
-                                highlights.push(isUk
-                                    ? `у ${dayName} екстремальний УФ-індекс (${uvR}) 🟣`
-                                    : `on ${dayName} extreme UV index (${uvR}) 🟣`);
-                            } else if (uv >= 8) {
-                                highlights.push(isUk
-                                    ? `у ${dayName} дуже високий УФ-індекс (${uvR}) 🔴`
-                                    : `on ${dayName} very high UV index (${uvR}) 🔴`);
-                            } else {
-                                highlights.push(isUk
-                                    ? `у ${dayName} високий УФ-індекс (${uvR}) 🟠`
-                                    : `on ${dayName} high UV index (${uvR}) 🟠`);
+                            if (uv > 10) ev.uvLabel = isUk ? `екстремальний УФ (${uvR}) 🟣` : `extreme UV (${uvR}) 🟣`;
+                            else if (uv >= 8) ev.uvLabel = isUk ? `дуже високий УФ (${uvR}) 🔴` : `very high UV (${uvR}) 🔴`;
+                            else ev.uvLabel = isUk ? `високий УФ (${uvR}) 🟠` : `high UV (${uvR}) 🟠`;
+                        }
+
+                        // AQ tips — завжди (не залежить від опцій таблиці)
+                        const aq = omAqByDate[dayDate];
+                        if (aq) {
+                            if (aq.pm25Max != null && aq.pm25Max >= 12) {
+                                ev.aqIssues.push(isUk
+                                    ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
+                                    : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
                             }
+                            if (aq.pm10Max != null && aq.pm10Max >= 25) {
+                                ev.aqIssues.push(isUk
+                                    ? `великий пил PM10 до ${aq.pm10Max.toFixed(0)} µg/m³`
+                                    : `coarse dust PM10 up to ${aq.pm10Max.toFixed(0)} µg/m³`);
+                            }
+                            if (aq.dustMax != null && aq.dustMax >= 15) {
+                                ev.aqIssues.push(isUk
+                                    ? `пилова хмара (dust) до ${aq.dustMax.toFixed(0)} µg/m³`
+                                    : `dust plume up to ${aq.dustMax.toFixed(0)} µg/m³`);
+                            }
+                            if (aq.no2Max != null && aq.no2Max >= 40) {
+                                ev.aqIssues.push(isUk
+                                    ? `NO₂ до ${aq.no2Max.toFixed(0)} µg/m³`
+                                    : `NO₂ up to ${aq.no2Max.toFixed(0)} µg/m³`);
+                            }
+                            if (aq.o3Max != null && aq.o3Max >= 100) {
+                                ev.aqIssues.push(isUk
+                                    ? `озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³`
+                                    : `ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³`);
+                            }
+                            if (aq.so2Max != null && aq.so2Max >= 30) {
+                                ev.aqIssues.push(isUk
+                                    ? `SO₂ до ${aq.so2Max.toFixed(0)} µg/m³`
+                                    : `SO₂ up to ${aq.so2Max.toFixed(0)} µg/m³`);
+                            }
+                            if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
+                                ev.eaqi = Math.round(aq.eaqiMax);
+                                ev.eaqiBadge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
+                                if (!ev.aqIssues.length && aq.pm25Max != null) {
+                                    ev.aqIssues.push(isUk
+                                        ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
+                                        : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
+                                }
+                            }
+                        }
+                        dayEvents.push(ev);
+                    });
+
+                    const nearEvents = dayEvents.slice(0, 3);
+                    const farEvents = dayEvents.slice(3);
+
+                    const isClearSky = (code) => {
+                        const c = Number(code);
+                        return c === 800 || c === 801 || c === 802;
+                    };
+                    const hasHazard = (ev) =>
+                        ev.precip > 0 || ev.gust >= 7 || ev.highPress || ev.uvLabel || ev.frostLabel ||
+                        ev.geomagLabel || ev.eaqi != null || (ev.aqIssues && ev.aqIssues.length);
+
+                    const fmtShort = (d) => d.toLocaleDateString(isUk ? 'uk-UA' : 'en-GB', {
+                        day: '2-digit', month: '2-digit', timeZone: cityTzForDays
+                    });
+
+                    const nearLines = [];
+                    nearEvents.forEach((ev, idx) => {
+                        const shortDate = fmtShort(ev.dateObj);
+                        let labelDay;
+                        if (idx === 0) labelDay = isUk ? `Завтра (${shortDate})` : `Tomorrow (${shortDate})`;
+                        else if (idx === 1) labelDay = isUk ? `Післязавтра (${shortDate})` : `Day after tomorrow (${shortDate})`;
+                        else labelDay = `${ev.dayName.charAt(0).toUpperCase() + ev.dayName.slice(1)} (${shortDate})`;
+
+                        if (!hasHazard(ev) && isClearSky(ev.skyCode)) {
+                            nearLines.push(isUk
+                                ? `${labelDay} — чудовий ясний день ☀️`
+                                : `${labelDay} — a lovely clear day ☀️`);
+                        } else if (!hasHazard(ev)) {
+                            const sky = ev.skyDesc || (isUk ? 'без особливих загроз' : 'no major hazards');
+                            nearLines.push(isUk
+                                ? `${labelDay} — спокійно (${sky})`
+                                : `${labelDay} — quiet (${sky})`);
+                        } else {
+                            const bits = [];
+                            if (ev.precip > 0) {
+                                bits.push(isUk
+                                    ? (ev.precipHeavy ? `сильний дощ ${ev.precip.toFixed(1)} мм` : `слабкий дощ ${ev.precip.toFixed(1)} мм`)
+                                    : (ev.precipHeavy ? `heavy rain ${ev.precip.toFixed(1)} mm` : `light rain ${ev.precip.toFixed(1)} mm`));
+                            }
+                            if (ev.gust >= 7) {
+                                bits.push(isUk
+                                    ? `вітер із поривами до ${Math.round(ev.gust)} м/с`
+                                    : `wind gusts up to ${Math.round(ev.gust)} m/s`);
+                            }
+                            if (ev.frostLabel) bits.push(ev.frostLabel);
+                            if (ev.uvLabel) bits.push(ev.uvLabel);
+                            if (ev.geomagLabel) bits.push(ev.geomagLabel);
+                            if (ev.highPress) bits.push(isUk ? 'високий тиск 🔴' : 'high pressure 🔴');
+                            if (ev.eaqi != null) {
+                                const detail = ev.aqIssues.length ? `: ${ev.aqIssues[0]}` : '';
+                                bits.push(isUk
+                                    ? `якість повітря EAQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
+                                    : `air quality EAQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
+                            } else if (ev.aqIssues.length) {
+                                bits.push(ev.aqIssues[0]);
+                            }
+                            nearLines.push(`${labelDay} — ${bits.join(', ')}`);
                         }
                     });
 
-                    if (highPressureStart !== null) {
-                        if (highPressureStart === highPressureEnd) {
-                            highPressureDays.push(isUk
-                                ? `у ${highPressureStart} високий тиск 🔴`
-                                : `on ${highPressureStart} high pressure 🔴`);
-                        } else {
-                            highPressureDays.push(isUk
-                                ? `у ${highPressureStart}–${highPressureEnd} високий тиск 🔴`
-                                : `on ${highPressureStart}–${highPressureEnd} high pressure 🔴`);
+                    const groupPrecip = [], groupWind = [], groupPress = [];
+                    const groupAq = [], groupUv = [], groupFrost = [], groupGeomag = [];
+                    let pressStart = null, pressEnd = null;
+                    const flushPress = () => {
+                        if (pressStart == null) return;
+                        if (pressStart === pressEnd) groupPress.push(pressStart);
+                        else groupPress.push(`${pressStart}–${pressEnd}`);
+                        pressStart = pressEnd = null;
+                    };
+
+                    farEvents.forEach((ev) => {
+                        const d = fmtShort(ev.dateObj);
+                        const dayLabel = `${ev.dayName} ${d}`;
+                        if (ev.precip > 0) {
+                            groupPrecip.push(isUk
+                                ? `${dayLabel} (${ev.precip.toFixed(1)} мм)`
+                                : `${dayLabel} (${ev.precip.toFixed(1)} mm)`);
                         }
+                        if (ev.gust >= 7) {
+                            groupWind.push(isUk
+                                ? `${dayLabel} до ${Math.round(ev.gust)} м/с`
+                                : `${dayLabel} up to ${Math.round(ev.gust)} m/s`);
+                        }
+                        if (ev.highPress) {
+                            if (pressStart == null) { pressStart = pressEnd = dayLabel; }
+                            else pressEnd = dayLabel;
+                        } else flushPress();
+                        if (ev.eaqi != null || ev.aqIssues.length) groupAq.push(dayLabel);
+                        if (ev.uvLabel) groupUv.push(`${dayLabel} (${ev.uvLabel})`);
+                        if (ev.frostLabel) groupFrost.push(dayLabel);
+                        if (ev.geomagLabel) groupGeomag.push(`${dayLabel}: ${ev.geomagLabel}`);
+                    });
+                    flushPress();
+
+                    const farLines = [];
+                    if (groupPrecip.length) {
+                        farLines.push(isUk
+                            ? `Можливий дощ: ${groupPrecip.join(', ')}.`
+                            : `Possible rain: ${groupPrecip.join(', ')}.`);
+                    }
+                    if (groupWind.length) {
+                        farLines.push(isUk
+                            ? `Сильний вітер із поривами: ${groupWind.join(', ')}.`
+                            : `Strong wind with gusts: ${groupWind.join(', ')}.`);
+                    }
+                    if (groupPress.length) {
+                        farLines.push(isUk
+                            ? `Високий тиск 🔴: ${groupPress.join(', ')}.`
+                            : `High pressure 🔴: ${groupPress.join(', ')}.`);
+                    }
+                    if (groupAq.length) {
+                        farLines.push(isUk
+                            ? `Якість повітря — можливий дрібний пил/смог PM2.5: ${groupAq.join(', ')}.`
+                            : `Air quality — possible fine dust/smog PM2.5: ${groupAq.join(', ')}.`);
+                    }
+                    if (groupFrost.length) {
+                        farLines.push(isUk
+                            ? `Заморозки на ґрунті: ${groupFrost.join(', ')}.`
+                            : `Soil frost: ${groupFrost.join(', ')}.`);
+                    }
+                    if (groupUv.length) {
+                        farLines.push(isUk
+                            ? `Високий УФ: ${groupUv.join(', ')}.`
+                            : `High UV: ${groupUv.join(', ')}.`);
+                    }
+                    if (groupGeomag.length) {
+                        farLines.push(isUk
+                            ? `Магнітні бурі: ${groupGeomag.join(', ')}.`
+                            : `Magnetic storms: ${groupGeomag.join(', ')}.`);
                     }
 
-                    const allHighlights = [...highlights, ...highPressureDays];
-                    let highlightText = '';
-                    if (allHighlights.length > 0) {
-                        const joined = allHighlights.map((h, i) => i === 0 ? h.charAt(0).toUpperCase() + h.slice(1) : h).join(', ');
-                        highlightText = joined + '.';
-                    } else {
-                        highlightText = isUk
-                            ? 'Особливих небезпек не передбачається.'
-                            : 'No significant hazards expected.';
-                    }
-
-                    // Official UA Hydrometcenter alerts (MeteoAlarm) — prepend to tips block
+                    const parts = [];
                     if (cityMeteoAlerts.length > 0) {
                         const alertHeader = isUk
                             ? '⚠️ Офіційне попередження Укргідрометцентру:'
                             : '⚠️ Official Hydrometcenter warning:';
                         const alertLines = cityMeteoAlerts.slice(0, 4).map((a) => a.line).join('\n');
-                        // Порожній рядок після алертів — відділяє від самарі «Парасоль»
-                        highlightText = `${alertHeader}\n${alertLines}\n\n${highlightText}`;
+                        parts.push(`${alertHeader}\n${alertLines}`);
+                    }
+                    if (nearLines.length) parts.push(nearLines.join('\n'));
+                    else parts.push(isUk ? 'Найближчі дні — без особливих загроз.' : 'Next days — no major hazards.');
+
+                    let farPlain = '';
+                    if (farLines.length) farPlain = farLines.join('\n');
+                    else if (farEvents.length) {
+                        farPlain = isUk
+                            ? 'У подальші дні особливих небезпек не передбачається.'
+                            : 'No significant hazards expected in the following days.';
                     }
 
+                    const highlightText = parts.join('\n\n');
+                    const farHighlightText = farPlain;
+
                     const citeText = isUk
-                        ? 'Парасоль☔️ підказує, на що звернути увагу. Гортай вбік, щоб переглянути прогноз на всі дні'
-                        : 'Parasol☔️ highlights what to watch. Swipe sideways to see the full forecast';
+                        ? 'Парасоль☔️ підказує, на що звернути увагу. Гортай вбік таблицю, щоб переглянути прогноз на всі дні'
+                        : 'Parasol☔️ highlights what to watch. Swipe the table to see the full forecast';
 
                     // ========== 4. Таблиця ==========
                     const dayHeaders = userForecast.map((day) => {
@@ -942,6 +1233,60 @@ module.exports = async (req, res) => {
                         rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн.<br>бурі' : 'Geomag'}</b></td>${cells}</tr>`);
                     }
 
+                    // --- Open-Meteo AQ table rows (за опціями aqi_main / aqi_ext) ---
+                    if (hasAqiMain || hasAqiExt) {
+                        const aqBadgeFor = (key, v) => {
+                            if (v == null || Number.isNaN(Number(v))) return '';
+                            const n = Number(v);
+                            const bands = {
+                                eaqiMax:  [20, 40, 60, 80],
+                                usAqiMax: [50, 100, 150, 200],
+                                pm25Max:  [12, 25, 50, 75],
+                                pm10Max:  [30, 50, 90, 150],
+                                no2Max:   [40, 70, 120, 200],
+                                o3Max:    [80, 120, 160, 200],
+                                so2Max:   [20, 40, 100, 200],
+                                coMax:    [2000, 4000, 10000, 20000],
+                                dustMax:  [15, 40, 80, 150]
+                            };
+                            const b = bands[key] || [25, 50, 100, 200];
+                            if (n <= b[0]) return '🟢';
+                            if (n <= b[1]) return '🟡';
+                            if (n <= b[2]) return '🟠';
+                            if (n <= b[3]) return '🔴';
+                            return '🟣';
+                        };
+                        const aqCell = (day, key, decimals = 0) => {
+                            const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
+                            const v = omAqByDate[dStr]?.[key];
+                            if (v == null) return `<td align="center" valign="middle">—</td>`;
+                            const n = decimals > 0 ? Number(v).toFixed(decimals) : String(Math.round(Number(v)));
+                            const badge = aqBadgeFor(key, v);
+                            return `<td align="center" valign="middle">${badge}<br>${n}</td>`;
+                        };
+                        const aqRowsMain = [
+                            ['eaqiMax', 'EAQI<br><small>OM max</small>', 0],
+                            ['usAqiMax', 'US AQI<br><small>OM max</small>', 0],
+                            ['pm25Max', 'PM2.5<br><small>µg/m³</small>', 1],
+                            ['pm10Max', 'PM10<br><small>µg/m³</small>', 1]
+                        ];
+                        const aqRowsExt = [
+                            ['no2Max', 'NO₂<br><small>µg/m³</small>', 1],
+                            ['o3Max', 'O₃<br><small>µg/m³</small>', 1],
+                            ['so2Max', 'SO₂<br><small>µg/m³</small>', 1],
+                            ['coMax', 'CO<br><small>µg/m³</small>', 0],
+                            ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1]
+                        ];
+                        const aqRows = [
+                            ...(hasAqiMain ? aqRowsMain : []),
+                            ...(hasAqiExt ? aqRowsExt : [])
+                        ];
+                        for (const [key, label, dec] of aqRows) {
+                            const cells = userForecast.map((day) => aqCell(day, key, dec)).join('');
+                            rows.push(`<tr><td align="left" valign="middle"><b>🍃 ${label}</b></td>${cells}</tr>`);
+                        }
+                    }
+
                     const tableHtml = `
 <table bordered striped>
   <thead>
@@ -965,9 +1310,21 @@ module.exports = async (req, res) => {
                         : `${settings.daysCount}-day forecast for ${escapeHTML(displayCity)}`;
                     fullHtml += `<h1>🌆 ${titleText}</h1>\n\n`;
 
-                    fullHtml += `<aside>${escapeHTML(highlightText).replace(/\n/g, '<br>')}<br>
+                    {
+                        const nearHtml = escapeHTML(highlightText).replace(/\n/g, '<br>');
+                        fullHtml += `<aside>${nearHtml}<br>
   <cite>${citeText}</cite>
 </aside>\n\n`;
+                        if (farHighlightText) {
+                            const farHtml = escapeHTML(farHighlightText).replace(/\n/g, '<br>');
+                            const farSummary = isUk
+                                ? '<b>4–6 день · може змінитись</b>'
+                                : '<b>Days 4–6 · may change</b>';
+                            fullHtml += `<blockquote><details><summary>${farSummary}</summary>
+<p>${farHtml}</p>
+</details></blockquote>\n\n`;
+                        }
+                    }
 
                     fullHtml += tableHtml;
 

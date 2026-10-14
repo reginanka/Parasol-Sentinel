@@ -239,11 +239,60 @@ module.exports = async (req, res) => {
         };
 
         /** Build Rich Message HTML for AQI deterioration (dynamic rows) */
-        const htmlAqiWorse = (lang, { aqiVal, badge, pm25, pm10, advice }) => {
-            const title = lang === 'uk'
-                ? '🍃 Якість повітря погіршилась'
-                : '🍃 Air quality deteriorated';
-            let rows = `<tr><td>AQI</td><td><b>${aqiVal}</b> ${badge}</td></tr>`;
+        const stationDetailsHtml = (lang, station) => {
+            if (!station) return '';
+            const isUk = lang === 'uk';
+            const parts = [];
+            if (station.provider === 'open-meteo') {
+                parts.push(isUk
+                    ? `📡 <b>Джерело:</b> Open-Meteo · CAMS (атмосферна модель)`
+                    : `📡 <b>Source:</b> Open-Meteo · CAMS (atmospheric model)`);
+                parts.push(isUk
+                    ? `ℹ️ Немає станції WAQI ближче 10 км — модельна оцінка для ваших координат`
+                    : `ℹ️ No WAQI station within 10 km — model estimate for your coordinates`);
+                if (station.eaqi != null) parts.push(`EAQI: ${Math.round(station.eaqi)}`);
+                if (station.usAqi != null) parts.push(`US AQI: ${Math.round(station.usAqi)}`);
+            } else {
+                if (station.name) {
+                    parts.push(isUk
+                        ? `📍 <b>Станція:</b> ${station.name}`
+                        : `📍 <b>Station:</b> ${station.name}`);
+                }
+                if (station.distKm != null) {
+                    parts.push(isUk
+                        ? `📏 <b>Відстань:</b> ${station.distKm} км`
+                        : `📏 <b>Distance:</b> ${station.distKm} km`);
+                }
+                if (station.geo && station.geo.length >= 2) {
+                    parts.push(isUk
+                        ? `🗺 <b>Координати:</b> ${Number(station.geo[0]).toFixed(4)}, ${Number(station.geo[1]).toFixed(4)}`
+                        : `🗺 <b>Coordinates:</b> ${Number(station.geo[0]).toFixed(4)}, ${Number(station.geo[1]).toFixed(4)}`);
+                }
+                if (station.source) {
+                    parts.push(isUk
+                        ? `📡 <b>Джерело:</b> ${station.source}`
+                        : `📡 <b>Source:</b> ${station.source}`);
+                }
+                if (station.dominant) {
+                    parts.push(isUk
+                        ? `🧪 <b>Домінуючий забрудник:</b> ${String(station.dominant).toUpperCase()}`
+                        : `🧪 <b>Dominant pollutant:</b> ${String(station.dominant).toUpperCase()}`);
+                }
+                if (station.url) {
+                    const url = String(station.url).startsWith('http') ? station.url : `https://aqicn.org${station.url}`;
+                    parts.push(isUk
+                        ? `🔗 <a href="${url}">Сторінка станції</a>`
+                        : `🔗 <a href="${url}">Station page</a>`);
+                }
+            }
+            if (!parts.length) return '';
+            const summary = isUk ? '📍 Звідки дані' : '📍 Data source';
+            return `<details><summary>${summary}</summary><p>${parts.join('<br>')}</p></details>`;
+        };
+
+        const htmlAqiWorse = (lang, { aqiVal, badge, pm25, pm10, advice, station, aqiLabel = 'AQI' }) => {
+            const title = lang === 'uk' ? '🍃 Якість повітря погіршилась' : '🍃 Air quality deteriorated';
+            let rows = `<tr><td>${aqiLabel}</td><td><b>${aqiVal}</b> ${badge}</td></tr>`;
             if (pm25 != null) rows += `<tr><td>PM2.5</td><td>${pm25} µg/m³</td></tr>`;
             if (pm10 != null) rows += `<tr><td>PM10</td><td>${pm10} µg/m³</td></tr>`;
             const colM = lang === 'uk' ? 'Показник' : 'Metric';
@@ -252,19 +301,24 @@ module.exports = async (req, res) => {
                 `<table bordered striped compact>` +
                 `<tr><th>${colM}</th><th>${colV}</th></tr>${rows}</table>`;
             if (advice) html += `<blockquote>${advice}</blockquote>`;
+            html += stationDetailsHtml(lang, station);
             return html;
         };
 
         /** Build Rich Message HTML for AQI recovery */
-        const htmlAqiBetter = (lang, { aqiVal }) => {
+        const htmlAqiBetter = (lang, { aqiVal, station, aqiLabel = 'AQI' }) => {
+            let html;
             if (lang === 'uk') {
-                return `<h3>🍃 Якість повітря покращилась</h3>` +
-                    `<p>🟢 AQI <b>${aqiVal}</b> — повітря знову в безпечній зоні.</p>` +
+                html = `<h3>🍃 Якість повітря покращилась</h3>` +
+                    `<p>🟢 ${aqiLabel} <b>${aqiVal}</b> — повітря знову в безпечній зоні.</p>` +
                     `<p>Можна відкривати вікна та спокійно гуляти на вулиці.</p>`;
+            } else {
+                html = `<h3>🍃 Air quality improved</h3>` +
+                    `<p>🟢 ${aqiLabel} <b>${aqiVal}</b> — air is back in the safe zone.</p>` +
+                    `<p>You can open the windows and safely go for a walk.</p>`;
             }
-            return `<h3>🍃 Air quality improved</h3>` +
-                `<p>🟢 AQI <b>${aqiVal}</b> — air is back in the safe zone.</p>` +
-                `<p>You can open the windows and safely go for a walk.</p>`;
+            html += stationDetailsHtml(lang, station);
+            return html;
         };
 
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
@@ -982,104 +1036,197 @@ module.exports = async (req, res) => {
                 } catch (geomagErr) {
                     console.error('Geomag check error in cron-check:', geomagErr.message);
                 }
-                // --- LOGIC F: Real-time AQI Transition Check (worsen OR improve to safe) ---
+                                // --- LOGIC F: Real-time AQI Transition Check (worsen OR improve to safe) ---
                 // Rules:
                 // - Alert only on transitions: safe → worse, or worse → safe
                 // - Do NOT spam when level stays the same (safe→safe or bad→bad)
                 // - When recovering to safe (tier 0), send a positive message
-                const WAQI_TOKEN = process.env.WAQI_TOKEN;
-                if (WAQI_TOKEN) {
-                    try {
-                        const waqiRes = await axios.get(
-                            `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
-                            { timeout: 8000 }
-                        );
-                        if (waqiRes.data?.status === 'ok') {
-                            const d = waqiRes.data.data;
-                            const aqiVal = d.aqi;
-                            const pm25 = d.iaqi?.pm25?.v ?? null;
-                            const pm10 = d.iaqi?.pm10?.v ?? null;
+                // - WAQI only if station ≤ 10 km; otherwise Open-Meteo current (CAMS)
+                const WAQI_MAX_KM = 10;
+                const haversineKm = (lat1, lon1, lat2, lon2) => {
+                    const toRad = (x) => x * Math.PI / 180;
+                    const R = 6371;
+                    const dLat = toRad(lat2 - lat1);
+                    const dLon = toRad(lon2 - lon1);
+                    const a = Math.sin(dLat / 2) ** 2 +
+                        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+                    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                };
 
-                            let currentTier = 0;
-                            let badge = '🟢';
-                            if (aqiVal > 150) { currentTier = 3; badge = '🔴'; }
-                            else if (aqiVal > 100) { currentTier = 2; badge = '🟠'; }
-                            else if (aqiVal > 50) { currentTier = 1; badge = '🟡'; }
+                try {
+                    let aqiVal = null;      // US-style AQI for tier (WAQI aqi or OM us_aqi)
+                    let displayAqi = null;  // what we show in the message
+                    let aqiLabel = 'AQI';
+                    let pm25 = null;
+                    let pm10 = null;
+                    let badge = '🟢';
+                    let stationInfo = null;
+                    let provider = null;
 
-                            snapWaqi = {
-                                aqi: aqiVal,
-                                aqiBadge: badge,
-                                pm25,
-                                pm10,
-                                pm1: d.iaqi?.pm1?.v ?? null,
-                                station: d.city?.name || null
-                            };
-
-                            const lastAqiTier = cityDoc?.lastAqiAlert?.tier ?? 0;
-
-                            // Always persist current state so next check has correct baseline
-                            await City.findOneAndUpdate(
-                                { externalId: key },
-                                { $set: { "lastAqiAlert": { date: todayStr, tier: currentTier, aqi: aqiVal } } }
+                    // 1) WAQI — accept only nearby station
+                    const WAQI_TOKEN = process.env.WAQI_TOKEN;
+                    if (WAQI_TOKEN) {
+                        try {
+                            const waqiRes = await axios.get(
+                                `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
+                                { timeout: 8000 }
                             );
-
-                            if (currentTier > lastAqiTier) {
-                                // Deterioration: safe → worse, or worse → even worse
-                                reasons.push("погіршення якості повітря");
-
-                                for (const user of cityInfo.users) {
-                                    if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
-                                    const lang = user.language || 'uk';
-                                    const isUk = lang === 'uk';
-
-                                    const issues = [];
-                                    if (pm25 != null && pm25 > 25) issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
-                                    if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
-
-                                    let advice = '';
-                                    if (aqiVal > 150) {
-                                        advice = isUk
-                                            ? '🔴 Небезпечний рівень забруднення! Зачиніть вікна, увімкніть очищувач повітря та утримайтесь від виходу на вулицю.'
-                                            : '🔴 Dangerous air quality! Close windows, turn on air purifiers, and refrain from going outside.';
-                                    } else if (aqiVal > 100) {
-                                        advice = isUk
-                                            ? '🟠 Шкідливо для чутливих груп! Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.'
-                                            : '🟠 Unhealthy for sensitive groups! High dust/smog level. We recommend closing windows.';
-                                    } else if (aqiVal > 50) {
-                                        advice = isUk
-                                            ? '🟡 Повітря помірно забруднене. Чутливим людям варто бути обережними.'
-                                            : '🟡 Moderate air pollution. Sensitive individuals should take precautions.';
-                                    }
-                                    if (issues.length > 0) {
-                                        advice += isUk ? ` (Причина: ${issues.join(', ')})` : ` (Reason: ${issues.join(', ')})`;
-                                    }
-
-                                    const html = htmlAqiWorse(lang, { aqiVal, badge, pm25, pm10, advice });
-                                    alerts.push({ userId: user.telegramId, html, lang });
+                            if (waqiRes.data?.status === 'ok') {
+                                const d = waqiRes.data.data;
+                                const geo = Array.isArray(d.city?.geo) ? d.city.geo : null;
+                                let distKm = null;
+                                if (geo && geo.length >= 2) {
+                                    distKm = haversineKm(cityInfo.lat, cityInfo.lon, Number(geo[0]), Number(geo[1]));
                                 }
-                                alertTriggered = true;
-                            } else if (currentTier === 0 && lastAqiTier > 0) {
-                                // Recovery: was worse → now safe
-                                reasons.push("покращення якості повітря");
-
-                                for (const user of cityInfo.users) {
-                                    if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
-                                    const lang = user.language || 'uk';
-                                    const isUk = lang === 'uk';
-
-                                    const html = htmlAqiBetter(lang, { aqiVal });
-                                    alerts.push({ userId: user.telegramId, html, lang });
+                                if (distKm != null && distKm <= WAQI_MAX_KM) {
+                                    aqiVal = d.aqi;
+                                    displayAqi = d.aqi;
+                                    aqiLabel = 'AQI';
+                                    pm25 = d.iaqi?.pm25?.v ?? null;
+                                    pm10 = d.iaqi?.pm10?.v ?? null;
+                                    provider = 'waqi';
+                                    stationInfo = {
+                                        name: d.city?.name || null,
+                                        url: d.city?.url || null,
+                                        geo,
+                                        source: d.attributions?.[0]?.name || null,
+                                        dominant: d.dominentpol || null,
+                                        distKm: Math.round(distKm * 10) / 10,
+                                        provider: 'waqi'
+                                    };
                                 }
-                                alertTriggered = true;
                             }
-                            // Same tier (safe→safe or bad→bad) → no message
+                        } catch (e) {
+                            console.error('WAQI error in cron-check:', e.message);
                         }
-                    } catch (aqiErr) {
-                        console.error('AQI check error in cron-check:', aqiErr.message);
                     }
+
+                    // 2) Fallback — Open-Meteo current
+                    if (aqiVal == null) {
+                        try {
+                            const omUrl =
+                                `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
+                                `&current=european_aqi,us_aqi,pm2_5,pm10,dust&timezone=auto`;
+                            const omRes = await axios.get(omUrl, { timeout: 10000 });
+                            const cur = omRes.data?.current || {};
+                            const usAqi = cur.us_aqi != null ? Number(cur.us_aqi) : null;
+                            const eaqi = cur.european_aqi != null ? Number(cur.european_aqi) : null;
+                            // Tier always on US AQI scale when available
+                            aqiVal = usAqi != null ? usAqi : eaqi;
+                            if (eaqi != null) {
+                                displayAqi = Math.round(eaqi);
+                                aqiLabel = 'EAQI';
+                            } else if (usAqi != null) {
+                                displayAqi = Math.round(usAqi);
+                                aqiLabel = 'US AQI';
+                            }
+                            pm25 = cur.pm2_5 != null ? Number(cur.pm2_5) : null;
+                            pm10 = cur.pm10 != null ? Number(cur.pm10) : null;
+                            provider = 'open-meteo';
+                            stationInfo = {
+                                name: null,
+                                url: null,
+                                geo: [cityInfo.lat, cityInfo.lon],
+                                source: 'Open-Meteo · CAMS (модель)',
+                                dominant: null,
+                                distKm: 0,
+                                provider: 'open-meteo',
+                                eaqi,
+                                usAqi
+                            };
+                        } catch (e) {
+                            console.error('Open-Meteo current AQ error in cron-check:', e.message);
+                        }
+                    }
+
+                    if (aqiVal != null) {
+                        let currentTier = 0;
+                        if (aqiVal > 150) { currentTier = 3; badge = '🔴'; }
+                        else if (aqiVal > 100) { currentTier = 2; badge = '🟠'; }
+                        else if (aqiVal > 50) { currentTier = 1; badge = '🟡'; }
+                        else { badge = '🟢'; }
+
+                        // For OM-only display with EAQI, still tier by us_aqi above
+                        snapWaqi = {
+                            aqi: displayAqi != null ? displayAqi : aqiVal,
+                            aqiBadge: badge,
+                            aqiLabel,
+                            pm25,
+                            pm10,
+                            pm1: null,
+                            station: stationInfo?.name || null,
+                            provider
+                        };
+
+                        const lastAqiTier = cityDoc?.lastAqiAlert?.tier ?? 0;
+
+                        // Always persist current state so next check has correct baseline
+                        await City.findOneAndUpdate(
+                            { externalId: key },
+                            { $set: { "lastAqiAlert": { date: todayStr, tier: currentTier, aqi: aqiVal } } }
+                        );
+
+                        if (currentTier > lastAqiTier && currentTier >= 1) {
+                            // Worsened
+                            reasons.push("погіршення якості повітря");
+
+                            for (const user of cityInfo.users) {
+                                if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
+                                const lang = user.language || 'uk';
+                                const isUk = lang === 'uk';
+
+                                const issues = [];
+                                if (pm25 != null && pm25 > 25) issues.push(isUk ? 'PM2.5 (дрібний пил/смог)' : 'PM2.5 (fine dust/smog)');
+                                if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
+
+                                let advice = '';
+                                if (aqiVal > 150) {
+                                    advice = isUk
+                                        ? '🔴 Небезпечно! Зачиніть вікна, увімкніть очищувачі повітря та утримайтесь від виходу на вулицю.'
+                                        : '🔴 Dangerous air quality! Close windows, turn on air purifiers, and refrain from going outside.';
+                                } else if (aqiVal > 100) {
+                                    advice = isUk
+                                        ? '🟠 Шкідливо для чутливих груп! Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.'
+                                        : '🟠 Unhealthy for sensitive groups! High dust/smog level. We recommend closing windows.';
+                                } else if (aqiVal > 50) {
+                                    advice = isUk
+                                        ? '🟡 Повітря помірно забруднене. Чутливим людям варто бути обережними.'
+                                        : '🟡 Moderate air pollution. Sensitive individuals should take precautions.';
+                                }
+                                if (issues.length > 0) {
+                                    advice += isUk ? ` (Причина: ${issues.join(', ')})` : ` (Reason: ${issues.join(', ')})`;
+                                }
+
+                                const html = htmlAqiWorse(lang, {
+                                    aqiVal: displayAqi != null ? displayAqi : aqiVal,
+                                    badge, pm25, pm10, advice, station: stationInfo, aqiLabel
+                                });
+                                alerts.push({ userId: user.telegramId, html, lang });
+                            }
+                            alertTriggered = true;
+                        } else if (currentTier === 0 && lastAqiTier > 0) {
+                            // Recovery: was worse → now safe
+                            reasons.push("покращення якості повітря");
+
+                            for (const user of cityInfo.users) {
+                                if (!user.notificationsEnabled || user.alertTriggers?.airQuality === false) continue;
+                                const lang = user.language || 'uk';
+
+                                const html = htmlAqiBetter(lang, {
+                                    aqiVal: displayAqi != null ? displayAqi : aqiVal,
+                                    station: stationInfo, aqiLabel
+                                });
+                                alerts.push({ userId: user.telegramId, html, lang });
+                            }
+                            alertTriggered = true;
+                        }
+                        // Same tier (safe→safe or bad→bad) → no message
+                    }
+                } catch (aqiErr) {
+                    console.error('AQI check error in cron-check:', aqiErr.message);
                 }
 
-                // --- SENDING ALERTS (Rich Messages) ---
+// --- SENDING ALERTS (Rich Messages) ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {
                     if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false, hasWeather: false };
