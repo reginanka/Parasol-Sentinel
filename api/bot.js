@@ -808,7 +808,7 @@ bot.on("message:text", async (ctx) => {
     }
 });
 
-// Channel posts in ADMIN_CHAT_ID → admin menu / commands
+// Channel posts in ADMIN_CHAT_ID → admin menu / commands (text)
 bot.on("channel_post:text", async (ctx) => {
     try {
         if (!isAdminChat(ctx.chat?.id)) return;
@@ -818,6 +818,50 @@ bot.on("channel_post:text", async (ctx) => {
         console.error('[admin] channel_post error:', e.message);
     }
 });
+
+// Channel posts with media (photo/doc/video/…) — reply to user with image etc.
+bot.on(
+    [
+        "channel_post:photo",
+        "channel_post:document",
+        "channel_post:video",
+        "channel_post:animation",
+        "channel_post:voice",
+        "channel_post:audio",
+        "channel_post:sticker"
+    ],
+    async (ctx) => {
+        try {
+            if (!isAdminChat(ctx.chat?.id)) return;
+            await connectDB();
+            await handleAdminChannelText(ctx);
+        } catch (e) {
+            console.error('[admin] channel_post media error:', e.message);
+        }
+    }
+);
+
+// Same for admin group/supergroup (not channel): reply with photo etc.
+bot.on(
+    [
+        "message:photo",
+        "message:document",
+        "message:video",
+        "message:animation",
+        "message:voice",
+        "message:audio",
+        "message:sticker"
+    ],
+    async (ctx) => {
+        try {
+            if (!isAdminChat(ctx.chat?.id)) return;
+            await connectDB();
+            await handleAdminChannelText(ctx);
+        } catch (e) {
+            console.error('[admin] message media error:', e.message);
+        }
+    }
+);
 
 bot.on("callback_query:data", async (ctx) => {
     // Admin panel callbacks
