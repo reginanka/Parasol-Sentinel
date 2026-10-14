@@ -5,6 +5,7 @@
  */
 
 const User = require('../models/User');
+const ErrorLog = require('../models/ErrorLog');
 const getBot = require('./bot');
 
 const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
@@ -96,32 +97,130 @@ async function notifyAdmin(from, actionText, extra = {}) {
 
     const bot = getBot();
     const name = displayName(from);
-    const uname = from.username ? `@${from.username}` : '—';
-    const lang = from.language_code || '—';
+    const uname = from.username ? `@${from.username}` : 'без @username';
+    const tgLang = from.language_code || '—';
+
+    // Load profile from DB for rich card
+    let u = null;
+    try {
+        u = await User.findOne({ telegramId: from.id }).lean();
+    } catch (e) {
+        console.error('[admin] notify DB lookup failed:', e.message);
+    }
+
+    const fmtDate = (d) => {
+        if (!d) return '—';
+        try {
+            return new Date(d).toLocaleString('uk-UA', {
+                timeZone: 'Europe/Kyiv',
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        } catch {
+            return '—';
+        }
+    };
+
+    const access = accessLabel(u?.accessLevel || 'unlimited');
+    const accessIcon = (u?.accessLevel || 'unlimited') === 'none' ? '🚫' : '✅';
+    const botLang = u?.language || tgLang || '—';
+    const city = u?.city
+        ? `${u.city}${u.lat != null ? ` (${Number(u.lat).toFixed(2)}, ${Number(u.lon).toFixed(2)})` : ''}`
+        : 'не обрано';
+    const tz = u?.timezone || '—';
+    const usage = u?.usage || {};
+    const eveningM = usage.eveningThisMonth || 0;
+    const alertsM = usage.alertsThisMonth || 0;
+    const eveningT = usage.eveningTotal || 0;
+    const alertsT = usage.alertsTotal || 0;
+    const totalAct = eveningT + alertsT;
+    const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
+    const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
+    const geomag = u?.geomagMode || 'quiet';
+    const cropsN = Array.isArray(u?.crops) ? u.crops.length : 0;
+    const created = fmtDate(u?.createdAt);
+    const lastAct = fmtDate(u?.lastActivityAt);
+    const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
 
     let text =
-        `👤 <b>${escapeHtml(name)}</b> (${uname})\n` +
-        `ID: <code>${from.id}</code>\n` +
-        `Мова TG: ${escapeHtml(lang)}\n` +
-        `Дія: <b>${escapeHtml(actionText)}</b>`;
+        `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+        `┃  👤 <b>${escapeHtml(name)}</b>\n` +
+        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+        `${escapeHtml(uname)} · ID: <code>${from.id}</code>\n` +
+        `\n` +
+        `${accessIcon} <b>Доступ:</b> ${escapeHtml(access)}\n` +
+        `🌐 Мова: TG <code>${escapeHtml(tgLang)}</code> · бот <code>${escapeHtml(botLang)}</code>\n` +
+        `📍 <b>Місто:</b> ${escapeHtml(city)}\n` +
+        `🕒 TZ: <code>${escapeHtml(tz)}</code> · зараз ~ <b>${temp}</b>\n` +
+        `\n` +
+        `┌ <b>Статус</b>\n` +
+        `│ ${notif} · ${evening}\n` +
+        `│ 🧲 geomag: <code>${escapeHtml(geomag)}</code> · 🌱 культур: <b>${cropsN}</b>\n` +
+        `│\n` +
+        `│ 📬 <b>Цього місяця</b>\n` +
+        `│   вечірніх: <b>${eveningM}</b> · алертів: <b>${alertsM}</b>\n` +
+        `│ 📊 <b>За весь час</b>\n` +
+        `│   вечірніх: <b>${eveningT}</b> · алертів: <b>${alertsT}</b> · разом: <b>${totalAct}</b>\n` +
+        `│\n` +
+        `│ 📅 реєстрація: <code>${escapeHtml(created)}</code>\n` +
+        `│ 🕐 остання активність: <code>${escapeHtml(lastAct)}</code>\n` +
+        `└\n` +
+        `\n` +
+        `⚡ <b>Дія:</b> ${escapeHtml(actionText)}`;
 
     if (extra.messageText) {
-        text += `\n\n💬 Повідомлення:\n<code>${escapeHtml(extra.messageText).slice(0, 800)}</code>`;
+        text +=
+            `\n\n💬 <b>Повідомлення:</b>\n` +
+            `<blockquote>${escapeHtml(extra.messageText).slice(0, 800)}</blockquote>`;
     }
     if (extra.callbackData) {
-        text += `\n\n🔘 Callback: <code>${escapeHtml(extra.callbackData)}</code>`;
+        text += `\n🔘 Callback: <code>${escapeHtml(extra.callbackData)}</code>`;
     }
 
+    text += `\n\n↩️ <i>Відповісти на це повідомлення → надіслати юзеру</i>`;
+
+    // Keep ID: plain for reply parser (also in card above as ID: <code>)
     try {
-        await bot.api.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+        await bot.api.sendMessage(chatId, text, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        });
     } catch (e) {
         console.error('[admin] notify failed:', e.message);
+        // Fallback shorter plain-ish message
+        try {
+            await bot.api.sendMessage(
+                chatId,
+                `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
+                    (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
+                { disable_web_page_preview: true }
+            );
+        } catch (e2) {
+            console.error('[admin] notify fallback failed:', e2.message);
+        }
     }
 }
 
-/**
- * Upsert basic profile fields from Telegram user object.
- */
+/** Extract user telegram id from an admin notification / confirmation message text */
+function extractUserIdFromNotifyText(raw) {
+    if (!raw) return null;
+    const s = String(raw);
+    const patterns = [
+        /ID:\s*(\d{5,15})/i,
+        /#u(\d{5,15})\b/,
+        /користувачу\s+(\d{5,15})/i,
+        /user[_\s-]?id[:\s]+(\d{5,15})/i
+    ];
+    for (const re of patterns) {
+        const m = s.match(re);
+        if (m) return parseInt(m[1], 10);
+    }
+    return null;
+}
+
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
     const now = new Date();
@@ -252,26 +351,191 @@ async function handleAdminCallback(ctx) {
         }
 
         if (sub === 'stats') {
-            const total = await User.countDocuments();
-            const withCity = await User.countDocuments({ city: { $ne: null } });
-            const unlimited = await User.countDocuments({ accessLevel: { $ne: 'none' } });
-            const blocked = await User.countDocuments({ accessLevel: 'none' });
-            const notifOn = await User.countDocuments({ notificationsEnabled: { $ne: false } });
-            const eveningOn = await User.countDocuments({ eveningForecastEnabled: { $ne: false } });
-            const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-            const active7 = await User.countDocuments({ lastActivityAt: { $gte: since } });
+            const now = new Date();
+            const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+            const d1 = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const d7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            const d30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+            const monthLabel = now.toLocaleString('uk-UA', { month: 'long', year: 'numeric', timeZone: 'Europe/Kyiv' });
+
+            const [
+                total,
+                withCity,
+                unlimited,
+                blocked,
+                notifOn,
+                eveningOn,
+                newThisMonth,
+                active1,
+                active7,
+                active30,
+                usageAgg,
+                langAgg,
+                cityAgg,
+                errorsThisMonth,
+                errorsTotal,
+                recentErrors
+            ] = await Promise.all([
+                User.countDocuments(),
+                User.countDocuments({ city: { $ne: null, $exists: true } }),
+                User.countDocuments({ accessLevel: { $ne: 'none' } }),
+                User.countDocuments({ accessLevel: 'none' }),
+                User.countDocuments({ notificationsEnabled: { $ne: false } }),
+                User.countDocuments({ eveningForecastEnabled: { $ne: false } }),
+                User.countDocuments({ createdAt: { $gte: monthStart } }),
+                User.countDocuments({ lastActivityAt: { $gte: d1 } }),
+                User.countDocuments({ lastActivityAt: { $gte: d7 } }),
+                User.countDocuments({ lastActivityAt: { $gte: d30 } }),
+                User.aggregate([
+                    {
+                        $group: {
+                            _id: null,
+                            eveningMonth: {
+                                $sum: {
+                                    $cond: [
+                                        { $eq: ['$usage.monthKey', monthKey] },
+                                        { $ifNull: ['$usage.eveningThisMonth', 0] },
+                                        0
+                                    ]
+                                }
+                            },
+                            alertsMonth: {
+                                $sum: {
+                                    $cond: [
+                                        { $eq: ['$usage.monthKey', monthKey] },
+                                        { $ifNull: ['$usage.alertsThisMonth', 0] },
+                                        0
+                                    ]
+                                }
+                            },
+                            eveningTotal: { $sum: { $ifNull: ['$usage.eveningTotal', 0] } },
+                            alertsTotal: { $sum: { $ifNull: ['$usage.alertsTotal', 0] } }
+                        }
+                    }
+                ]),
+                User.aggregate([
+                    { $group: { _id: { $ifNull: ['$language', '—'] }, n: { $sum: 1 } } },
+                    { $sort: { n: -1 } },
+                    { $limit: 6 }
+                ]),
+                User.aggregate([
+                    { $match: { city: { $ne: null, $exists: true } } },
+                    { $group: { _id: '$city', n: { $sum: 1 } } },
+                    { $sort: { n: -1 } },
+                    { $limit: 8 }
+                ]),
+                ErrorLog.countDocuments({ createdAt: { $gte: monthStart } }).catch(() => 0),
+                ErrorLog.countDocuments().catch(() => 0),
+                ErrorLog.find({}).sort({ createdAt: -1 }).limit(5).lean().catch(() => [])
+            ]);
+
+            const u = usageAgg[0] || {};
+            const eveningM = u.eveningMonth || 0;
+            const alertsM = u.alertsMonth || 0;
+            const eveningT = u.eveningTotal || 0;
+            const alertsT = u.alertsTotal || 0;
+
+            const bar = (n, max, width = 8) => {
+                if (!max || max <= 0) return '░'.repeat(width);
+                const filled = Math.min(width, Math.round((n / max) * width));
+                return '█'.repeat(filled) + '░'.repeat(width - filled);
+            };
+            const maxActive = Math.max(active1, active7, active30, 1);
+
+            const langLines = (langAgg || [])
+                .map((x) => `  · <code>${escapeHtml(String(x._id))}</code> — <b>${x.n}</b>`)
+                .join('\n') || '  · —';
+
+            const cityLines = (cityAgg || [])
+                .map((x) => `  · ${escapeHtml(String(x._id))} — <b>${x.n}</b>`)
+                .join('\n') || '  · —';
+
+            const errLines = (recentErrors || []).length
+                ? recentErrors
+                    .map((e) => {
+                        const t = new Date(e.createdAt).toLocaleString('uk-UA', {
+                            timeZone: 'Europe/Kyiv',
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+                        const msg = escapeHtml((e.message || '').slice(0, 120));
+                        return `  · <code>${t}</code> ${msg}`;
+                    })
+                    .join('\n')
+                : '  · Помилок ще не зафіксовано';
 
             const text =
-                `📊 <b>Аналітика</b>\n\n` +
-                `👥 Всього користувачів: <b>${total}</b>\n` +
-                `📍 З містом: <b>${withCity}</b>\n` +
-                `🟢 Активні (7д): <b>${active7}</b>\n` +
-                `✅ Безліміт: <b>${unlimited}</b>\n` +
-                `🚫 Немає доступу: <b>${blocked}</b>\n` +
-                `🔔 Сповіщення увімк.: <b>${notifOn}</b>\n` +
-                `🌆 Вечірній прогноз увімк.: <b>${eveningOn}</b>`;
+                `📊 <b>Аналітика Parasol Sentinel</b>\n` +
+                `<i>${escapeHtml(monthLabel)} · оновлено зараз</i>\n` +
+                `\n` +
+                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  👥 <b>Користувачі</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `Всього: <b>${total}</b>  ·  з містом: <b>${withCity}</b>\n` +
+                `Нові цього місяця: <b>${newThisMonth}</b>\n` +
+                `✅ Безліміт: <b>${unlimited}</b>  ·  🚫 Немає доступу: <b>${blocked}</b>\n` +
+                `🔔 Сповіщення: <b>${notifOn}</b>  ·  🌆 Вечірній: <b>${eveningOn}</b>\n` +
+                `\n` +
+                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  🟢 <b>Активність</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `<code>${bar(active1, maxActive)}</code> 24 год — <b>${active1}</b>\n` +
+                `<code>${bar(active7, maxActive)}</code> 7 днів — <b>${active7}</b>\n` +
+                `<code>${bar(active30, maxActive)}</code> 30 днів — <b>${active30}</b>\n` +
+                `\n` +
+                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  📬 <b>Доставка (лічильники)</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `<b>Цього місяця</b>\n` +
+                `  🌆 Вечірні прогнози: <b>${eveningM}</b>\n` +
+                `  🚨 Алерти: <b>${alertsM}</b>\n` +
+                `  Разом: <b>${eveningM + alertsM}</b>\n` +
+                `<b>За весь час</b>\n` +
+                `  🌆 Вечірні прогнози: <b>${eveningT}</b>\n` +
+                `  🚨 Алерти: <b>${alertsT}</b>\n` +
+                `  Разом: <b>${eveningT + alertsT}</b>\n` +
+                `<i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i>\n` +
+                `\n` +
+                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  🌐 <b>Мови</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `${langLines}\n` +
+                `\n` +
+                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  📍 <b>Топ міст</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `${cityLines}\n` +
+                `\n` +
+                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
+                `┃  ❌ <b>Помилки</b>\n` +
+                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
+                `Цього місяця: <b>${errorsThisMonth}</b>  ·  всього: <b>${errorsTotal}</b>\n` +
+                `<b>Останні:</b>\n` +
+                `${errLines}`;
 
-            await api.sendMessage(chatId, text, { parse_mode: 'HTML' });
+            // Telegram limit ~4096
+            const chunks = [];
+            if (text.length <= 4000) {
+                chunks.push(text);
+            } else {
+                const splitAt = text.indexOf('┏━━━━━━━━━━━━━━━━━━━━┓\n┃  ❌');
+                if (splitAt > 0) {
+                    chunks.push(text.slice(0, splitAt).trim());
+                    chunks.push(text.slice(splitAt).trim());
+                } else {
+                    chunks.push(text.slice(0, 3900));
+                    chunks.push(text.slice(3900));
+                }
+            }
+            for (const chunk of chunks) {
+                await api.sendMessage(chatId, chunk, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true
+                });
+            }
             return true;
         }
 
@@ -408,8 +672,46 @@ async function handleAdminChannelText(ctx) {
     const chatId = ctx.chat?.id || ctx.channelPost?.chat?.id;
     if (!isAdminChat(chatId)) return false;
 
-    const text = (ctx.message?.text || ctx.channelPost?.text || '').trim();
+    const msg = ctx.message || ctx.channelPost || {};
+    const text = (msg.text || '').trim();
     const api = ctx.api;
+
+    // ── Reply to a user-notification → send text to that user ──
+    const replyTo = msg.reply_to_message;
+    if (replyTo && text && !text.startsWith('/')) {
+        const src = replyTo.text || replyTo.caption || '';
+        const targetId = extractUserIdFromNotifyText(src);
+        if (targetId) {
+            try {
+                await api.sendMessage(
+                    targetId,
+                    `💬 <b>Відповідь від підтримки Parasol:</b>\n\n${escapeHtml(text)}`,
+                    { parse_mode: 'HTML' }
+                );
+                await api.sendMessage(
+                    chatId,
+                    `✅ Відповідь надіслано користувачу <code>${targetId}</code>`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                await api.sendMessage(
+                    chatId,
+                    `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}\n` +
+                        `(Користувач міг не стартувати бота або заблокував його.)`,
+                    { parse_mode: 'HTML' }
+                );
+            }
+            return true;
+        }
+        await api.sendMessage(
+            chatId,
+            'ℹ️ Відповідь не привʼязана до користувача.\n' +
+                'Відповідай на сповіщення з <code>ID: …</code> або використай:\n' +
+                '<code>/msg USER_ID текст</code>',
+            { parse_mode: 'HTML' }
+        );
+        return true;
+    }
 
     // /msg <id> <text>
     const msgMatch = text.match(/^\/msg\s+(\d+)\s+([\s\S]+)$/i);
@@ -455,11 +757,42 @@ async function handleAdminChannelText(ctx) {
     return true;
 }
 
+
+
+/**
+ * Increment usage counters after successful delivery.
+ * type: 'evening' | 'alert'
+ */
+async function incrementUsage(telegramId, type) {
+    if (!telegramId) return;
+    const now = new Date();
+    const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    try {
+        const user = await User.findOne({ telegramId });
+        if (!user) return;
+        ensureMonthCounters(user);
+        if (!user.usage) user.usage = {};
+        user.usage.monthKey = monthKey;
+        if (type === 'evening') {
+            user.usage.eveningThisMonth = (user.usage.eveningThisMonth || 0) + 1;
+            user.usage.eveningTotal = (user.usage.eveningTotal || 0) + 1;
+        } else {
+            user.usage.alertsThisMonth = (user.usage.alertsThisMonth || 0) + 1;
+            user.usage.alertsTotal = (user.usage.alertsTotal || 0) + 1;
+        }
+        user.markModified('usage');
+        await user.save();
+    } catch (e) {
+        console.error('[admin] incrementUsage failed:', e.message);
+    }
+}
+
 module.exports = {
     isAdminChat,
     notifyAdmin,
     touchUserProfile,
     ensureMonthCounters,
+    incrementUsage,
     formatUserLine,
     adminKeyboard,
     sendAdminMenu,

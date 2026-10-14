@@ -4,6 +4,7 @@ const getBot = require('../utils/bot');
 const bot = getBot();
 const logToTelegram = require('../utils/logger');
 const User = require('../models/User');
+const { incrementUsage } = require('../utils/admin');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
@@ -1237,6 +1238,7 @@ module.exports = async (req, res) => {
                             reply_markup: { inline_keyboard: rows }
                         }).catch(() => {});
                         alertsTotal++;
+                        await incrementUsage(Number(userId), 'alert').catch(() => {});
                     }
                 }
 
