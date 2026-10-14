@@ -237,37 +237,111 @@ module.exports = async (req, res) => {
         const fullResponse = response.data.data;
         const apiCityName = response.data.city_name || user.city;
 
-        // --- WAQI (AQI) — лише якщо увімкнено «Повітря зараз» ---
+        // --- AQI «зараз»: WAQI якщо станція ≤ 10 км, інакше Open-Meteo current ---
         let aqiData = null;
-        const WAQI_TOKEN = process.env.WAQI_TOKEN;
-        if (WAQI_TOKEN && hasAqiNow) {
-            try {
-                const waqiRes = await axios.get(
-                    `https://api.waqi.info/feed/geo:${user.lat};${user.lon}/?token=${WAQI_TOKEN}`,
-                    { timeout: 8000 }
-                );
-                if (waqiRes.data?.status === 'ok') {
-                    const d = waqiRes.data.data;
-                    const aqiVal = d.aqi;
-                    let badge = '🟢';
-                    if (aqiVal > 150) badge = '🔴';
-                    else if (aqiVal > 100) badge = '🟠';
-                    else if (aqiVal > 50) badge = '🟡';
-                    aqiData = {
-                        aqi: aqiVal,
-                        badge,
-                        pm25: d.iaqi?.pm25?.v ?? null,
-                        pm10: d.iaqi?.pm10?.v ?? null,
-                        station: d.city?.name || null,
-                        stationUrl: d.city?.url || null,
-                        stationGeo: Array.isArray(d.city?.geo) ? d.city.geo : null,
-                        stationId: d.idx ?? null,
-                        source: d.attributions?.[0]?.name || null,
-                        dominant: d.dominentpol || null
-                    };
+        const WAQI_MAX_KM = 10;
+        const haversineKm = (lat1, lon1, lat2, lon2) => {
+            const toRad = (x) => x * Math.PI / 180;
+            const R = 6371;
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat / 2) ** 2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        };
+        const badgeFromUsAqi = (v) => {
+            if (v == null || Number.isNaN(Number(v))) return '🟢';
+            const n = Number(v);
+            if (n > 150) return '🔴';
+            if (n > 100) return '🟠';
+            if (n > 50) return '🟡';
+            return '🟢';
+        };
+        const badgeFromEaqi = (v) => {
+            if (v == null || Number.isNaN(Number(v))) return '🟢';
+            const n = Number(v);
+            if (n > 80) return '🔴';
+            if (n > 60) return '🟠';
+            if (n > 40) return '🟡';
+            if (n > 20) return '🟢';
+            return '🟢';
+        };
+
+        if (hasAqiNow) {
+            const WAQI_TOKEN = process.env.WAQI_TOKEN;
+            // 1) Спробувати WAQI, прийняти лише близьку станцію
+            if (WAQI_TOKEN) {
+                try {
+                    const waqiRes = await axios.get(
+                        `https://api.waqi.info/feed/geo:${user.lat};${user.lon}/?token=${WAQI_TOKEN}`,
+                        { timeout: 8000 }
+                    );
+                    if (waqiRes.data?.status === 'ok') {
+                        const d = waqiRes.data.data;
+                        const geo = Array.isArray(d.city?.geo) ? d.city.geo : null;
+                        let distKm = null;
+                        if (geo && geo.length >= 2) {
+                            distKm = haversineKm(user.lat, user.lon, Number(geo[0]), Number(geo[1]));
+                        }
+                        if (distKm != null && distKm <= WAQI_MAX_KM) {
+                            const aqiVal = d.aqi;
+                            aqiData = {
+                                provider: 'waqi',
+                                aqi: aqiVal,
+                                aqiLabel: 'AQI',
+                                badge: badgeFromUsAqi(aqiVal),
+                                pm25: d.iaqi?.pm25?.v ?? null,
+                                pm10: d.iaqi?.pm10?.v ?? null,
+                                station: d.city?.name || null,
+                                stationUrl: d.city?.url || null,
+                                stationGeo: geo,
+                                stationId: d.idx ?? null,
+                                source: d.attributions?.[0]?.name || null,
+                                dominant: d.dominentpol || null,
+                                distKm: Math.round(distKm * 10) / 10
+                            };
+                        } else {
+                            console.log(`WAQI station too far (${distKm != null ? distKm.toFixed(1) : '?'} km), fallback to Open-Meteo`);
+                        }
+                    }
+                } catch (e) {
+                    console.error('WAQI error:', e.message);
                 }
-            } catch (e) {
-                console.error('WAQI error:', e.message);
+            }
+
+            // 2) Fallback — Open-Meteo current (модель CAMS по координатах)
+            if (!aqiData) {
+                try {
+                    const omCurUrl =
+                        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}` +
+                        `&current=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,dust` +
+                        `&timezone=auto`;
+                    const omCurRes = await axios.get(omCurUrl, { timeout: 10000 });
+                    const cur = omCurRes.data?.current || {};
+                    const eaqi = cur.european_aqi != null ? Number(cur.european_aqi) : null;
+                    const usAqi = cur.us_aqi != null ? Number(cur.us_aqi) : null;
+                    const aqiVal = eaqi != null ? eaqi : usAqi;
+                    const aqiLabel = eaqi != null ? 'EAQI' : 'US AQI';
+                    aqiData = {
+                        provider: 'open-meteo',
+                        aqi: aqiVal,
+                        aqiLabel,
+                        badge: eaqi != null ? badgeFromEaqi(eaqi) : badgeFromUsAqi(usAqi),
+                        pm25: cur.pm2_5 != null ? Number(cur.pm2_5) : null,
+                        pm10: cur.pm10 != null ? Number(cur.pm10) : null,
+                        station: null,
+                        stationUrl: null,
+                        stationGeo: [user.lat, user.lon],
+                        stationId: null,
+                        source: 'Open-Meteo · CAMS (модель)',
+                        dominant: null,
+                        distKm: 0,
+                        eaqi,
+                        usAqi
+                    };
+                } catch (e) {
+                    console.error('Open-Meteo current AQ error:', e.message);
+                }
             }
         }
 
@@ -390,11 +464,13 @@ module.exports = async (req, res) => {
         // ========== 1. AQI prefix ==========
         let aqiHtml = '';
         if (hasAqiNow && aqiData) {
+            const idxName = aqiData.aqiLabel || 'AQI';
+            const aqiShow = aqiData.aqi != null ? (Number.isInteger(aqiData.aqi) ? aqiData.aqi : Number(aqiData.aqi).toFixed(0)) : '—';
             let summaryLine = isUk
-                ? `🍃 <b>Якість повітря (на момент зараз):</b> ${aqiData.badge} AQI ${aqiData.aqi}`
-                : `🍃 <b>Air Quality (current moment):</b> ${aqiData.badge} AQI ${aqiData.aqi}`;
-            if (aqiData.pm25 != null) summaryLine += ` | PM2.5: ${aqiData.pm25}`;
-            if (aqiData.pm10 != null) summaryLine += ` | PM10: ${aqiData.pm10}`;
+                ? `🍃 <b>Якість повітря (на момент зараз):</b> ${aqiData.badge} ${idxName} ${aqiShow}`
+                : `🍃 <b>Air Quality (current moment):</b> ${aqiData.badge} ${idxName} ${aqiShow}`;
+            if (aqiData.pm25 != null) summaryLine += ` | PM2.5: ${Number(aqiData.pm25).toFixed(1)}`;
+            if (aqiData.pm10 != null) summaryLine += ` | PM10: ${Number(aqiData.pm10).toFixed(1)}`;
 
             const issues = [];
             if (aqiData.pm25 != null && aqiData.pm25 > 25) {
@@ -405,57 +481,81 @@ module.exports = async (req, res) => {
             }
 
             let advice = '';
-            if (aqiData.aqi > 150) {
+            const isWaqi = aqiData.provider === 'waqi';
+            const bad = isWaqi
+                ? (aqiData.aqi > 150 ? 3 : aqiData.aqi > 100 ? 2 : aqiData.aqi > 50 ? 1 : 0)
+                : (aqiData.aqi > 80 ? 3 : aqiData.aqi > 60 ? 2 : aqiData.aqi > 40 ? 1 : 0);
+            if (bad === 3) {
                 advice = isUk
                     ? '🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
                     : '🔴 Unhealthy for everyone! Close windows, turn on air purifiers, and limit outdoor activities.';
-            } else if (aqiData.aqi > 100) {
+            } else if (bad === 2) {
                 advice = isUk
                     ? '🟠 Шкідливо для чутливих груп. Рекомендуємо зачинити вікна на ніч.'
                     : '🟠 Unhealthy for sensitive groups. Recommend closing windows for the night.';
-            } else if (aqiData.aqi > 50) {
+            } else if (bad === 1) {
                 advice = isUk
                     ? '🟡 Повітря прийнятне, але чутливим людям варто бути обережними.'
                     : '🟡 Air quality is acceptable, but sensitive groups should be cautious.';
             } else if (issues.length > 0) {
                 advice = isUk
-                    ? '⚠️ Повітря чисте за AQI, але спостерігається підвищення окремих фракцій пилу.'
-                    : '⚠️ AQI is low, but elevated levels of specific dust particles detected.';
+                    ? '⚠️ Повітря чисте за індексом, але спостерігається підвищення окремих фракцій пилу.'
+                    : '⚠️ Index is low, but elevated levels of specific dust particles detected.';
             }
             if (issues.length > 0 && advice) {
                 advice += isUk ? ` (Підвищено: ${issues.join(', ')})` : ` (Elevated: ${issues.join(', ')})`;
             }
 
-            // Деталі станції WAQI (згортаються)
+            // Деталі джерела (згортаються)
             const detailParts = [];
-            if (aqiData.station) {
+            if (aqiData.provider === 'waqi') {
+                if (aqiData.station) {
+                    detailParts.push(isUk
+                        ? `📍 <b>Станція:</b> ${escapeHTML(String(aqiData.station))}`
+                        : `📍 <b>Station:</b> ${escapeHTML(String(aqiData.station))}`);
+                }
+                if (aqiData.distKm != null) {
+                    detailParts.push(isUk
+                        ? `📏 <b>Відстань:</b> ${aqiData.distKm} км`
+                        : `📏 <b>Distance:</b> ${aqiData.distKm} km`);
+                }
+                if (aqiData.stationGeo && aqiData.stationGeo.length >= 2) {
+                    const [slat, slon] = aqiData.stationGeo;
+                    detailParts.push(isUk
+                        ? `🗺 <b>Координати станції:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`
+                        : `🗺 <b>Station coordinates:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`);
+                }
+                if (aqiData.source) {
+                    detailParts.push(isUk
+                        ? `📡 <b>Джерело:</b> ${escapeHTML(String(aqiData.source))}`
+                        : `📡 <b>Source:</b> ${escapeHTML(String(aqiData.source))}`);
+                }
+                if (aqiData.dominant) {
+                    detailParts.push(isUk
+                        ? `🧪 <b>Домінуючий забрудник:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`
+                        : `🧪 <b>Dominant pollutant:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`);
+                }
+                if (aqiData.stationUrl) {
+                    const url = String(aqiData.stationUrl).startsWith('http')
+                        ? aqiData.stationUrl
+                        : `https://aqicn.org${aqiData.stationUrl}`;
+                    detailParts.push(isUk
+                        ? `🔗 <a href="${escapeHTML(url)}">Сторінка станції</a>`
+                        : `🔗 <a href="${escapeHTML(url)}">Station page</a>`);
+                }
+            } else {
                 detailParts.push(isUk
-                    ? `📍 <b>Станція:</b> ${escapeHTML(String(aqiData.station))}`
-                    : `📍 <b>Station:</b> ${escapeHTML(String(aqiData.station))}`);
-            }
-            if (aqiData.stationGeo && aqiData.stationGeo.length >= 2) {
-                const [slat, slon] = aqiData.stationGeo;
+                    ? `📡 <b>Джерело:</b> Open-Meteo · CAMS (атмосферна модель)`
+                    : `📡 <b>Source:</b> Open-Meteo · CAMS (atmospheric model)`);
                 detailParts.push(isUk
-                    ? `🗺 <b>Координати:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`
-                    : `🗺 <b>Coordinates:</b> ${Number(slat).toFixed(4)}, ${Number(slon).toFixed(4)}`);
-            }
-            if (aqiData.source) {
-                detailParts.push(isUk
-                    ? `📡 <b>Джерело:</b> ${escapeHTML(String(aqiData.source))}`
-                    : `📡 <b>Source:</b> ${escapeHTML(String(aqiData.source))}`);
-            }
-            if (aqiData.dominant) {
-                detailParts.push(isUk
-                    ? `🧪 <b>Домінуючий забрудник:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`
-                    : `🧪 <b>Dominant pollutant:</b> ${escapeHTML(String(aqiData.dominant).toUpperCase())}`);
-            }
-            if (aqiData.stationUrl) {
-                const url = String(aqiData.stationUrl).startsWith('http')
-                    ? aqiData.stationUrl
-                    : `https://aqicn.org${aqiData.stationUrl}`;
-                detailParts.push(isUk
-                    ? `🔗 <a href="${escapeHTML(url)}">Сторінка станції</a>`
-                    : `🔗 <a href="${escapeHTML(url)}">Station page</a>`);
+                    ? `ℹ️ Немає станції WAQI ближче ${WAQI_MAX_KM} км — показано модельну оцінку для ваших координат`
+                    : `ℹ️ No WAQI station within ${WAQI_MAX_KM} km — showing model estimate for your coordinates`);
+                if (aqiData.eaqi != null) {
+                    detailParts.push(`EAQI: ${Math.round(aqiData.eaqi)}`);
+                }
+                if (aqiData.usAqi != null) {
+                    detailParts.push(`US AQI: ${Math.round(aqiData.usAqi)}`);
+                }
             }
             if (advice) detailParts.push(advice);
 
