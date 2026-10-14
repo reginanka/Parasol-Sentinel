@@ -227,7 +227,8 @@ module.exports = async (req, res) => {
         const hasAqiNow  = metrics.includes('aqi_now')  || metrics.includes('aqi');
         const hasAqiMain = metrics.includes('aqi_main') || metrics.includes('aqi');
         const hasAqiExt  = metrics.includes('aqi_ext')  || metrics.includes('aqi');
-        const needOmAq   = hasAqiMain || hasAqiExt;
+        // OM AQ завжди тягнемо для підказок «Парасоль»; таблиця — лише за опціями
+        const needOmAq   = true;
 
         // --- Weatherbit ---
         const response = await axios.get(
@@ -454,88 +455,62 @@ module.exports = async (req, res) => {
             return dayAccusativeByIndex[idx] || dateObj.toLocaleDateString('uk-UA', { weekday: 'long' }).toLowerCase();
         };
 
-        const highlights = [];
-        const highPressureDays = [];
-        let highPressureStart = null; // accusative form
-        let highPressureEnd = null;
+        // ========== 3. Smart highlights (структуровані підказки) ==========
+        // Збираємо події по днях, потім ділимо: завтра+післязавтра | решта днів
+        const dayEvents = []; // { dayName, dateObj, precip, precipHeavy, gust, highPress, uvLabel, frostLabel, geomagLabel, aqIssues, eaqi, eaqiBadge, skyCode, skyDesc }
 
         userForecast.forEach((day) => {
             const rawDate = day.valid_date || day.datetime || '';
-            // Полудень UTC-safe, щоб weekday не з’їжджав через TZ
             const dateObj = new Date(rawDate.includes('T') ? rawDate : `${String(rawDate).slice(0, 10)}T12:00:00`);
-            const dayName = getDayForPreposition(dateObj); // уже у потрібному відмінку
+            const dayName = getDayForPreposition(dateObj);
+            const ev = {
+                dayName,
+                dateObj,
+                precip: 0,
+                precipHeavy: false,
+                gust: 0,
+                highPress: false,
+                uvLabel: null,
+                frostLabel: null,
+                geomagLabel: null,
+                aqIssues: [],
+                eaqi: null,
+                eaqiBadge: null,
+                skyCode: day.weather?.code,
+                skyDesc: (getWeatherDesc(day.weather?.code, lang) || '').replace(/\*\*/g, '')
+            };
 
-            // Дощ
             const precip = Number(day.precip) || 0;
             const pop = Number(day.pop) || 0;
             if (precip >= 5) {
-                highlights.push(isUk
-                    ? `у ${dayName} сильний дощ (${precip.toFixed(1)} мм)`
-                    : `on ${dayName} heavy rain (${precip.toFixed(1)} mm)`);
+                ev.precip = precip;
+                ev.precipHeavy = true;
             } else if (precip >= 0.3 || pop >= 40) {
-                highlights.push(isUk
-                    ? `у ${dayName} слабкий дощ (${precip.toFixed(1)} мм)`
-                    : `on ${dayName} light rain (${precip.toFixed(1)} mm)`);
+                ev.precip = precip;
+                ev.precipHeavy = false;
             }
 
-            // Пориви вітру (поріг 7 м/с)
             const gust = Number(day.wind_gust_spd || day.wind_spd) || 0;
-            if (gust >= 7) {
-                highlights.push(isUk
-                    ? `у ${dayName} сильний вітер із поривами до ${Math.round(gust)} м/с`
-                    : `on ${dayName} strong wind with gusts up to ${Math.round(gust)} m/s`);
-            }
+            if (gust >= 7) ev.gust = gust;
 
-            // Високий тиск — збираємо послідовні дні
             const slp = Number(day.slp || day.pres) || 0;
-            if (slp > 1018) {
-                if (highPressureStart === null) {
-                    highPressureStart = dayName;
-                    highPressureEnd = dayName;
-                } else {
-                    highPressureEnd = dayName;
-                }
-            } else {
-                if (highPressureStart !== null) {
-                    if (highPressureStart === highPressureEnd) {
-                        highPressureDays.push(isUk
-                            ? `у ${highPressureStart} високий тиск 🔴`
-                            : `on ${highPressureStart} high pressure 🔴`);
-                    } else {
-                        highPressureDays.push(isUk
-                            ? `у ${highPressureStart}–${highPressureEnd} високий тиск 🔴`
-                            : `on ${highPressureStart}–${highPressureEnd} high pressure 🔴`);
-                    }
-                    highPressureStart = null;
-                    highPressureEnd = null;
-                }
-            }
+            if (slp > 1018) ev.highPress = true;
 
-            // Магнітна буря (Kp ≥ 5)
             const dayDate = String(day.valid_date || day.datetime || '').slice(0, 10);
             const kp = geomagByDate[dayDate];
             const level = getGeomagLevel(kp);
             if (level && kp >= 5) {
-                const label = isUk ? level.labelUk : level.labelEn;
-                // label часто з великої («Слабка буря…») — маленька + «магнітна» для ясності
-                let labelMid = label.charAt(0).toLowerCase() + label.slice(1);
-                if (isUk) {
-                    // No \b — JS word boundaries ignore Cyrillic
-                    if (!labelMid.includes('магніт')) {
-                        labelMid = labelMid
-                            .replace('буря', 'магнітна буря')
-                            .replace('шторм', 'магнітний шторм');
-                    }
-                } else if (!/magnetic/i.test(labelMid)) {
+                let labelMid = (isUk ? level.labelUk : level.labelEn);
+                labelMid = labelMid.charAt(0).toLowerCase() + labelMid.slice(1);
+                if (isUk && !labelMid.includes('магніт')) {
+                    labelMid = labelMid.replace('буря', 'магнітна буря').replace('шторм', 'магнітний шторм');
+                } else if (!isUk && !/magnetic/i.test(labelMid)) {
                     labelMid = labelMid.replace(/\bstorm\b/i, 'magnetic storm');
                 }
-                highlights.push(isUk
-                    ? `у ${dayName} ${labelMid}`
-                    : `on ${dayName} ${labelMid}`);
+                ev.geomagLabel = labelMid;
             }
 
-            // Заморозки по ґрунту (для кожного дня)
-            const dStrSoil = String(day.valid_date || day.datetime || '').slice(0, 10);
+            const dStrSoil = dayDate;
             const vals0 = [];
             for (let i = 0; i < soilTimes.length; i++) {
                 if (String(soilTimes[i]).startsWith(dStrSoil) && soil0[i] != null) {
@@ -545,127 +520,239 @@ module.exports = async (req, res) => {
             if (vals0.length) {
                 const minSoil = Math.min(...vals0);
                 if (minSoil <= 0) {
-                    highlights.push(isUk
-                        ? `у ${dayName} заморозки на ґрунті (до ${minSoil.toFixed(1)}°C)`
-                        : `on ${dayName} soil frost (down to ${minSoil.toFixed(1)}°C)`);
+                    ev.frostLabel = isUk
+                        ? `заморозки на ґрунті (до ${minSoil.toFixed(1)}°C)`
+                        : `soil frost (down to ${minSoil.toFixed(1)}°C)`;
                 }
             }
 
-            // УФ-індекс (≥6 високий, ≥8 дуже високий, >10 екстремальний)
             const uv = Number(day.uv);
             if (!Number.isNaN(uv) && uv >= 6) {
                 const uvR = Math.round(uv);
-                if (uv > 10) {
-                    highlights.push(isUk
-                        ? `у ${dayName} екстремальний УФ-індекс (${uvR}) 🟣`
-                        : `on ${dayName} extreme UV index (${uvR}) 🟣`);
-                } else if (uv >= 8) {
-                    highlights.push(isUk
-                        ? `у ${dayName} дуже високий УФ-індекс (${uvR}) 🔴`
-                        : `on ${dayName} very high UV index (${uvR}) 🔴`);
-                } else {
-                    highlights.push(isUk
-                        ? `у ${dayName} високий УФ-індекс (${uvR}) 🟠`
-                        : `on ${dayName} high UV index (${uvR}) 🟠`);
-                }
+                if (uv > 10) ev.uvLabel = isUk ? `екстремальний УФ (${uvR}) 🟣` : `extreme UV (${uvR}) 🟣`;
+                else if (uv >= 8) ev.uvLabel = isUk ? `дуже високий УФ (${uvR}) 🔴` : `very high UV (${uvR}) 🔴`;
+                else ev.uvLabel = isUk ? `високий УФ (${uvR}) 🟠` : `high UV (${uvR}) 🟠`;
             }
 
-            // --- Open-Meteo Air Quality tips (якщо aqi_main) ---
-            const dStrAq = String(day.valid_date || day.datetime || '').slice(0, 10);
-            const aq = (hasAqiMain || hasAqiExt) ? omAqByDate[dStrAq] : null;
+            // AQ tips — ЗАВЖДИ (не залежить від налаштувань таблиці)
+            const aq = omAqByDate[dStrSoil];
             if (aq) {
-                const issues = [];
-                // М’якші пороги для підказки (коли вже є підвищений EAQI)
                 if (aq.pm25Max != null && aq.pm25Max >= 12) {
-                    issues.push(isUk
+                    ev.aqIssues.push(isUk
                         ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
                         : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
                 }
                 if (aq.pm10Max != null && aq.pm10Max >= 25) {
-                    issues.push(isUk
+                    ev.aqIssues.push(isUk
                         ? `великий пил PM10 до ${aq.pm10Max.toFixed(0)} µg/m³`
                         : `coarse dust PM10 up to ${aq.pm10Max.toFixed(0)} µg/m³`);
                 }
                 if (aq.dustMax != null && aq.dustMax >= 15) {
-                    issues.push(isUk
+                    ev.aqIssues.push(isUk
                         ? `пилова хмара (dust) до ${aq.dustMax.toFixed(0)} µg/m³`
                         : `dust plume up to ${aq.dustMax.toFixed(0)} µg/m³`);
                 }
                 if (aq.no2Max != null && aq.no2Max >= 40) {
-                    issues.push(isUk
-                        ? `викиди NO₂ до ${aq.no2Max.toFixed(0)} µg/m³`
-                        : `NO₂ emissions up to ${aq.no2Max.toFixed(0)} µg/m³`);
+                    ev.aqIssues.push(isUk
+                        ? `NO₂ до ${aq.no2Max.toFixed(0)} µg/m³`
+                        : `NO₂ up to ${aq.no2Max.toFixed(0)} µg/m³`);
                 }
                 if (aq.o3Max != null && aq.o3Max >= 100) {
-                    issues.push(isUk
-                        ? `підвищений озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³`
-                        : `elevated ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³`);
+                    ev.aqIssues.push(isUk
+                        ? `озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³`
+                        : `ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³`);
                 }
                 if (aq.so2Max != null && aq.so2Max >= 30) {
-                    issues.push(isUk
+                    ev.aqIssues.push(isUk
                         ? `SO₂ до ${aq.so2Max.toFixed(0)} µg/m³`
                         : `SO₂ up to ${aq.so2Max.toFixed(0)} µg/m³`);
                 }
-
-                // EAQI як загальний рівень
                 if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
-                    const badge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
-                    // Якщо issues порожній — все одно показуємо головний вкладник (PM2.5)
-                    let detail = '';
-                    if (issues.length) {
-                        detail = ': ' + issues.join(', ');
-                    } else if (aq.pm25Max != null) {
-                        detail = isUk
-                            ? `: дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
-                            : `: fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`;
+                    ev.eaqi = Math.round(aq.eaqiMax);
+                    ev.eaqiBadge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
+                    if (!ev.aqIssues.length && aq.pm25Max != null) {
+                        ev.aqIssues.push(isUk
+                            ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
+                            : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
                     }
-                    highlights.push(isUk
-                        ? `у ${dayName} погана якість повітря (EAQI ${Math.round(aq.eaqiMax)}) ${badge}${detail}`
-                        : `on ${dayName} poor air quality (EAQI ${Math.round(aq.eaqiMax)}) ${badge}${detail}`);
-                } else if (issues.length) {
-                    highlights.push(isUk
-                        ? `у ${dayName} ${issues.join(', ')}`
-                        : `on ${dayName} ${issues.join(', ')}`);
                 }
+            }
+
+            dayEvents.push(ev);
+        });
+
+        const nearEvents = dayEvents.slice(0, 2); // завтра + післязавтра
+        const farEvents = dayEvents.slice(2);
+
+        const isClearSky = (code) => {
+            const c = Number(code);
+            return c === 800 || c === 801 || c === 802;
+        };
+        const hasHazard = (ev) =>
+            ev.precip > 0 || ev.gust >= 7 || ev.highPress || ev.uvLabel || ev.frostLabel ||
+            ev.geomagLabel || ev.eaqi != null || (ev.aqIssues && ev.aqIssues.length);
+
+        // --- Текст «близьких» днів ---
+        const nearLines = [];
+        nearEvents.forEach((ev, idx) => {
+            const labelDay = idx === 0
+                ? (isUk ? 'Завтра' : 'Tomorrow')
+                : (isUk ? 'Післязавтра' : 'Day after tomorrow');
+            if (!hasHazard(ev) && isClearSky(ev.skyCode)) {
+                nearLines.push(isUk
+                    ? `${labelDay} — чудовий ясний день ☀️`
+                    : `${labelDay} — a lovely clear day ☀️`);
+            } else if (!hasHazard(ev)) {
+                const sky = ev.skyDesc || (isUk ? 'без особливих загроз' : 'no major hazards');
+                nearLines.push(isUk
+                    ? `${labelDay} — спокійно (${sky})`
+                    : `${labelDay} — quiet (${sky})`);
+            } else {
+                const bits = [];
+                if (ev.precip > 0) {
+                    bits.push(isUk
+                        ? (ev.precipHeavy ? `сильний дощ ${ev.precip.toFixed(1)} мм` : `слабкий дощ ${ev.precip.toFixed(1)} мм`)
+                        : (ev.precipHeavy ? `heavy rain ${ev.precip.toFixed(1)} mm` : `light rain ${ev.precip.toFixed(1)} mm`));
+                }
+                if (ev.gust >= 7) {
+                    bits.push(isUk
+                        ? `вітер із поривами до ${Math.round(ev.gust)} м/с`
+                        : `wind gusts up to ${Math.round(ev.gust)} m/s`);
+                }
+                if (ev.frostLabel) bits.push(ev.frostLabel);
+                if (ev.uvLabel) bits.push(ev.uvLabel);
+                if (ev.geomagLabel) bits.push(ev.geomagLabel);
+                if (ev.highPress) bits.push(isUk ? 'високий тиск 🔴' : 'high pressure 🔴');
+                if (ev.eaqi != null) {
+                    const detail = ev.aqIssues.length ? `: ${ev.aqIssues[0]}` : '';
+                    bits.push(isUk
+                        ? `якість повітря EAQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
+                        : `air quality EAQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
+                } else if (ev.aqIssues.length) {
+                    bits.push(ev.aqIssues[0]);
+                }
+                nearLines.push(`${labelDay} — ${bits.join(', ')}`);
             }
         });
 
-        // Закрити останній діапазон високого тиску
-        if (highPressureStart !== null) {
-            if (highPressureStart === highPressureEnd) {
-                highPressureDays.push(isUk
-                    ? `у ${highPressureStart} високий тиск 🔴`
-                    : `on ${highPressureStart} high pressure 🔴`);
-            } else {
-                highPressureDays.push(isUk
-                    ? `у ${highPressureStart}–${highPressureEnd} високий тиск 🔴`
-                    : `on ${highPressureStart}–${highPressureEnd} high pressure 🔴`);
+        // --- Згруповані «далекі» дні ---
+        const groupPrecip = [];
+        const groupWind = [];
+        const groupPress = []; // consecutive ranges by dayName
+        const groupAq = [];
+        const groupUv = [];
+        const groupFrost = [];
+        const groupGeomag = [];
+
+        let pressStart = null, pressEnd = null;
+        const flushPress = () => {
+            if (pressStart == null) return;
+            if (pressStart === pressEnd) groupPress.push(pressStart);
+            else groupPress.push(`${pressStart}–${pressEnd}`);
+            pressStart = pressEnd = null;
+        };
+
+        farEvents.forEach((ev) => {
+            if (ev.precip > 0) {
+                groupPrecip.push(isUk
+                    ? `${ev.dayName} (${ev.precip.toFixed(1)} мм)`
+                    : `${ev.dayName} (${ev.precip.toFixed(1)} mm)`);
             }
+            if (ev.gust >= 7) {
+                groupWind.push(isUk
+                    ? `${ev.dayName} до ${Math.round(ev.gust)} м/с`
+                    : `${ev.dayName} up to ${Math.round(ev.gust)} m/s`);
+            }
+            if (ev.highPress) {
+                if (pressStart == null) { pressStart = pressEnd = ev.dayName; }
+                else pressEnd = ev.dayName;
+            } else {
+                flushPress();
+            }
+            if (ev.eaqi != null || ev.aqIssues.length) {
+                const tip = ev.aqIssues[0] || (ev.eaqi != null ? `EAQI ${ev.eaqi}` : '');
+                // коротко: лише день + тип (без повтору чисел у кожному)
+                if (ev.aqIssues.some(x => x.includes('PM2.5') || x.includes('пил') || x.includes('dust') || x.includes('smog'))) {
+                    groupAq.push(ev.dayName);
+                } else if (tip) {
+                    groupAq.push(`${ev.dayName}`);
+                }
+            }
+            if (ev.uvLabel) groupUv.push(`${ev.dayName} (${ev.uvLabel})`);
+            if (ev.frostLabel) groupFrost.push(`${ev.dayName}`);
+            if (ev.geomagLabel) groupGeomag.push(`${ev.dayName}: ${ev.geomagLabel}`);
+        });
+        flushPress();
+
+        const farLines = [];
+        if (groupPrecip.length) {
+            farLines.push(isUk
+                ? `Можливий дощ: ${groupPrecip.join(', ')}.`
+                : `Possible rain: ${groupPrecip.join(', ')}.`);
+        }
+        if (groupWind.length) {
+            farLines.push(isUk
+                ? `Сильний вітер із поривами: ${groupWind.join(', ')}.`
+                : `Strong wind with gusts: ${groupWind.join(', ')}.`);
+        }
+        if (groupPress.length) {
+            farLines.push(isUk
+                ? `Високий тиск 🔴: ${groupPress.join(', ')}.`
+                : `High pressure 🔴: ${groupPress.join(', ')}.`);
+        }
+        if (groupAq.length) {
+            farLines.push(isUk
+                ? `Якість повітря — можливий дрібний пил/смог PM2.5: ${groupAq.join(', ')}.`
+                : `Air quality — possible fine dust/smog PM2.5: ${groupAq.join(', ')}.`);
+        }
+        if (groupFrost.length) {
+            farLines.push(isUk
+                ? `Заморозки на ґрунті: ${groupFrost.join(', ')}.`
+                : `Soil frost: ${groupFrost.join(', ')}.`);
+        }
+        if (groupUv.length) {
+            farLines.push(isUk
+                ? `Високий УФ: ${groupUv.join(', ')}.`
+                : `High UV: ${groupUv.join(', ')}.`);
+        }
+        if (groupGeomag.length) {
+            farLines.push(isUk
+                ? `Магнітні бурі: ${groupGeomag.join(', ')}.`
+                : `Magnetic storms: ${groupGeomag.join(', ')}.`);
         }
 
-        // Об'єднати highlights + high pressure
-        const allHighlights = [...highlights, ...highPressureDays];
+        // --- Збірка highlightText ---
+        const parts = [];
 
-        let highlightText = '';
-        if (allHighlights.length > 0) {
-            // Перша літера велика, решта через кому
-            const joined = allHighlights.map((h, i) => i === 0 ? h.charAt(0).toUpperCase() + h.slice(1) : h).join(', ');
-            highlightText = joined + '.';
-        } else {
-            highlightText = isUk
-                ? 'Особливих небезпек не передбачається.'
-                : 'No significant hazards expected.';
-        }
-
-        // Official UA Hydrometcenter alerts (MeteoAlarm) — prepend to tips block
+        // 1) Hydromet
         if (meteoAlerts.length > 0) {
             const alertHeader = isUk
                 ? '⚠️ Офіційне попередження Укргідрометцентру:'
                 : '⚠️ Official Hydrometcenter warning:';
             const alertLines = meteoAlerts.slice(0, 4).map((a) => a.line).join('\n');
-            // Порожній рядок після алертів — відділяє від самарі «Парасоль»
-            highlightText = `${alertHeader}\n${alertLines}\n\n${highlightText}`;
+            parts.push(`${alertHeader}\n${alertLines}`);
         }
+
+        // 2) Near days
+        if (nearLines.length) {
+            parts.push(nearLines.join('\n'));
+        } else {
+            parts.push(isUk ? 'Найближчі дні — без особливих загроз.' : 'Next days — no major hazards.');
+        }
+
+        // 3) Far days (collapsed via <details> in HTML later — keep plain text marker)
+        let farPlain = '';
+        if (farLines.length) {
+            farPlain = farLines.join('\n');
+        } else if (farEvents.length) {
+            farPlain = isUk
+                ? 'У подальші дні особливих небезпек не передбачається.'
+                : 'No significant hazards expected in the following days.';
+        }
+
+        let highlightText = parts.join('\n\n');
+        // far section stored separately for HTML collapse
+        const farHighlightText = farPlain;
 
         const citeText = isUk
             ? 'Парасоль☔️ підказує, на що звернути увагу. Гортай вбік, щоб переглянути прогноз на всі дні'
@@ -934,9 +1021,17 @@ module.exports = async (req, res) => {
 
         fullHtml += `<h1>🧪 ${isUk ? 'ТЕСТОВИЙ прогноз' : 'TEST forecast'} на ${settings.daysCount} дн. для ${escapeHTML(displayCity)}</h1>\n\n`;
 
-        fullHtml += `<aside>${escapeHTML(highlightText).replace(/\n/g, '<br>')}<br>
+        {
+            const nearHtml = escapeHTML(highlightText).replace(/\n/g, '<br>');
+            let farHtml = '';
+            if (farHighlightText) {
+                const farTitle = isUk ? '📅 Далі по днях' : '📅 Later days';
+                farHtml = `<details><summary>${farTitle}</summary>${escapeHTML(farHighlightText).replace(/\n/g, '<br>')}</details>`;
+            }
+            fullHtml += `<aside>${nearHtml}${farHtml ? '<br><br>' + farHtml : ''}<br>
   <cite>${citeText}</cite>
 </aside>\n\n`;
+        }
 
         fullHtml += tableHtml;
 
