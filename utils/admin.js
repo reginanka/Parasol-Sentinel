@@ -453,7 +453,18 @@ async function handleAdminCallback(ctx) {
                 .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
-            const errLines = (recentErrors || []).length
+            // Strip HTML / box-drawing junk from old ErrorLog entries so "Останні" stays clean
+            const cleanErrMsg = (raw) => {
+                let s = String(raw || '')
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/[┏┓┗┛┃│┌└─━═]+/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                if (s.length > 70) s = s.slice(0, 67) + '…';
+                return escapeHtml(s) || '—';
+            };
+
+            const errRows = (recentErrors || []).length
                 ? recentErrors
                     .map((e) => {
                         const t = new Date(e.createdAt).toLocaleString('uk-UA', {
@@ -463,24 +474,34 @@ async function handleAdminCallback(ctx) {
                             hour: '2-digit',
                             minute: '2-digit'
                         });
-                        const msg = escapeHtml((e.message || '').slice(0, 80));
-                        return `· ${t} — ${msg}`;
+                        return `<tr><td align="left">${t}</td><td align="left">${cleanErrMsg(e.message)}</td></tr>`;
                     })
-                    .join('<br/>')
-                : '· Помилок ще не зафіксовано';
+                    .join('')
+                : '<tr><td colspan="2" align="center">Помилок ще не зафіксовано</td></tr>';
 
-            // Same Rich Message dialect as evening forecasts (h1/h3, p, table bordered striped)
+            // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
             const html = `
 <h1>📊 Аналітика Parasol Sentinel</h1>
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
 
 <h3>👥 Користувачі</h3>
-<p>
-Всього: <b>${total}</b> · з містом: <b>${withCity}</b><br/>
-Нові цього місяця: <b>${newThisMonth}</b><br/>
-✅ Безліміт: <b>${unlimited}</b> · 🚫 Немає доступу: <b>${blocked}</b><br/>
-🔔 Сповіщення: <b>${notifOn}</b> · 🌆 Вечірній: <b>${eveningOn}</b>
-</p>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Показник</th>
+      <th align="center">К-сть</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">Всього</td><td align="center"><b>${total}</b></td></tr>
+    <tr><td align="left">З містом</td><td align="center"><b>${withCity}</b></td></tr>
+    <tr><td align="left">Нові цього місяця</td><td align="center"><b>${newThisMonth}</b></td></tr>
+    <tr><td align="left">✅ Безліміт</td><td align="center"><b>${unlimited}</b></td></tr>
+    <tr><td align="left">🚫 Немає доступу</td><td align="center"><b>${blocked}</b></td></tr>
+    <tr><td align="left">🔔 Сповіщення</td><td align="center"><b>${notifOn}</b></td></tr>
+    <tr><td align="left">🌆 Вечірній</td><td align="center"><b>${eveningOn}</b></td></tr>
+  </tbody>
+</table>
 
 <h3>🟢 Активність</h3>
 <table bordered striped>
@@ -536,7 +557,14 @@ async function handleAdminCallback(ctx) {
 
 <h3>❌ Помилки</h3>
 <p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>
-<p><b>Останні:</b><br/>${errLines}</p>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Час</th><th align="left">Повідомлення</th></tr>
+  </thead>
+  <tbody>
+    ${errRows}
+  </tbody>
+</table>
 `.trim();
 
             try {
