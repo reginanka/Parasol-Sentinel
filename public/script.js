@@ -184,7 +184,7 @@ const i18n = {
         dashboard: "Dashboard",
         freeAccess: "Free Access",
         premiumStatus: "Premium Status",
-        sentinelDashboard: "Sentinel Dashboard",
+        sentinelDashboard: "Premium Status",
         settingsTitle: "⚙️ Settings",
         settingsWind: "🌬 Wind",
         settingsPress: "🌡 Pressure",
@@ -261,7 +261,13 @@ function updateTexts() {
         btn.textContent = currentLang === 'uk' ? 'EN' : 'UK';
     });
 
-    if (accessType) accessType.textContent = i18n[currentLang][currentStatusKey];
+    if (accessType) {
+        const statusText = i18n[currentLang][currentStatusKey]
+            || i18n[currentLang].premiumStatus
+            || i18n[currentLang].freeAccess
+            || '';
+        accessType.textContent = statusText;
+    }
 }
 
 // DOM Elements

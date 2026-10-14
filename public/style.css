@@ -122,6 +122,9 @@ textarea {
     font-family: inherit;
 }
 
+html {
+    overflow-x: clip;
+}
 body {
     font-family: var(--font-main);
     background: var(--background);
@@ -130,7 +133,7 @@ body {
     color: var(--text);
     min-height: 100vh;
     padding: 1rem 2rem 3rem;
-    overflow-x: hidden;
+    overflow-x: clip;
     line-height: 1.6;
     transition: background 1s ease-in-out;
 }
@@ -774,8 +777,19 @@ main {
     .desktop-only { display: none !important; }
     .mobile-only { display: flex !important; }
 
+    /* Sticky needs no overflow/fixed-bg ancestors — disable fixed bg on mobile */
+    body {
+        background-attachment: scroll;
+        overflow-x: clip;
+    }
+    main.dashboard,
+    .dashboard {
+        overflow: visible;
+    }
+
     /* Sticky strip only */
     .header-sticky {
+        position: -webkit-sticky;
         position: sticky;
         top: 0;
         z-index: 900;
@@ -792,9 +806,9 @@ main {
         margin: 0 -0.4rem;
         width: calc(100% + 0.8rem);
         box-sizing: border-box;
-        background: #12161e;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+        background: var(--background);
+        border-bottom: 1px solid var(--border);
+        box-shadow: none;
     }
 
     .header-sticky .logo {
@@ -811,15 +825,18 @@ main {
     }
     .header-sticky .logo .access-type {
         margin: 0;
+        margin-left: 0;
         font-size: 0.6rem;
         letter-spacing: 1.1px;
-        padding: 0.16rem 0.42rem;
-        border-radius: 5px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.05);
-        color: rgba(255, 255, 255, 0.72);
+        padding: 0;
+        border-radius: 0;
+        border: none;
+        background: transparent;
+        color: var(--text-dim);
         line-height: 1.2;
         width: fit-content;
+        text-transform: uppercase;
+        font-weight: 600;
     }
 
     .header-sticky .city-info {
