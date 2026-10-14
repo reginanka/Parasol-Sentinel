@@ -150,61 +150,58 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const lastAct = fmtDate(u?.lastActivityAt);
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
 
-    let text =
-        `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-        `┃  👤 <b>${escapeHtml(name)}</b>\n` +
-        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-        `${escapeHtml(uname)} · ID: <code>${from.id}</code>\n` +
-        `\n` +
-        `${accessIcon} <b>Доступ:</b> ${escapeHtml(access)}\n` +
-        `🌐 Мова: TG <code>${escapeHtml(tgLang)}</code> · бот <code>${escapeHtml(botLang)}</code>\n` +
-        `📍 <b>Місто:</b> ${escapeHtml(city)}\n` +
-        `🕒 TZ: <code>${escapeHtml(tz)}</code> · зараз ~ <b>${temp}</b>\n` +
-        `\n` +
-        `┌ <b>Статус</b>\n` +
-        `│ ${notif} · ${evening}\n` +
-        `│ 🧲 geomag: <code>${escapeHtml(geomag)}</code> · 🌱 культур: <b>${cropsN}</b>\n` +
-        `│\n` +
-        `│ 📬 <b>Цього місяця</b>\n` +
-        `│   вечірніх: <b>${eveningM}</b> · алертів: <b>${alertsM}</b>\n` +
-        `│ 📊 <b>За весь час</b>\n` +
-        `│   вечірніх: <b>${eveningT}</b> · алертів: <b>${alertsT}</b> · разом: <b>${totalAct}</b>\n` +
-        `│\n` +
-        `│ 📅 реєстрація: <code>${escapeHtml(created)}</code>\n` +
-        `│ 🕐 остання активність: <code>${escapeHtml(lastAct)}</code>\n` +
-        `└\n` +
-        `\n` +
-        `⚡ <b>Дія:</b> ${escapeHtml(actionText)}`;
+    let html =
+        `<h3>👤 ${escapeHtml(name)}</h3>` +
+        `<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>` +
+        `<p>${accessIcon} <b>Доступ:</b> ${escapeHtml(access)}<br/>` +
+        `🌐 Мова: TG <code>${escapeHtml(tgLang)}</code> · бот <code>${escapeHtml(botLang)}</code><br/>` +
+        `📍 <b>Місто:</b> ${escapeHtml(city)}<br/>` +
+        `🕒 TZ: <code>${escapeHtml(tz)}</code> · зараз ~ <b>${temp}</b></p>` +
+        `<h3>Статус</h3>` +
+        `<p>${notif} · ${evening}<br/>` +
+        `🧲 geomag: <code>${escapeHtml(geomag)}</code> · 🌱 культур: <b>${cropsN}</b></p>` +
+        `<p><b>Цього місяця</b> — вечірніх: <b>${eveningM}</b> · алертів: <b>${alertsM}</b><br/>` +
+        `<b>За весь час</b> — вечірніх: <b>${eveningT}</b> · алертів: <b>${alertsT}</b> · разом: <b>${totalAct}</b></p>` +
+        `<p>📅 реєстрація: <code>${escapeHtml(created)}</code><br/>` +
+        `🕐 остання активність: <code>${escapeHtml(lastAct)}</code></p>` +
+        `<p>⚡ <b>Дія:</b> ${escapeHtml(actionText)}</p>`;
 
     if (extra.messageText) {
-        text +=
-            `\n\n💬 <b>Повідомлення:</b>\n` +
+        html +=
+            `<h3>💬 Повідомлення</h3>` +
             `<blockquote>${escapeHtml(extra.messageText).slice(0, 800)}</blockquote>`;
     }
     if (extra.callbackData) {
-        text += `\n🔘 Callback: <code>${escapeHtml(extra.callbackData)}</code>`;
+        html += `<p>🔘 Callback: <code>${escapeHtml(extra.callbackData)}</code></p>`;
     }
 
-    text += `\n\n↩️ <i>Відповісти на це повідомлення → надіслати юзеру</i>`;
+    html += `<p><i>↩️ Відповісти на це повідомлення → надіслати юзеру</i></p>`;
+    // Keep plain ID in text for reply parser
+    html += `<p>ID: ${from.id}</p>`;
 
-    // Keep ID: plain for reply parser (also in card above as ID: <code>)
     try {
-        await bot.api.sendMessage(chatId, text, {
-            parse_mode: 'HTML',
-            disable_web_page_preview: true
+        await bot.api.sendRichMessage(chatId, {
+            html,
+            skip_entity_detection: true
         });
     } catch (e) {
-        console.error('[admin] notify failed:', e.message);
-        // Fallback shorter plain-ish message
+        console.error('[admin] notify sendRichMessage failed:', e.message);
         try {
-            await bot.api.sendMessage(
-                chatId,
-                `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
-                    (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                { disable_web_page_preview: true }
-            );
+            await bot.api.sendMessage(chatId, html, {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true
+            });
         } catch (e2) {
-            console.error('[admin] notify fallback failed:', e2.message);
+            try {
+                await bot.api.sendMessage(
+                    chatId,
+                    `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
+                        (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
+                    { disable_web_page_preview: true }
+                );
+            } catch (e3) {
+                console.error('[admin] notify fallback failed:', e3.message);
+            }
         }
     }
 }
@@ -448,15 +445,15 @@ async function handleAdminCallback(ctx) {
             };
             const maxActive = Math.max(active1, active7, active30, 1);
 
-            const langLines = (langAgg || [])
-                .map((x) => `  · <code>${escapeHtml(String(x._id))}</code> — <b>${x.n}</b>`)
-                .join('\n') || '  · —';
+            const langRows = (langAgg || [])
+                .map((x) => `<tr><td>${escapeHtml(String(x._id))}</td><td align="right"><b>${x.n}</b></td></tr>`)
+                .join('') || '<tr><td colspan="2">—</td></tr>';
 
-            const cityLines = (cityAgg || [])
-                .map((x) => `  · ${escapeHtml(String(x._id))} — <b>${x.n}</b>`)
-                .join('\n') || '  · —';
+            const cityRows = (cityAgg || [])
+                .map((x) => `<tr><td>${escapeHtml(String(x._id))}</td><td align="right"><b>${x.n}</b></td></tr>`)
+                .join('') || '<tr><td colspan="2">—</td></tr>';
 
-            const errLines = (recentErrors || []).length
+            const errHtml = (recentErrors || []).length
                 ? recentErrors
                     .map((e) => {
                         const t = new Date(e.createdAt).toLocaleString('uk-UA', {
@@ -466,77 +463,51 @@ async function handleAdminCallback(ctx) {
                             hour: '2-digit',
                             minute: '2-digit'
                         });
-                        const msg = escapeHtml((e.message || '').slice(0, 120));
-                        return `  · <code>${t}</code> ${msg}`;
+                        const msg = escapeHtml((e.message || '').slice(0, 100));
+                        return `<p>· <code>${t}</code> ${msg}</p>`;
                     })
-                    .join('\n')
-                : '  · Помилок ще не зафіксовано';
+                    .join('')
+                : '<p>· Помилок ще не зафіксовано</p>';
 
-            const text =
-                `📊 <b>Аналітика Parasol Sentinel</b>\n` +
-                `<i>${escapeHtml(monthLabel)} · оновлено зараз</i>\n` +
-                `\n` +
-                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  👥 <b>Користувачі</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `Всього: <b>${total}</b>  ·  з містом: <b>${withCity}</b>\n` +
-                `Нові цього місяця: <b>${newThisMonth}</b>\n` +
-                `✅ Безліміт: <b>${unlimited}</b>  ·  🚫 Немає доступу: <b>${blocked}</b>\n` +
-                `🔔 Сповіщення: <b>${notifOn}</b>  ·  🌆 Вечірній: <b>${eveningOn}</b>\n` +
-                `\n` +
-                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  🟢 <b>Активність</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `<code>${bar(active1, maxActive)}</code> 24 год — <b>${active1}</b>\n` +
-                `<code>${bar(active7, maxActive)}</code> 7 днів — <b>${active7}</b>\n` +
-                `<code>${bar(active30, maxActive)}</code> 30 днів — <b>${active30}</b>\n` +
-                `\n` +
-                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  📬 <b>Доставка (лічильники)</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `<b>Цього місяця</b>\n` +
-                `  🌆 Вечірні прогнози: <b>${eveningM}</b>\n` +
-                `  🚨 Алерти: <b>${alertsM}</b>\n` +
-                `  Разом: <b>${eveningM + alertsM}</b>\n` +
-                `<b>За весь час</b>\n` +
-                `  🌆 Вечірні прогнози: <b>${eveningT}</b>\n` +
-                `  🚨 Алерти: <b>${alertsT}</b>\n` +
-                `  Разом: <b>${eveningT + alertsT}</b>\n` +
-                `<i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i>\n` +
-                `\n` +
-                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  🌐 <b>Мови</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `${langLines}\n` +
-                `\n` +
-                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  📍 <b>Топ міст</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `${cityLines}\n` +
-                `\n` +
-                `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                `┃  ❌ <b>Помилки</b>\n` +
-                `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                `Цього місяця: <b>${errorsThisMonth}</b>  ·  всього: <b>${errorsTotal}</b>\n` +
-                `<b>Останні:</b>\n` +
-                `${errLines}`;
+            // Native Rich Message HTML (Bot API 10.1+) — same style as evening forecasts
+            const html =
+                `<h3>📊 Аналітика Parasol Sentinel</h3>` +
+                `<p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>` +
+                `<h3>👥 Користувачі</h3>` +
+                `<p>Всього: <b>${total}</b> · з містом: <b>${withCity}</b><br/>` +
+                `Нові цього місяця: <b>${newThisMonth}</b><br/>` +
+                `✅ Безліміт: <b>${unlimited}</b> · 🚫 Немає доступу: <b>${blocked}</b><br/>` +
+                `🔔 Сповіщення: <b>${notifOn}</b> · 🌆 Вечірній: <b>${eveningOn}</b></p>` +
+                `<h3>🟢 Активність</h3>` +
+                `<p><code>${bar(active1, maxActive)}</code> 24 год — <b>${active1}</b><br/>` +
+                `<code>${bar(active7, maxActive)}</code> 7 днів — <b>${active7}</b><br/>` +
+                `<code>${bar(active30, maxActive)}</code> 30 днів — <b>${active30}</b></p>` +
+                `<h3>📬 Доставка (лічильники)</h3>` +
+                `<p><b>Цього місяця</b><br/>` +
+                `🌆 Вечірні прогнози: <b>${eveningM}</b><br/>` +
+                `🚨 Алерти: <b>${alertsM}</b><br/>` +
+                `Разом: <b>${eveningM + alertsM}</b></p>` +
+                `<p><b>За весь час</b><br/>` +
+                `🌆 Вечірні прогнози: <b>${eveningT}</b><br/>` +
+                `🚨 Алерти: <b>${alertsT}</b><br/>` +
+                `Разом: <b>${eveningT + alertsT}</b></p>` +
+                `<p><i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i></p>` +
+                `<h3>🌐 Мови</h3>` +
+                `<table bordered striped compact><tr><th>Мова</th><th>К-сть</th></tr>${langRows}</table>` +
+                `<h3>📍 Топ міст</h3>` +
+                `<table bordered striped compact><tr><th>Місто</th><th>К-сть</th></tr>${cityRows}</table>` +
+                `<h3>❌ Помилки</h3>` +
+                `<p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>` +
+                `<p><b>Останні:</b></p>${errHtml}`;
 
-            // Telegram limit ~4096
-            const chunks = [];
-            if (text.length <= 4000) {
-                chunks.push(text);
-            } else {
-                const splitAt = text.indexOf('┏━━━━━━━━━━━━━━━━━━━━┓\n┃  ❌');
-                if (splitAt > 0) {
-                    chunks.push(text.slice(0, splitAt).trim());
-                    chunks.push(text.slice(splitAt).trim());
-                } else {
-                    chunks.push(text.slice(0, 3900));
-                    chunks.push(text.slice(3900));
-                }
-            }
-            for (const chunk of chunks) {
-                await api.sendMessage(chatId, chunk, {
+            try {
+                await api.sendRichMessage(chatId, {
+                    html,
+                    skip_entity_detection: true
+                });
+            } catch (richErr) {
+                console.warn('[admin] stats sendRichMessage failed, fallback HTML:', richErr.message);
+                await api.sendMessage(chatId, html.replace(/<\/?table[^>]*>/g, '').replace(/<\/?t[rdh][^>]*>/g, ' '), {
                     parse_mode: 'HTML',
                     disable_web_page_preview: true
                 });
