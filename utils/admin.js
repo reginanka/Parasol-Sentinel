@@ -1,7 +1,13 @@
 /**
  * Admin panel helpers for Parasol Sentinel.
- * ADMIN_CHAT_ID — private channel (bot must be admin).
- * Notifications about user actions + interactive admin menu.
+ *
+ * Modes:
+ * 1) Classic: ADMIN_CHAT_ID = private channel (no topics)
+ * 2) Forum supergroup:
+ *    ADMIN_CHAT_ID = -100…
+ *    TOPIC_GENERAL = 1     → меню / кнопки
+ *    TOPIC_LOGS    = 123   → cron-логи (logger.js)
+ *    TOPIC_USERS   = 456   → notify про юзерів + reply → юзеру
  */
 
 const User = require('../models/User');
@@ -14,6 +20,21 @@ function isAdminChat(chatId) {
     const id = ADMIN_CHAT_ID();
     if (!id) return false;
     return String(chatId) === String(id);
+}
+
+/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS */
+function topicId(name) {
+    const key = `TOPIC_${String(name).toUpperCase()}`;
+    const raw = process.env[key];
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+}
+
+/** Options with message_thread_id when topic is configured */
+function threadOpts(topicName) {
+    const id = topicId(topicName);
+    return id != null ? { message_thread_id: id } : {};
 }
 
 function displayName(from) {
@@ -249,17 +270,21 @@ async function notifyAdmin(from, actionText, extra = {}) {
     // Keep plain ID in text for reply parser
     html += `<p>ID: ${from.id}</p>`;
 
+    const usersThread = threadOpts('USERS');
+
     try {
-        await bot.api.sendRichMessage(chatId, {
-            html,
-            skip_entity_detection: true
-        });
+        await bot.api.sendRichMessage(
+            chatId,
+            { html, skip_entity_detection: true },
+            usersThread
+        );
     } catch (e) {
         console.error('[admin] notify sendRichMessage failed:', e.message);
         try {
             await bot.api.sendMessage(chatId, html, {
                 parse_mode: 'HTML',
-                disable_web_page_preview: true
+                disable_web_page_preview: true,
+                ...usersThread
             });
         } catch (e2) {
             try {
@@ -267,7 +292,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
                     chatId,
                     `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
                         (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                    { disable_web_page_preview: true }
+                    { disable_web_page_preview: true, ...usersThread }
                 );
             } catch (e3) {
                 console.error('[admin] notify fallback failed:', e3.message);
@@ -350,12 +375,20 @@ async function sendAdminMenu(api, chatId, messageId = null) {
     const text =
         '🛡 <b>Адмін-панель Parasol Sentinel</b>\n\n' +
         'Оберіть дію кнопкою нижче.\n' +
-        'Будь-яке повідомлення в цей канал знову покаже це меню.';
+        'Будь-яке повідомлення в гілці General знову покаже це меню.';
 
-    const opts = { parse_mode: 'HTML', reply_markup: adminKeyboard() };
+    const opts = {
+        parse_mode: 'HTML',
+        reply_markup: adminKeyboard(),
+        ...threadOpts('GENERAL')
+    };
     if (messageId) {
         try {
-            await api.editMessageText(chatId, messageId, text, opts);
+            // edit stays in the same topic as the original message
+            await api.editMessageText(chatId, messageId, text, {
+                parse_mode: 'HTML',
+                reply_markup: adminKeyboard()
+            });
             return;
         } catch (_) {
             /* fall through to send */
@@ -1081,6 +1114,11 @@ async function handleAdminChannelText(ctx) {
         msg.audio ||
         msg.sticker
     );
+    // Stay in the same forum topic when confirming
+    const sameThread =
+        msg.message_thread_id != null
+            ? { message_thread_id: msg.message_thread_id }
+            : threadOpts('USERS');
 
     // ── Reply to a user-notification → send text and/or media to that user ──
     const replyTo = msg.reply_to_message;
@@ -1092,20 +1130,20 @@ async function handleAdminChannelText(ctx) {
             try {
                 const kind = await sendAdminReplyToUser(api, targetId, msg);
                 if (!kind) {
-                    await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).');
+                    await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
                 await api.sendMessage(
                     chatId,
                     `✅ Відповідь (${kind}) надіслано користувачу <code>${targetId}</code>`,
-                    { parse_mode: 'HTML' }
+                    { parse_mode: 'HTML', ...sameThread }
                 );
             } catch (e) {
                 await api.sendMessage(
                     chatId,
                     `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}\n` +
                         `(Користувач міг не стартувати бота або заблокував його.)`,
-                    { parse_mode: 'HTML' }
+                    { parse_mode: 'HTML', ...sameThread }
                 );
             }
             return true;
@@ -1115,7 +1153,7 @@ async function handleAdminChannelText(ctx) {
             'ℹ️ Відповідь не привʼязана до користувача.\n' +
                 'Відповідай на сповіщення з <code>ID: …</code> або використай:\n' +
                 '<code>/msg USER_ID текст</code>',
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', ...sameThread }
         );
         return true;
     }
