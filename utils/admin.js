@@ -2251,7 +2251,24 @@ async function incrementUsage(telegramId, type) {
  * Ping ERROR topic when a user hits a handler error (button / text / etc.).
  * Also persists a short row in ErrorLog (source: user).
  */
+const _recentUserErrors = new Map(); // key -> ts, debounce 8s
+
 async function notifyUserError(from, err, extra = {}) {
+    const _msgKey = [
+        from && from.id,
+        extra && extra.where,
+        (err && err.message) || String(err || '')
+    ].join('|').slice(0, 240);
+    const _now = Date.now();
+    const _prev = _recentUserErrors.get(_msgKey);
+    if (_prev && _now - _prev < 8000) return;
+    _recentUserErrors.set(_msgKey, _now);
+    if (_recentUserErrors.size > 200) {
+        for (const [k, ts] of _recentUserErrors) {
+            if (_now - ts > 60000) _recentUserErrors.delete(k);
+        }
+    }
+
     const chatId = ADMIN_CHAT_ID();
     const msg = (err && err.message) || String(err || 'unknown error');
     const stack = err && err.stack ? String(err.stack).slice(0, 900) : '';
