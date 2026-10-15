@@ -38,6 +38,44 @@ function threadOpts(topicName) {
     return id != null ? { message_thread_id: id } : {};
 }
 
+/**
+ * Send message into admin forum: try preferred thread → TOPIC_GENERAL → no thread.
+ * Avoids 400 "message thread not found" when TOPIC_* is wrong or General has no id.
+ */
+async function sendInAdminThread(api, chatId, text, extra = {}, preferredThreadId = null) {
+    const attempts = [];
+    const seen = new Set();
+    const push = (thr) => {
+        const key = thr.message_thread_id != null ? String(thr.message_thread_id) : '__none__';
+        if (seen.has(key)) return;
+        seen.add(key);
+        attempts.push(thr);
+    };
+    if (preferredThreadId != null && preferredThreadId !== undefined && preferredThreadId !== '') {
+        const n = Number(preferredThreadId);
+        if (Number.isFinite(n)) push({ message_thread_id: n });
+    }
+    const gen = topicId('GENERAL');
+    if (gen != null) push({ message_thread_id: gen });
+    push({}); // root / non-forum / default General
+
+    let lastErr = null;
+    for (const thr of attempts) {
+        try {
+            return await api.sendMessage(chatId, text, { ...extra, ...thr });
+        } catch (e) {
+            lastErr = e;
+            const msg = e?.message || String(e);
+            // Only retry on thread-related errors; rethrow others
+            if (!/thread not found|MESSAGE_THREAD|message thread/i.test(msg)) {
+                throw e;
+            }
+            console.warn('[admin] sendInAdminThread retry:', msg, thr);
+        }
+    }
+    throw lastErr || new Error('sendInAdminThread failed');
+}
+
 function displayName(from) {
     if (!from) return 'unknown';
     const parts = [from.first_name, from.last_name].filter(Boolean).join(' ');
@@ -438,26 +476,7 @@ async function sendAdminMenu(api, chatId, messageId = null, preferredThreadId = 
         }
     }
 
-    // Try: caller's thread → TOPIC_GENERAL → no thread (Telegram General default)
-    const attempts = [];
-    if (preferredThreadId != null && preferredThreadId !== undefined) {
-        attempts.push({ message_thread_id: preferredThreadId });
-    }
-    const gen = topicId('GENERAL');
-    if (gen != null) attempts.push({ message_thread_id: gen });
-    attempts.push({});
-
-    let lastErr = null;
-    for (const thr of attempts) {
-        try {
-            await api.sendMessage(chatId, text, { ...base, ...thr });
-            return;
-        } catch (e) {
-            lastErr = e;
-            console.warn('[admin] sendAdminMenu failed:', e.message, thr);
-        }
-    }
-    throw lastErr || new Error('sendAdminMenu failed');
+    await sendInAdminThread(api, chatId, text, base, preferredThreadId);
 }
 
 
@@ -482,11 +501,11 @@ async function editCallbackMessage(api, ctx, text, extra = {}) {
             console.warn('[admin] editCallbackMessage failed:', e.message);
         }
     }
-    const thr =
-        msg?.message_thread_id != null
-            ? { message_thread_id: msg.message_thread_id }
-            : threadOpts('GENERAL');
-    const sent = await api.sendMessage(chatId, text, { ...opts, ...thr });
+    const preferred =
+        msg?.message_thread_id != null ? msg.message_thread_id : topicId('GENERAL');
+    // strip any stale thread from opts — sendInAdminThread owns it
+    const { message_thread_id: _drop, ...rest } = opts;
+    const sent = await sendInAdminThread(api, chatId, text, rest, preferred);
     return { edited: false, messageId: sent?.message_id };
 }
 
@@ -506,8 +525,9 @@ async function editMessageById(api, chatId, messageId, text, extra = {}, threadI
             console.warn('[admin] editMessageById failed:', e.message);
         }
     }
-    const thr = threadId != null ? { message_thread_id: threadId } : threadOpts('GENERAL');
-    await api.sendMessage(chatId, text, { ...opts, ...thr });
+    const preferred = threadId != null ? threadId : topicId('GENERAL');
+    const { message_thread_id: _drop, ...rest } = opts;
+    await sendInAdminThread(api, chatId, text, rest, preferred);
     return false;
 }
 
@@ -518,12 +538,11 @@ async function editMessageById(api, chatId, messageId, text, extra = {}, threadI
 async function startScenarioMessage(api, ctx, text, extra = {}) {
     const msg = ctx.callbackQuery?.message;
     const chatId = msg?.chat?.id;
-    const thr =
-        msg?.message_thread_id != null
-            ? { message_thread_id: msg.message_thread_id }
-            : threadOpts('GENERAL');
-    const opts = { parse_mode: 'HTML', ...extra, ...thr };
-    const sent = await api.sendMessage(chatId, text, opts);
+    const preferred =
+        msg?.message_thread_id != null ? msg.message_thread_id : topicId('GENERAL');
+    const opts = { parse_mode: 'HTML', ...extra };
+    const { message_thread_id: _drop, ...rest } = opts;
+    const sent = await sendInAdminThread(api, chatId, text, rest, preferred);
     return sent?.message_id;
 }
 
