@@ -636,6 +636,72 @@ bot.command('settings', async (ctx) => {
 });
 
 
+
+/**
+ * True only for short failure replies — NOT evening forecasts / alerts that
+ * may contain ⚠️ as a weather tip icon inside a long message.
+ */
+function looksLikeUserFacingError(text) {
+    if (typeof text !== 'string') return false;
+    const t = text.trim();
+    if (!t) return false;
+
+    // Long messages = content (forecast, help, agro report), not a soft error
+    if (t.length > 280) return false;
+    // Multi-block HTML / tables almost never a one-line soft error
+    if (/<table|<h[1-3]|<details|<ul|<ol/i.test(t)) return false;
+
+    const plain = t.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Explicit error markup
+    if (/❌\s*(Error|Помилка)\b/i.test(plain)) return true;
+    if (/^❌/.test(plain) && plain.length < 220) {
+        // city not found / search fail / generic ❌ replies
+        if (/не вдалося|помилка|error|not found|cannot find|спробуйте/i.test(plain)) return true;
+    }
+
+    // Soft warnings: only when they look like "data missing / not ready"
+    if (/^⚠️/.test(plain) && plain.length < 220) {
+        if (
+            /недоступн|не готов|немає даних|not (yet )?available|not ready|not yet updated|no data|спробуйте пізніше|try again later|tomorrow\.io/i.test(
+                plain
+            )
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Wrap ctx.reply so short soft-fail answers (missing data / errors) ping ERROR.
+ * Forecasts and alerts that merely use ⚠️ as an icon are ignored.
+ */
+function installUserErrorReplyHook(ctx, where = 'handler') {
+    if (!ctx || ctx.__errorHookInstalled) return;
+    ctx.__errorHookInstalled = true;
+    const origReply = ctx.reply.bind(ctx);
+    ctx.reply = async (text, ...rest) => {
+        const result = await origReply(text, ...rest);
+        try {
+            if (looksLikeUserFacingError(text)) {
+                const plain = String(text)
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                    .slice(0, 500);
+                await notifyUserError(ctx.from, new Error(plain || 'user-facing error'), {
+                    where,
+                    callbackData: ctx.callbackQuery && ctx.callbackQuery.data,
+                    messageText: ctx.message && (ctx.message.text || ctx.message.caption)
+                });
+            }
+        } catch (_e) { /* never break user reply */ }
+        return result;
+    };
+}
+
 /** Persist free-text input mode: idle | awaiting_city | support */
 async function setBotMode(telegramId, mode) {
     if (!telegramId) return;
@@ -695,6 +761,7 @@ bot.command(['admin', 'menu'], async (ctx) => {
 bot.on("message:text", async (ctx) => {
     const query = ctx.message.text.trim();
     const lang = getLang(ctx);
+    installUserErrorReplyHook(ctx, 'message_text');
 
     // Admin channel / forum group commands / menu
     if (isAdminChat(ctx.chat?.id)) {
@@ -940,6 +1007,8 @@ bot.on(
 
 bot.on("callback_query:data", async (ctx) => {
     try {
+    installUserErrorReplyHook(ctx, 'callback_query');
+
     // Admin panel callbacks
     if ((ctx.callbackQuery?.data || '').startsWith('adm|')) {
         await connectDB();
