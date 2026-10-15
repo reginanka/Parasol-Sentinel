@@ -1824,66 +1824,42 @@ async function handleAdminCallback(ctx) {
                 return true;
             }
             const html = buildUserInfoHtml(u);
-            const plain = buildUserInfoPlain(u);
             const cbMsg = ctx.callbackQuery?.message;
             const fromPicker = (cbMsg?.text || '').includes('Інфо про');
-            // Та сама гілка, звідки натиснули
-            const preferredThread =
-                cbMsg?.message_thread_id != null
-                    ? cbMsg.message_thread_id
-                    : fromPicker
-                      ? topicId('GENERAL')
-                      : topicId('USERS');
+            // Та сама гілка, звідки натиснули (як у старому userinfo)
             const thr =
-                preferredThread != null && preferredThread !== ''
-                    ? { message_thread_id: Number(preferredThread) }
-                    : {};
-            const backBtn = {
-                inline_keyboard: [[{ text: '◀️ Меню', callback_data: 'adm|menu' }]]
-            };
+                cbMsg?.message_thread_id != null
+                    ? { message_thread_id: cbMsg.message_thread_id }
+                    : fromPicker
+                      ? threadOpts('GENERAL')
+                      : threadOpts('USERS');
 
-            // Як у list / stats: sendRichMessage(chatId, { html }, thr) — thr окремим 3-м аргументом
-            const sendRichInfo = async () => {
-                const payload = { html, skip_entity_detection: true };
-                if (Object.keys(thr).length) {
-                    await api.sendRichMessage(chatId, payload, thr);
-                } else {
-                    await api.sendRichMessage(chatId, payload);
-                }
-            };
-
-            if (fromPicker) {
-                // Список → rich у тій же гілці; список прибираємо (заміна)
-                try {
-                    await sendRichInfo();
-                    await deleteCallbackMessage(api, ctx);
-                } catch (richErr) {
-                    console.warn('[admin] userinfo_pick rich failed:', richErr.message);
-                    // Лише якщо rich реально впав — plain без h1/table
-                    await editCallbackMessage(api, ctx, plain, {
-                        reply_markup: backBtn,
-                        disable_web_page_preview: true
-                    });
-                }
-                return true;
-            }
-
-            // Кнопка з notifyAdmin — нове rich (як було)
+            // Точно як list / stats / notify userinfo — тільки rich з таблицями
             try {
-                await sendRichInfo();
+                if (Object.keys(thr).length) {
+                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
+                } else {
+                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true });
+                }
+                if (fromPicker) {
+                    await deleteCallbackMessage(api, ctx);
+                }
             } catch (richErr) {
                 console.warn('[admin] userinfo rich failed:', richErr.message);
-                await sendInAdminThread(
-                    api,
-                    chatId,
-                    plain,
-                    {
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true,
-                        reply_markup: backBtn
-                    },
-                    preferredThread
-                );
+                // Повтор без thread — як sendUsersRich (list)
+                try {
+                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true });
+                    if (fromPicker) {
+                        await deleteCallbackMessage(api, ctx);
+                    }
+                } catch (e2) {
+                    console.error('[admin] userinfo rich no-thread failed:', e2.message);
+                    await api.sendMessage(
+                        chatId,
+                        `❌ Не вдалося надіслати інфо (rich): ${escapeHtml(e2.message)}`,
+                        { parse_mode: 'HTML', ...thr }
+                    );
+                }
             }
             return true;
         }
