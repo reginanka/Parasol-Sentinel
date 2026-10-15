@@ -686,6 +686,7 @@ function installUserErrorReplyHook(ctx, where = 'handler') {
         const result = await origReply(text, ...rest);
         try {
             if (looksLikeUserFacingError(text)) {
+                ctx.__userSoftError = true;
                 const plain = String(text)
                     .replace(/<[^>]+>/g, ' ')
                     .replace(/\s+/g, ' ')
@@ -1032,17 +1033,15 @@ bot.on("callback_query:data", async (ctx) => {
         if (await handleAdminCallback(ctx)) return;
     }
 
-    // Notify admin about user button presses
-    if (ctx.from && !isAdminChat(ctx.callbackQuery?.message?.chat?.id)) {
+    // ACTIONS notify deferred to finally — soft-errors go only to ERROR
+    const isUserCallback =
+        ctx.from && !isAdminChat(ctx.callbackQuery?.message?.chat?.id);
+    if (isUserCallback) {
         try {
             await connectDB();
             await touchUserProfile(ctx.from, getLang(ctx));
-            await notifyAdmin(ctx.from, 'callback', {
-                chatId: ctx.callbackQuery?.message?.chat?.id,
-                callbackData: ctx.callbackQuery?.data
-            });
         } catch (e) {
-            console.error('[admin] notify on callback failed:', e.message);
+            console.warn('[admin] touch on callback failed:', e.message);
         }
     }
 
@@ -2755,6 +2754,7 @@ bot.on("callback_query:data", async (ctx) => {
     }
 
     } catch (error) {
+        ctx.__userSoftError = true; // real error → ERROR only, not ACTIONS
         console.error('[callback] unhandled:', error);
         try {
             await notifyUserError(ctx.from, error, {
@@ -2774,6 +2774,23 @@ bot.on("callback_query:data", async (ctx) => {
                     : '❌ An error occurred. Please try again later.'
             );
         } catch (e3) { /* ignore */ }
+    } finally {
+        // Successful user clicks → ACTIONS; soft/hard errors already went to ERROR
+        if (
+            ctx.from &&
+            !ctx.__userSoftError &&
+            !(ctx.callbackQuery && ctx.callbackQuery.data && String(ctx.callbackQuery.data).startsWith('adm|')) &&
+            !isAdminChat(ctx.callbackQuery && ctx.callbackQuery.message && ctx.callbackQuery.message.chat && ctx.callbackQuery.message.chat.id)
+        ) {
+            try {
+                await notifyAdmin(ctx.from, 'callback', {
+                    chatId: ctx.callbackQuery && ctx.callbackQuery.message && ctx.callbackQuery.message.chat && ctx.callbackQuery.message.chat.id,
+                    callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                });
+            } catch (e) {
+                console.error('[admin] notify on callback failed:', e.message);
+            }
+        }
     }
 });
 
