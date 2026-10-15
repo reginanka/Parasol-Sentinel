@@ -603,6 +603,15 @@ async function notifyAdmin(from, actionText, extra = {}) {
             console.error('[admin] error-topic notify failed:', e3.message);
         }
     }
+
+    // Текст юзера → картка розмови в HISTORY
+    if (extra.messageText) {
+        try {
+            await appendSupportConversation(bot.api, from.id, '👤 Юзер', String(extra.messageText));
+        } catch (e) {
+            console.warn('[admin] support log from notify failed:', e.message);
+        }
+    }
 }
 
 /** Extract user telegram id from an admin notification / reply_to message */
@@ -1407,10 +1416,321 @@ async function handleAdminCallback(ctx) {
     return true;
 }
 
-/**
- * Send media (or text) from admin reply to a user.
- * Supports: photo, document, video, animation, voice, audio, sticker + caption.
- */
+
+
+
+// ===== HISTORY SUPPORT (auto) =====
+
+async function sendInAdminThread(api, chatId, text, extra = {}, preferredThreadId = null) {
+    const attempts = [];
+    const seen = new Set();
+    const push = (thr) => {
+        const key = thr.message_thread_id != null ? String(thr.message_thread_id) : '__none__';
+        if (seen.has(key)) return;
+        seen.add(key);
+        attempts.push(thr);
+    };
+    if (preferredThreadId != null && preferredThreadId !== undefined && preferredThreadId !== '') {
+        const n = Number(preferredThreadId);
+        if (Number.isFinite(n)) push({ message_thread_id: n });
+    }
+    const gen = topicId('GENERAL');
+    if (gen != null) push({ message_thread_id: gen });
+    push({}); // root / non-forum / default General
+
+    let lastErr = null;
+    for (const thr of attempts) {
+        try {
+            return await api.sendMessage(chatId, text, { ...extra, ...thr });
+        } catch (e) {
+            lastErr = e;
+            const msg = e?.message || String(e);
+            // Only retry on thread-related errors; rethrow others
+            if (!/thread not found|MESSAGE_THREAD|message thread/i.test(msg)) {
+                throw e;
+            }
+            console.warn('[admin] sendInAdminThread retry:', msg, thr);
+        }
+    }
+    throw lastErr || new Error('sendInAdminThread failed');
+}
+
+function isBroadcastAllTarget(raw) {
+    if (raw == null) return false;
+    let s;
+    if (typeof raw === 'object') {
+        s = [raw.text, raw.caption].filter(Boolean).join('\n');
+    } else {
+        s = String(raw);
+    }
+    return /ID:\s*BROADCAST_ALL\b/i.test(s) || /#broadcast_all\b/i.test(s);
+}
+
+async function broadcastToAllUsers(api, msg) {
+    const users = await User.find({ accessLevel: { $ne: 'none' } })
+        .select('telegramId')
+        .lean();
+    let ok = 0;
+    let fail = 0;
+    for (const u of users) {
+        if (!u?.telegramId) continue;
+        try {
+            const kind = await sendAdminReplyToUser(api, u.telegramId, msg);
+            if (kind) ok += 1;
+            else fail += 1;
+        } catch (e) {
+            fail += 1;
+            console.warn('[admin] broadcast fail', u.telegramId, e.message);
+        }
+    }
+    return { ok, fail, total: users.length };
+}
+
+async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg) {
+    const ids = [];
+    if (adminMsg?.message_id != null) ids.push(adminMsg.message_id);
+    if (instructionMsg?.message_id != null) ids.push(instructionMsg.message_id);
+    for (const id of ids) {
+        try {
+            await api.deleteMessage(chatId, id);
+        } catch (e) {
+            console.warn('[admin] cleanupScenarioMessages failed', id, e.message);
+        }
+    }
+}
+
+function describeMsgContent(msg) {
+    if (!msg) return { media: null, text: '', kind: null, fileId: null };
+    const text = (msg.caption || msg.text || '').trim();
+    let media = null;
+    let kind = null;
+    let fileId = null;
+    if (msg.photo && msg.photo.length) {
+        media = '📷 фото';
+        kind = 'photo';
+        fileId = msg.photo[msg.photo.length - 1].file_id;
+    } else if (msg.document) {
+        media = `📎 ${msg.document.file_name || 'документ'}`;
+        kind = 'document';
+        fileId = msg.document.file_id;
+    } else if (msg.video) {
+        media = '🎬 відео';
+        kind = 'video';
+        fileId = msg.video.file_id;
+    } else if (msg.animation) {
+        media = '🎞 gif';
+        kind = 'animation';
+        fileId = msg.animation.file_id;
+    } else if (msg.voice) {
+        media = '🎤 голосове';
+        kind = 'voice';
+        fileId = msg.voice.file_id;
+    } else if (msg.audio) {
+        media = '🎵 аудіо';
+        kind = 'audio';
+        fileId = msg.audio.file_id;
+    } else if (msg.sticker) {
+        media = '😊 sticker';
+        kind = 'sticker';
+        fileId = msg.sticker.file_id;
+    }
+    return { media, text, kind, fileId };
+}
+
+function historyThreadOpts() {
+    return threadOpts('HISTORY');
+}
+
+function formatSupportLine(who, media, text, assetId, ts = new Date()) {
+    const time = ts.toLocaleString('uk-UA', {
+        timeZone: 'Europe/Kyiv',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+    const parts = [`[${time}] ${who}:`];
+    if (media) {
+        parts.push(assetId ? `${media} #${assetId}` : media);
+    }
+    if (text) parts.push(text.slice(0, 1500));
+    if (!media && !text) parts.push('(порожньо)');
+    return parts.join(' ');
+}
+
+async function sendAssetToHistory(api, msg, assetId, mediaLabel) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId || !msg) return;
+    const thrId = topicId('HISTORY');
+    const { kind, fileId } = describeMsgContent(msg);
+    if (!kind || !fileId) return;
+
+    const caption = `${mediaLabel} <code>#${assetId}</code>`;
+    const attempts = [];
+    if (thrId != null) attempts.push({ message_thread_id: thrId });
+    attempts.push({});
+
+    const sendOnce = async (thr) => {
+        const opts = { caption, parse_mode: 'HTML', ...thr };
+        if (kind === 'photo') return api.sendPhoto(chatId, fileId, opts);
+        if (kind === 'document') return api.sendDocument(chatId, fileId, opts);
+        if (kind === 'video') return api.sendVideo(chatId, fileId, opts);
+        if (kind === 'animation') return api.sendAnimation(chatId, fileId, opts);
+        if (kind === 'voice') return api.sendVoice(chatId, fileId, opts);
+        if (kind === 'audio') return api.sendAudio(chatId, fileId, opts);
+        if (kind === 'sticker') {
+            await api.sendSticker(chatId, fileId, thr);
+            return api.sendMessage(chatId, caption, { parse_mode: 'HTML', ...thr });
+        }
+        return null;
+    };
+
+    let lastErr = null;
+    for (const thr of attempts) {
+        try {
+            await sendOnce(thr);
+            return;
+        } catch (e) {
+            lastErr = e;
+            if (!/thread not found|MESSAGE_THREAD/i.test(e.message || '')) throw e;
+        }
+    }
+    if (lastErr) console.warn('[admin] sendAssetToHistory failed:', lastErr.message);
+}
+
+async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, failCount, total }) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId) return;
+    // Personal one-to-one: no separate «Відправлено» card (already in «Розмова з…»)
+    if (kind === 'one') return;
+
+    const { media, text } = describeMsgContent(msg);
+    let head = `📣 <b>Відправлено всім</b>`;
+    if (okCount != null) {
+        head += `\n✅ ${okCount}` + (failCount != null ? ` · ❌ ${failCount}` : '') +
+            (total != null ? ` · з ${total}` : '');
+    }
+    const bodyParts = [head];
+    if (media) bodyParts.push(escapeHtml(media));
+    if (text) bodyParts.push(escapeHtml(text.slice(0, 1000)));
+    try {
+        await sendInAdminThread(api, chatId, bodyParts.join('\n'), {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        }, topicId('HISTORY'));
+    } catch (e) {
+        console.warn('[admin] logDeliveryToHistory failed:', e.message);
+    }
+}
+
+async function appendSupportConversation(api, telegramId, who, msgOrText) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId || !telegramId) return;
+
+    let media = null;
+    let text = '';
+    let kind = null;
+    let rawMsg = null;
+    if (typeof msgOrText === 'string') {
+        text = msgOrText;
+    } else if (msgOrText) {
+        rawMsg = msgOrText;
+        const d = describeMsgContent(msgOrText);
+        media = d.media;
+        text = d.text;
+        kind = d.kind;
+    }
+
+    let user = await User.findOne({ telegramId: Number(telegramId) });
+    if (!user) {
+        user = await User.findOneAndUpdate(
+            { telegramId: Number(telegramId) },
+            { $setOnInsert: { telegramId: Number(telegramId), accessLevel: 'unlimited' } },
+            { upsert: true, new: true }
+        );
+    }
+
+    let assetId = null;
+    if (kind && rawMsg) {
+        const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
+        assetId = `A${seq}`;
+        if (!user.supportHistory) user.supportHistory = {};
+        user.supportHistory.assetSeq = seq;
+    }
+
+    const line = formatSupportLine(who, media, text, assetId);
+    const prev = (user.supportHistory && user.supportHistory.transcript) || '';
+    let transcript = prev ? `${prev}\n${line}` : line;
+    if (transcript.length > 3500) {
+        transcript = '…\n' + transcript.slice(transcript.length - 3400);
+    }
+
+    // One ID only (in the title line)
+    const namePart =
+        user.username
+            ? `@${user.username}`
+            : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
+    const header =
+        `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n`;
+    const full = header + escapeHtml(transcript);
+
+    const thrId = topicId('HISTORY');
+    const histMsgId = user.supportHistory && user.supportHistory.messageId;
+
+    let newMsgId = histMsgId;
+    try {
+        if (histMsgId) {
+            try {
+                await api.editMessageText(chatId, histMsgId, full, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true
+                });
+            } catch (editErr) {
+                console.warn('[admin] support edit failed, resend:', editErr.message);
+                const sent = await sendInAdminThread(
+                    api,
+                    chatId,
+                    full,
+                    { parse_mode: 'HTML', disable_web_page_preview: true },
+                    thrId
+                );
+                newMsgId = sent?.message_id;
+            }
+        } else {
+            const sent = await sendInAdminThread(
+                api,
+                chatId,
+                full,
+                { parse_mode: 'HTML', disable_web_page_preview: true },
+                thrId
+            );
+            newMsgId = sent?.message_id;
+        }
+    } catch (e) {
+        console.warn('[admin] appendSupportConversation send failed:', e.message);
+    }
+
+    // Mirror media asset next to the conversation card
+    if (assetId && rawMsg) {
+        try {
+            await sendAssetToHistory(api, rawMsg, assetId, media || '📎');
+        } catch (e) {
+            console.warn('[admin] mirror asset failed:', e.message);
+        }
+    }
+
+    user.supportHistory = {
+        messageId: newMsgId || histMsgId || null,
+        transcript,
+        assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
+        updatedAt: new Date()
+    };
+    user.markModified('supportHistory');
+    await user.save().catch((e) => console.warn('[admin] supportHistory save:', e.message));
+}
+
+// ===== END HISTORY SUPPORT =====
+
 async function sendAdminReplyToUser(api, targetId, msg) {
     const caption = (msg.caption || msg.text || '').trim();
     const header = '💬 Відповідь від підтримки Parasol:';
@@ -1487,10 +1807,31 @@ async function handleAdminChannelText(ctx) {
             ? { message_thread_id: msg.message_thread_id }
             : threadOpts('USERS');
 
-    // ── Reply to a user-notification → send text and/or media to that user ──
+    // ── Reply to instruction / user-notification → one user or ALL ──
     const replyTo = msg.reply_to_message;
     if (replyTo && (text || caption || hasMedia) && !(text || '').startsWith('/')) {
-        // Pass full message object — text/caption may be empty for some message types
+        if (isBroadcastAllTarget(replyTo)) {
+            try {
+                const { ok, fail, total } = await broadcastToAllUsers(api, msg);
+                await logDeliveryToHistory(api, {
+                    kind: 'all',
+                    targetLabel: 'усім',
+                    msg,
+                    okCount: ok,
+                    failCount: fail,
+                    total
+                });
+                await cleanupScenarioMessages(api, chatId, msg, replyTo);
+            } catch (e) {
+                await api.sendMessage(
+                    chatId,
+                    `❌ Broadcast failed: ${escapeHtml(e.message)}`,
+                    { parse_mode: 'HTML', ...sameThread }
+                );
+            }
+            return true;
+        }
+
         const targetId = extractUserIdFromNotifyText(replyTo);
         if (targetId) {
             try {
@@ -1499,11 +1840,9 @@ async function handleAdminChannelText(ctx) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
-                await api.sendMessage(
-                    chatId,
-                    `✅ Відповідь (${kind}) надіслано користувачу <code>${targetId}</code>`,
-                    { parse_mode: 'HTML', ...sameThread }
-                );
+                // Картка розмови в HISTORY + asset #A1…; прибрати reply з USERS/ACTIONS
+                await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
+                await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
                 await api.sendMessage(
                     chatId,
@@ -1553,15 +1892,16 @@ async function handleAdminChannelText(ctx) {
         const body = msgMatch[2].trim();
         try {
             await api.sendMessage(targetId, body);
-            await api.sendMessage(chatId, `✅ Надіслано користувачу <code>${targetId}</code>`, {
-                parse_mode: 'HTML'
-            });
+            await appendSupportConversation(api, targetId, '🛡 Адмін', body);
+            try {
+                if (msg.message_id != null) await api.deleteMessage(chatId, msg.message_id);
+            } catch (_) { /* ignore */ }
         } catch (e) {
             await api.sendMessage(
                 chatId,
                 `❌ Не вдалося надіслати: ${escapeHtml(e.message)}\n` +
                     `(Користувач міг не стартувати бота або заблокував його.)`,
-                { parse_mode: 'HTML' }
+                { parse_mode: 'HTML', ...sameThread }
             );
         }
         return true;
@@ -1644,6 +1984,8 @@ module.exports = {
     sendAdminMenu,
     handleAdminCallback,
     handleAdminChannelText,
+    appendSupportConversation,
+    logDeliveryToHistory,
     accessLabel,
     ADMIN_CHAT_ID
 };
