@@ -1538,50 +1538,35 @@ async function handleAdminCallback(ctx) {
             }
 
             try {
-                // Rich + кнопка на тому ж повідомленні
-                await api.sendRichMessage(chatId, {
-                    html,
-                    skip_entity_detection: true,
-                    reply_markup: statsRefresh
-                });
+                // Як у cron-forecast: html у 2-му аргументі, reply_markup у 3-му
+                await api.sendRichMessage(
+                    chatId,
+                    { html, skip_entity_detection: true },
+                    { reply_markup: statsRefresh }
+                );
             } catch (richErr) {
-                console.warn('[admin] stats rich+markup failed, try rich only:', richErr.message);
-                try {
-                    await api.sendRichMessage(chatId, {
-                        html,
-                        skip_entity_detection: true
-                    });
-                    await sendInAdminThread(
-                        api,
-                        chatId,
-                        '🔄 <i>Аналітика</i>',
-                        { parse_mode: 'HTML', reply_markup: statsRefresh },
-                        preferredThr
-                    );
-                } catch (richErr2) {
-                    console.warn('[admin] stats sendRichMessage failed, fallback:', richErr2.message);
-                    const plain =
-                        `📊 <b>Аналітика Parasol Sentinel</b>\n` +
-                        `<i>${escapeHtml(monthLabel)}</i>\n\n` +
-                        `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
-                        `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
-                        `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
-                        `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
-                        `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
-                        `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
-                        `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
-                    await sendInAdminThread(
-                        api,
-                        chatId,
-                        plain,
-                        {
-                            parse_mode: 'HTML',
-                            disable_web_page_preview: true,
-                            reply_markup: statsRefresh
-                        },
-                        preferredThr
-                    );
-                }
+                console.warn('[admin] stats sendRichMessage failed, fallback:', richErr.message);
+                const plain =
+                    `📊 <b>Аналітика Parasol Sentinel</b>\n` +
+                    `<i>${escapeHtml(monthLabel)}</i>\n\n` +
+                    `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
+                    `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
+                    `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
+                    `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
+                    `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
+                    `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
+                    `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
+                await sendInAdminThread(
+                    api,
+                    chatId,
+                    plain,
+                    {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true,
+                        reply_markup: statsRefresh
+                    },
+                    preferredThr
+                );
             }
             return true;
         }
@@ -2076,63 +2061,44 @@ async function handleAdminCallback(ctx) {
                     : {};
 
             const infoRefresh = refreshMarkup(`adm|userinfo|${tgId}`);
-            const richWithBtn = {
-                html,
-                skip_entity_detection: true,
-                reply_markup: infoRefresh
-            };
-            const richOnly = { html, skip_entity_detection: true };
+            // 3-й аргумент як у cron-forecast: { reply_markup, message_thread_id? }
+            const richOpts = { reply_markup: infoRefresh, ...thr };
 
             // Пікер / оновити — прибрати список або саме rich з кнопкою
             if (fromPicker || fromRefresh) {
                 await deleteCallbackMessage(api, ctx);
             }
 
-            // list/stats працюють БЕЗ thread. При «thread not found» — теж без thread.
-            const sendRich = async (payload) => {
-                if (Object.keys(thr).length) {
+            try {
+                // html у 2-му, кнопки у 3-му (як вечірній прогноз)
+                await api.sendRichMessage(
+                    chatId,
+                    { html, skip_entity_detection: true },
+                    richOpts
+                );
+            } catch (richErr) {
+                const msg = richErr?.message || String(richErr);
+                console.warn('[admin] userinfo rich failed:', msg);
+                // thread not found → без thread
+                if (/thread not found|MESSAGE_THREAD|message thread/i.test(msg) && Object.keys(thr).length) {
                     try {
-                        return await api.sendRichMessage(chatId, payload, thr);
-                    } catch (e) {
-                        const msg = e?.message || String(e);
-                        if (!/thread not found|MESSAGE_THREAD|message thread/i.test(msg)) {
-                            throw e;
-                        }
-                        console.warn('[admin] userinfo rich: thread not found → no-thread');
+                        await api.sendRichMessage(
+                            chatId,
+                            { html, skip_entity_detection: true },
+                            { reply_markup: infoRefresh }
+                        );
+                        return true;
+                    } catch (e2) {
+                        console.warn('[admin] userinfo rich no-thread failed:', e2.message);
                     }
                 }
-                return await api.sendRichMessage(chatId, payload);
-            };
-
-            try {
-                // Кнопка на тому ж rich-повідомленні
-                await sendRich(richWithBtn);
-            } catch (richErr) {
-                console.warn('[admin] userinfo rich+markup failed:', richErr.message);
-                try {
-                    await sendRich(richOnly);
-                    const name =
-                        u.username
-                            ? `@${u.username}`
-                            : [u.firstName, u.lastName].filter(Boolean).join(' ') ||
-                              String(tgId);
-                    await sendInAdminThread(
-                        api,
-                        chatId,
-                        `🔄 <i>${escapeHtml(name)}</i> · <code>${tgId}</code>`,
-                        { parse_mode: 'HTML', reply_markup: infoRefresh },
-                        preferredThr
-                    );
-                } catch (e2) {
-                    console.error('[admin] userinfo rich failed:', e2.message);
-                    await sendInAdminThread(
-                        api,
-                        chatId,
-                        `❌ Не вдалося надіслати інфо (rich): ${escapeHtml(e2.message)}`,
-                        { parse_mode: 'HTML', reply_markup: infoRefresh },
-                        preferredThr
-                    );
-                }
+                await sendInAdminThread(
+                    api,
+                    chatId,
+                    `❌ Не вдалося надіслати інфо (rich): ${escapeHtml(msg)}`,
+                    { parse_mode: 'HTML', reply_markup: infoRefresh },
+                    preferredThr
+                );
             }
             return true;
         }
