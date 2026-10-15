@@ -8,6 +8,7 @@
  *    TOPIC_GENERAL = 1     → меню / кнопки
  *    TOPIC_LOGS    = 123   → cron-логи (logger.js)
  *    TOPIC_USERS   = 456   → notify про юзерів + reply → юзеру
+ *    ERROR_ID / TOPIC_ERRORS → лише помилки (окрема гілка)
  *    TOPIC_HISTORY / HISTORY_MSG_ID → журнал вихідних і розмов
  */
 
@@ -869,8 +870,7 @@ async function handleAdminCallback(ctx) {
                 langAgg,
                 cityAgg,
                 errorsThisMonth,
-                errorsTotal,
-                recentErrors
+                errorsTotal
             ] = await Promise.all([
                 User.countDocuments(),
                 User.countDocuments({ city: { $ne: null, $exists: true } }),
@@ -921,8 +921,7 @@ async function handleAdminCallback(ctx) {
                     { $limit: 8 }
                 ]),
                 ErrorLog.countDocuments({ createdAt: { $gte: monthStart } }).catch(() => 0),
-                ErrorLog.countDocuments().catch(() => 0),
-                ErrorLog.find({}).sort({ createdAt: -1 }).limit(5).lean().catch(() => [])
+                ErrorLog.countDocuments().catch(() => 0)
             ]);
 
             const u = usageAgg[0] || {};
@@ -946,33 +945,8 @@ async function handleAdminCallback(ctx) {
                 .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
-            // Strip HTML / box-drawing junk from old ErrorLog entries so "Останні" stays clean
-            const cleanErrMsg = (raw) => {
-                let s = String(raw || '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/[┏┓┗┛┃│┌└─━═]+/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                if (s.length > 70) s = s.slice(0, 67) + '…';
-                return escapeHtml(s) || '—';
-            };
-
-            const errRows = (recentErrors || []).length
-                ? recentErrors
-                    .map((e) => {
-                        const t = new Date(e.createdAt).toLocaleString('uk-UA', {
-                            timeZone: 'Europe/Kyiv',
-                            day: '2-digit',
-                            month: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                        });
-                        return `<tr><td align="left">${t}</td><td align="left">${cleanErrMsg(e.message)}</td></tr>`;
-                    })
-                    .join('')
-                : '<tr><td colspan="2" align="center">Помилок ще не зафіксовано</td></tr>';
-
             // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
+            // Помилки — лише кількість (без тексту «коли і що впало»)
             const html = `
 <h1>📊 Аналітика Parasol Sentinel</h1>
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
@@ -1048,16 +1022,20 @@ async function handleAdminCallback(ctx) {
   </tbody>
 </table>
 
-<h3>❌ Помилки</h3>
-<p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>
+<h3>❌ Помилки (кількість)</h3>
 <table bordered striped>
   <thead>
-    <tr><th align="left">Час</th><th align="left">Повідомлення</th></tr>
+    <tr>
+      <th align="left">Період</th>
+      <th align="center">К-сть</th>
+    </tr>
   </thead>
   <tbody>
-    ${errRows}
+    <tr><td align="left">Цього місяця</td><td align="center"><b>${errorsThisMonth}</b></td></tr>
+    <tr><td align="left">Всього</td><td align="center"><b>${errorsTotal}</b></td></tr>
   </tbody>
 </table>
+<p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
 `.trim();
 
             try {
