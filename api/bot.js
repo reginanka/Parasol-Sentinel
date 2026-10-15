@@ -20,6 +20,7 @@ const { CROPS_DATA } = require('../utils/crops');
 const { getSoilFrostInfo, frostWarningText, frostOccurredText, isFrostSeason, getGeomagLevel } = require('../utils/weather');
 const {
     notifyAdmin,
+    notifyUserError,
     touchUserProfile,
     isAdminChat,
     handleAdminCallback,
@@ -775,6 +776,7 @@ bot.on("message:text", async (ctx) => {
                 });
             } catch (err) {
                 console.error('Date range error:', err);
+                try { await notifyUserError(ctx.from, err, { where: 'date_range' }); } catch (_n) {}
                 return ctx.reply(lang === 'uk' ? '❌ Помилка обробки дат.' : '❌ Date processing error.');
             }
         }
@@ -815,6 +817,7 @@ bot.on("message:text", async (ctx) => {
         }
     } catch (error) {
         console.error('Search Error:', error.message);
+        try { await notifyUserError(ctx.from, error, { where: 'search' }); } catch (_n) {}
         await ctx.reply(dict[lang].errorSearch, { parse_mode: 'Markdown' });
     }
 });
@@ -875,6 +878,7 @@ bot.on(
 );
 
 bot.on("callback_query:data", async (ctx) => {
+    try {
     // Admin panel callbacks
     if ((ctx.callbackQuery?.data || '').startsWith('adm|')) {
         await connectDB();
@@ -1438,6 +1442,7 @@ bot.on("callback_query:data", async (ctx) => {
             });
         } catch (error) {
             console.error('Hourly forecast error:', error);
+            try { await notifyUserError(ctx.from, error, { where: 'forecast_hourly', callbackData: ctx.callbackQuery && ctx.callbackQuery.data }); } catch (_n) {}
             await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }
@@ -1793,6 +1798,7 @@ bot.on("callback_query:data", async (ctx) => {
             await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (e) {
             console.error('Agro schedule error:', e);
+            try { await notifyUserError(ctx.from, e, { where: 'agro_schedule', callbackData: ctx.callbackQuery && ctx.callbackQuery.data }); } catch (_n) {}
         }
     }
 
@@ -1813,6 +1819,7 @@ bot.on("callback_query:data", async (ctx) => {
             await ctx.reply(report, { parse_mode: 'HTML' });
         } catch (e) {
             console.error('Agro 5-day error:', e);
+            try { await notifyUserError(ctx.from, e, { where: 'agro_5day', callbackData: ctx.callbackQuery && ctx.callbackQuery.data }); } catch (_n) {}
             await ctx.reply(`❌ Error: ${e.message}`);
         }
     }
@@ -2557,12 +2564,51 @@ bot.on("callback_query:data", async (ctx) => {
             });
         } catch (error) {
             console.error('Archive error:', error);
+            try { await notifyUserError(ctx.from, error, { where: 'archive', callbackData: ctx.callbackQuery && ctx.callbackQuery.data }); } catch (_n) {}
             await ctx.answerCallbackQuery('❌ Помилка').catch(() => { });
             await ctx.reply(`❌ <b>Error:</b>\n<code>${error.message}</code>`, { parse_mode: 'HTML' }).catch(() => { });
         }
     }
+
+    } catch (error) {
+        console.error('[callback] unhandled:', error);
+        try {
+            await notifyUserError(ctx.from, error, {
+                where: 'callback_query',
+                callbackData: ctx.callbackQuery && ctx.callbackQuery.data,
+                chatId: ctx.callbackQuery && ctx.callbackQuery.message && ctx.callbackQuery.message.chat && ctx.callbackQuery.message.chat.id
+            });
+        } catch (e2) {
+            console.error('[callback] notifyUserError failed:', e2.message);
+        }
+        await ctx.answerCallbackQuery({ text: '❌' }).catch(function () {});
+        try {
+            var _lang = (typeof getLang === 'function') ? getLang(ctx) : 'uk';
+            await ctx.reply(
+                _lang === 'uk'
+                    ? '❌ Сталася помилка. Спробуйте ще раз або пізніше.'
+                    : '❌ An error occurred. Please try again later.'
+            );
+        } catch (e3) { /* ignore */ }
+    }
 });
 
+
+
+// Uncaught errors in any handler → ERROR topic
+bot.catch(async (err, ctx) => {
+    console.error('[bot.catch]', err);
+    try {
+        await notifyUserError(ctx && ctx.from, err, {
+            where: 'bot.catch',
+            callbackData: ctx && ctx.callbackQuery && ctx.callbackQuery.data,
+            messageText: ctx && ctx.message && (ctx.message.text || ctx.message.caption),
+            chatId: ctx && ctx.chat && ctx.chat.id
+        });
+    } catch (e) {
+        console.error('[bot.catch] notifyUserError failed:', e.message);
+    }
+});
 
 // --- Local Development Support (Polling Mode) ---
 // If the script is run directly (not via a serverless require), launch in polling mode.
