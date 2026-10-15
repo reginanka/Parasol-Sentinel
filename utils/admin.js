@@ -162,7 +162,7 @@ function adminKeyboard() {
                 { text: '🟢 Активні', callback_data: 'adm|active' }
             ],
             [
-                { text: '🔑 Змінити доступ', callback_data: 'adm|access' },
+                { text: '🔑 Змінити доступ', callback_data: 'adm|access|0' },
                 { text: '📊 Аналітика', callback_data: 'adm|stats' }
             ],
             [
@@ -460,6 +460,118 @@ async function sendAdminMenu(api, chatId, messageId = null, preferredThreadId = 
     throw lastErr || new Error('sendAdminMenu failed');
 }
 
+
+/**
+ * Edit the callback message in-place (remove buttons), or fall back to send in same thread.
+ * Used so confirm → "starting" → result all stay on one message.
+ */
+async function editCallbackMessage(api, ctx, text, extra = {}) {
+    const msg = ctx.callbackQuery?.message;
+    const chatId = msg?.chat?.id;
+    const messageId = msg?.message_id;
+    const opts = { parse_mode: 'HTML', ...extra };
+    // Clear buttons unless caller explicitly passes reply_markup
+    if (!Object.prototype.hasOwnProperty.call(extra, 'reply_markup')) {
+        opts.reply_markup = { inline_keyboard: [] };
+    }
+    if (chatId != null && messageId != null) {
+        try {
+            await api.editMessageText(chatId, messageId, text, opts);
+            return { edited: true, messageId };
+        } catch (e) {
+            console.warn('[admin] editCallbackMessage failed:', e.message);
+        }
+    }
+    const thr =
+        msg?.message_thread_id != null
+            ? { message_thread_id: msg.message_thread_id }
+            : threadOpts('GENERAL');
+    const sent = await api.sendMessage(chatId, text, { ...opts, ...thr });
+    return { edited: false, messageId: sent?.message_id };
+}
+
+/**
+ * Edit a specific message by id (after we already know messageId from previous step).
+ */
+async function editMessageById(api, chatId, messageId, text, extra = {}, threadId = null) {
+    const opts = { parse_mode: 'HTML', ...extra };
+    if (!Object.prototype.hasOwnProperty.call(extra, 'reply_markup')) {
+        opts.reply_markup = { inline_keyboard: [] };
+    }
+    if (messageId != null) {
+        try {
+            await api.editMessageText(chatId, messageId, text, opts);
+            return true;
+        } catch (e) {
+            console.warn('[admin] editMessageById failed:', e.message);
+        }
+    }
+    const thr = threadId != null ? { message_thread_id: threadId } : threadOpts('GENERAL');
+    await api.sendMessage(chatId, text, { ...opts, ...thr });
+    return false;
+}
+
+
+/** Users per page in «Змінити доступ» (2 buttons/row → keep under TG limits). */
+const ACCESS_PAGE_SIZE = 8;
+
+/**
+ * Build keyboard + title for access toggle list (paginated).
+ * @returns {{ text: string, reply_markup: object }}
+ */
+function buildAccessPage(users, page) {
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / ACCESS_PAGE_SIZE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * ACCESS_PAGE_SIZE, (p + 1) * ACCESS_PAGE_SIZE);
+
+    const rows = slice.map((u) => {
+        const label = u.username || u.firstName || String(u.telegramId);
+        const cur = accessLabel(u.accessLevel || 'unlimited');
+        const next = (u.accessLevel || 'unlimited') === 'none' ? 'unlimited' : 'none';
+        const nextLabel = next === 'none' ? '🚫 Заборонити' : '✅ Дати безліміт';
+        return [
+            {
+                text: `${String(label).slice(0, 28)} · ${cur}`,
+                callback_data: `adm|noop|${u.telegramId}`
+            },
+            {
+                text: nextLabel,
+                callback_data: `adm|setaccess|${u.telegramId}|${next}|${p}`
+            }
+        ];
+    });
+
+    // Pagination row
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) {
+            nav.push({ text: '◀️', callback_data: `adm|access|${p - 1}` });
+        }
+        nav.push({
+            text: `${p + 1}/${totalPages}`,
+            callback_data: 'adm|noop|page'
+        });
+        if (p < totalPages - 1) {
+            nav.push({ text: '▶️', callback_data: `adm|access|${p + 1}` });
+        }
+        rows.push(nav);
+    }
+
+    rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * ACCESS_PAGE_SIZE + 1 : 0;
+    const to = Math.min((p + 1) * ACCESS_PAGE_SIZE, total);
+    const text =
+        `🔑 <b>Змінити доступ</b>\n` +
+        `<i>Показано ${from}–${to} з ${total}</i>`;
+
+    return {
+        text,
+        reply_markup: { inline_keyboard: rows }
+    };
+}
+
 async function handleAdminCallback(ctx) {
     const data = (ctx.callbackQuery?.data || '').split('|');
     if (data[0] !== 'adm') return false;
@@ -470,9 +582,20 @@ async function handleAdminCallback(ctx) {
         return true;
     }
 
-    await ctx.answerCallbackQuery().catch(() => {});
     const api = ctx.api;
     const sub = data[1];
+
+    // Toast on access toggle; otherwise clear loading state immediately
+    if (sub === 'setaccess') {
+        const level = data[3] === 'none' ? 'none' : 'unlimited';
+        await ctx
+            .answerCallbackQuery({
+                text: level === 'none' ? '🚫 Доступ заборонено' : '✅ Безліміт надано'
+            })
+            .catch(() => {});
+    } else {
+        await ctx.answerCallbackQuery().catch(() => {});
+    }
 
     try {
         if (sub === 'menu') {
@@ -767,64 +890,47 @@ async function handleAdminCallback(ctx) {
         }
 
         if (sub === 'access') {
-            // List first 30 users with toggle buttons
-            const users = await User.find({}).sort({ lastActivityAt: -1 }).limit(30).lean();
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
             if (!users.length) {
-                await api.sendMessage(chatId, '📭 Немає користувачів.', { parse_mode: 'HTML' });
+                await editCallbackMessage(api, ctx, '📭 Немає користувачів.');
                 return true;
             }
-            const rows = users.map((u) => {
-                const label = u.username || u.firstName || String(u.telegramId);
-                const cur = accessLabel(u.accessLevel || 'unlimited');
-                const next = (u.accessLevel || 'unlimited') === 'none' ? 'unlimited' : 'none';
-                const nextLabel = next === 'none' ? '🚫 Заборонити' : '✅ Дати безліміт';
-                return [
-                    {
-                        text: `${label} · ${cur}`,
-                        callback_data: `adm|noop|${u.telegramId}`
-                    },
-                    {
-                        text: nextLabel,
-                        callback_data: `adm|setaccess|${u.telegramId}|${next}`
-                    }
-                ];
-            });
-            rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
-            await api.sendMessage(chatId, '🔑 <b>Змінити доступ</b> (останні 30):', {
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: rows }
-            });
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildAccessPage(users, safePage);
+            await editCallbackMessage(api, ctx, text, { reply_markup });
             return true;
         }
 
         if (sub === 'setaccess') {
             const tgId = parseInt(data[2], 10);
             const level = data[3] === 'none' ? 'none' : 'unlimited';
+            const page = data[4] != null && data[4] !== '' ? parseInt(data[4], 10) : 0;
             const updated = await User.findOneAndUpdate(
                 { telegramId: tgId },
                 { $set: { accessLevel: level } },
                 { new: true }
             );
             if (!updated) {
-                await api.sendMessage(chatId, `❌ Користувача ${tgId} не знайдено.`);
+                await editCallbackMessage(api, ctx, `❌ Користувача ${tgId} не знайдено.`);
                 return true;
             }
-            await api.sendMessage(
-                chatId,
-                `✅ Доступ оновлено:\n${formatUserLine(updated)}`,
-                { parse_mode: 'HTML' }
-            );
+            // Refresh the same page in-place (button flips, no separate "оновлено" message)
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildAccessPage(users, safePage);
+            await editCallbackMessage(api, ctx, text, { reply_markup });
             return true;
         }
 
         if (sub === 'broadcast_evening') {
-            await api.sendMessage(
-                chatId,
+            await editCallbackMessage(
+                api,
+                ctx,
                 '🌆 <b>Розсилка вечірнього прогнозу</b>\n\n' +
                     'Щоб запустити зараз, натисніть «Підтвердити».\n' +
                     'Це викличе той самий cron, що й щовечора (лише для користувачів з увімкненим вечірнім прогнозом і access ≠ none).',
                 {
-                    parse_mode: 'HTML',
                     reply_markup: {
                         inline_keyboard: [
                             [
@@ -841,14 +947,17 @@ async function handleAdminCallback(ctx) {
         if (sub === 'do_broadcast') {
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast.'
                 );
                 return true;
             }
-            await api.sendMessage(chatId, '⏳ Запускаю розсилку…');
+            await editCallbackMessage(api, ctx, '⏳ Запускаю розсилку…');
             try {
                 const axios = require('axios');
                 const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-forecast`;
@@ -857,32 +966,40 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
+                await editMessageById(
+                    api,
                     chatId,
+                    msgId,
                     `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
                         `┃  🌆 <b>Розсилка вечір. прогнозу</b>\n` +
                         `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
                         `Статус: <code>${res.status}</code>\n` +
                         `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                    {},
+                    threadId
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
 
         // ─── Вечірній тест (cron-forecast-test, TEST_USER_ID) ───
         if (sub === 'evening_test') {
-            await api.sendMessage(
-                chatId,
+            await editCallbackMessage(
+                api,
+                ctx,
                 '🧪 <b>Вечірній тест</b>\n\n' +
                     'Запускає <code>cron-forecast-test</code> для користувача з <code>TEST_USER_ID</code> (env).\n' +
                     'Підтвердіть запуск:',
                 {
-                    parse_mode: 'HTML',
                     reply_markup: {
                         inline_keyboard: [
                             [
@@ -899,14 +1016,17 @@ async function handleAdminCallback(ctx) {
         if (sub === 'do_evening_test') {
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast-test.'
                 );
                 return true;
             }
-            await api.sendMessage(chatId, '⏳ Запускаю вечірній тест…');
+            await editCallbackMessage(api, ctx, '⏳ Запускаю вечірній тест…');
             try {
                 const axios = require('axios');
                 const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-forecast-test`;
@@ -915,19 +1035,27 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
+                await editMessageById(
+                    api,
                     chatId,
+                    msgId,
                     `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
                         `┃  🧪 <b>Вечірній тест</b>\n` +
                         `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
                         `Статус: <code>${res.status}</code>\n` +
                         `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                    {},
+                    threadId
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
@@ -946,9 +1074,11 @@ async function handleAdminCallback(ctx) {
                 .lean();
 
             if (!users.length) {
-                await api.sendMessage(chatId, '📭 Немає підходящих користувачів для вечірнього прогнозу.', {
-                    parse_mode: 'HTML'
-                });
+                await editCallbackMessage(
+                    api,
+                    ctx,
+                    '📭 Немає підходящих користувачів для вечірнього прогнозу.'
+                );
                 return true;
             }
 
@@ -965,37 +1095,38 @@ async function handleAdminCallback(ctx) {
             });
             rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
 
-            await api.sendMessage(
-                chatId,
+            await editCallbackMessage(
+                api,
+                ctx,
                 '🎯 <b>Вечірній крон обраним</b>\n\n' +
                     'Оберіть користувача — буде надіслано вечірній прогноз лише йому:\n',
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: rows }
-                }
+                { reply_markup: { inline_keyboard: rows } }
             );
             return true;
         }
 
         if (sub === 'do_evening_one') {
             const targetId = data[2];
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!targetId) {
-                await api.sendMessage(chatId, '❌ Не вказано ID користувача.');
+                await editCallbackMessage(api, ctx, '❌ Не вказано ID користувача.');
                 return true;
             }
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast.'
                 );
                 return true;
             }
-            await api.sendMessage(
-                chatId,
-                `⏳ Запускаю вечірній прогноз для <code>${escapeHtml(targetId)}</code>…`,
-                { parse_mode: 'HTML' }
+            await editCallbackMessage(
+                api,
+                ctx,
+                `⏳ Запускаю вечірній прогноз для <code>${escapeHtml(targetId)}</code>…`
             );
             try {
                 const axios = require('axios');
@@ -1005,33 +1136,41 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
+                await editMessageById(
+                    api,
                     chatId,
+                    msgId,
                     `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
                         `┃  🎯 <b>Вечірній крон (1 юзер)</b>\n` +
                         `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
                         `Користувач: <code>${escapeHtml(targetId)}</code>\n` +
                         `Статус: <code>${res.status}</code>\n` +
                         `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                    {},
+                    threadId
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
 
         // ─── Крон чек (light) ───
         if (sub === 'cron_check') {
-            await api.sendMessage(
-                chatId,
+            await editCallbackMessage(
+                api,
+                ctx,
                 '🔍 <b>Крон чек (light)</b>\n\n' +
                     'Запускає <code>cron-check-light</code> — легка перевірка алертів без Weatherbit.\n' +
                     'Підтвердіть запуск:',
                 {
-                    parse_mode: 'HTML',
                     reply_markup: {
                         inline_keyboard: [
                             [
@@ -1048,14 +1187,17 @@ async function handleAdminCallback(ctx) {
         if (sub === 'do_cron_check') {
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-check-light.'
                 );
                 return true;
             }
-            await api.sendMessage(chatId, '⏳ Запускаю крон чек (light)…');
+            await editCallbackMessage(api, ctx, '⏳ Запускаю крон чек (light)…');
             try {
                 const axios = require('axios');
                 const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-check-light`;
@@ -1064,19 +1206,27 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
+                await editMessageById(
+                    api,
                     chatId,
+                    msgId,
                     `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
                         `┃  🔍 <b>Крон чек (light)</b>\n` +
                         `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
                         `Статус: <code>${res.status}</code>\n` +
                         `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                    {},
+                    threadId
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
