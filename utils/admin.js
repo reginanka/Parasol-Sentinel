@@ -7,7 +7,10 @@
  *    ADMIN_CHAT_ID = -100…
  *    TOPIC_GENERAL = 1     → меню / кнопки
  *    TOPIC_LOGS    = 123   → cron-логи (logger.js)
- *    TOPIC_USERS   = 456   → notify про юзерів + reply → юзеру
+ *    TOPIC_USERS   = 456   → лише текст юзера (повідомлення → відповідь бота)
+ *    TOPIC_ACTIONS = 789   → кліки / вибір / callback юзера (ACTIONS_USERS)
+ *    ERROR_ID / TOPIC_ERRORS → лише помилки (окрема гілка)
+ *    TOPIC_HISTORY / HISTORY_MSG_ID → журнал вихідних і розмов
  */
 
 const User = require('../models/User');
@@ -23,13 +26,30 @@ function isAdminChat(chatId) {
     return String(chatId).trim() === String(id).trim();
 }
 
-/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS */
+/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS / TOPIC_ACTIONS / TOPIC_HISTORY
+ *  HISTORY also accepts HISTORY_MSG_ID (Vercel secret alias).
+ *  ERRORS also accepts ERROR_ID / TOPIC_ERRORS.
+ *  ACTIONS also accepts TOPIC_ACTIONS_USERS / ACTIONS_USERS.
+ */
 function topicId(name) {
-    const key = `TOPIC_${String(name).toUpperCase()}`;
-    const raw = process.env[key];
-    if (raw == null || raw === '') return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
+    const upper = String(name).toUpperCase();
+    const keys = [`TOPIC_${upper}`];
+    if (upper === 'HISTORY') {
+        keys.push('HISTORY_MSG_ID', 'History_msg_ID', 'HISTORY_TOPIC_ID');
+    }
+    if (upper === 'ERRORS' || upper === 'ERROR') {
+        keys.push('ERROR_ID', 'TOPIC_ERRORS', 'ERRORS_ID');
+    }
+    if (upper === 'ACTIONS') {
+        keys.push('TOPIC_ACTIONS_USERS', 'ACTIONS_USERS');
+    }
+    for (const key of keys) {
+        const raw = process.env[key];
+        if (raw == null || raw === '') continue;
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+    }
+    return null;
 }
 
 /** Options with message_thread_id when topic is configured */
@@ -278,6 +298,208 @@ function buildUserInfoHtml(u, from = null) {
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
+/** Назви метрик для людських описів у notify */
+const METRIC_NAMES_UA = {
+    condition: 'стан неба',
+    temp: 'температура',
+    precip: 'опади',
+    wind: 'вітер',
+    pressure: 'тиск',
+    dew: 'точка роси',
+    uv: 'УФ-індекс',
+    visibility: 'видимість',
+    soil0: 'ґрунт 0 см',
+    soil6: 'ґрунт 6 см',
+    moon: 'місяць',
+    sun: 'сонце',
+    aqi_now: 'AQI зараз',
+    aqi_main: 'AQI основний',
+    aqi_ext: 'AQI розширений',
+    aqi: 'якість повітря',
+    geomag: 'магнітні бурі'
+};
+
+/**
+ * Людський опис дії користувача для адмін-нотифікацій.
+ * userSnapshot — стан ДО обробки callback (notify викликається раніше toggle).
+ */
+function describeUserAction(actionText, extra = {}, userSnapshot = null) {
+    const cb = String(extra.callbackData || '').trim();
+    const parts = cb ? cb.split('|') : [];
+    const head = parts[0] || '';
+    const u = userSnapshot;
+
+    const helpTopics = {
+        uv: 'УФ-індекс',
+        wind: 'вітер',
+        press: 'тиск',
+        hum: 'вологість',
+        precip: 'опади',
+        dew: 'точка роси',
+        feels: 'відчувається як',
+        cloud: 'хмарність',
+        soil0: 'ґрунт 0 см',
+        soil6: 'ґрунт 6 см',
+        geomag: 'магнітні бурі',
+        how: 'як це працює'
+    };
+
+    const onOff = (willBeOn) => (willBeOn ? 'увімкнув' : 'вимкнув');
+
+    // Explicit known actions without callback payload
+    if (!cb) {
+        if (actionText === '/start') return 'натиснув /start (старт бота)';
+        if (actionText === 'текст' || actionText === 'text') {
+            return 'надіслав текст (пошук міста або повідомлення)';
+        }
+        return String(actionText || 'невідома дія');
+    }
+
+    // City pick: set|lat|lon
+    if (head === 'set' && parts.length >= 3) {
+        return `обрав місто на карті (${parts[1]}, ${parts[2]})`;
+    }
+
+    // Toggles that need user state (notify is BEFORE DB update → invert current)
+    if (cb === 'toggle_notifications') {
+        const wasOn = u ? u.notificationsEnabled !== false : null;
+        if (wasOn == null) return 'перемкнув усі сповіщення';
+        return `${onOff(!wasOn)} усі сповіщення`;
+    }
+    if (cb === 'toggle_evening_forecast') {
+        const wasOn = u ? u.eveningForecastEnabled !== false : null;
+        if (wasOn == null) return 'перемкнув вечірній прогноз';
+        return `${onOff(!wasOn)} вечірній прогноз`;
+    }
+
+    const map = {
+        open_settings: 'відкрив загальні налаштування',
+        open_help: 'відкрив допомогу',
+        forecast_menu: 'відкрив налаштування вечірнього прогнозу',
+        alert_settings: 'відкрив налаштування сповіщень',
+        change_city: 'хоче змінити місто',
+        delete_city: 'видалив місто',
+        crops_main: 'відкрив меню культур',
+        agro_forecast_menu: 'відкрив агро-прогноз',
+        agro_archive_menu: 'відкрив агро-архів',
+        agro_tomorrow: 'запросив агро-рекомендації на завтра',
+        agro_schedule_only: 'запросив графік обробок',
+        agro_5day: 'запросив 5-денний агро-прогноз',
+        geomag_fc: 'відкрив прогноз магнітних бур',
+        noop: 'натиснув службову кнопку (без дії)'
+    };
+    if (map[cb]) return map[cb];
+    if (parts.length === 1 && map[head]) return map[head];
+
+    if (head === 'forecast') {
+        if (parts[1] === 'days' && parts[2]) {
+            return `обрав ${parts[2]} дн. у вечірньому прогнозі`;
+        }
+        if (parts[1] === 'toggle' && parts[2]) {
+            const key = parts[2];
+            const m = METRIC_NAMES_UA[key] || key;
+            let metrics = u?.forecastSettings?.enabledMetrics || [];
+            if (metrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(key)) {
+                return `${onOff(false)} метрику «${m}» у вечірньому прогнозі`;
+            }
+            const wasOn = metrics.includes(key);
+            if (u) return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
+            return `перемкнув метрику «${m}» у вечірньому прогнозі`;
+        }
+    }
+
+    if (head === 'alert') {
+        if (parts[1] === 'toggle_all' && parts[2] === 'on') return 'увімкнув усі алерти';
+        if (parts[1] === 'toggle_all' && parts[2] === 'off') return 'вимкнув усі алерти';
+        if (parts[1] === 'toggle' && parts[2]) {
+            const names = {
+                temperature: 'температура',
+                precip: 'опади',
+                airQuality: 'якість повітря',
+                magneticStorm: 'магнітні бурі'
+            };
+            const key = parts[2];
+            const label = names[key] || key;
+            if (u?.alertTriggers && Object.prototype.hasOwnProperty.call(u.alertTriggers, key)) {
+                const wasOn = u.alertTriggers[key] !== false;
+                return `${onOff(!wasOn)} алерт «${label}»`;
+            }
+            return `перемкнув алерт «${label}»`;
+        }
+    }
+
+    if (head === 'geomag_mode') {
+        const modes = {
+            active: 'активний (усі зміни)',
+            quiet: 'тихий (лише сильніші за план)',
+            off: 'вимкнено'
+        };
+        return `встановив режим магнітних бур: ${modes[parts[1]] || parts[1]}`;
+    }
+
+    if (head === 'unit') {
+        if (parts[1] === 'wind') {
+            return parts[2] === 'kmh' ? 'одиниці вітру: км/год' : 'одиниці вітру: м/с';
+        }
+        if (parts[1] === 'pressure') {
+            return parts[2] === 'hpa' ? 'одиниці тиску: гПа' : 'одиниці тиску: мм рт. ст.';
+        }
+        if (parts[1] === 'temp') {
+            return parts[2] === 'f' ? 'температура: °F' : 'температура: °C';
+        }
+    }
+
+    if (head === 'help') {
+        const t = helpTopics[parts[1]] || parts[1];
+        return `читає довідку: ${t}`;
+    }
+
+    if (head === 'crops_cat') return `обрав категорію культур: ${parts[1] || '—'}`;
+    if (head === 'crops_toggle') {
+        const cropId = parts[2] || '?';
+        const crops = Array.isArray(u?.crops) ? u.crops : [];
+        const wasOn = crops.includes(cropId) || crops.includes(`${parts[1]}|${cropId}`);
+        if (u) return `${onOff(!wasOn)} культуру «${cropId}»`;
+        return `перемкнув культуру (${parts[1] || '?'}/${cropId})`;
+    }
+
+    if (head === 'archive') {
+        const periods = {
+            '7': '7 днів',
+            '30': '30 днів',
+            '180': '6 місяців',
+            '365': 'рік',
+            custom: 'своя дата',
+            last_year: 'минулий рік'
+        };
+        return `агро-архів: ${periods[parts[1]] || parts[1]}`;
+    }
+
+    if (head === 'forecast_hourly') {
+        return parts[1]
+            ? `погодинний прогноз (Open-Meteo) на ${parts[1]}`
+            : 'погодинний прогноз (Open-Meteo)';
+    }
+    if (head === 'forecast_verify') {
+        return parts[1]
+            ? `перевірка прогнозу (Tomorrow.io) на ${parts[1]}`
+            : 'перевірка прогнозу (Tomorrow.io)';
+    }
+
+    // Fallback: human-ish without dumping only the word "callback"
+    if (actionText === 'callback') {
+        return `натиснув кнопку «${cb}»`;
+    }
+    return `${actionText}${cb ? ` (${cb})` : ''}`;
+}
+
+/**
+ * Notify admin about a user action.
+ * - Текст юзера (messageText / actionText === 'текст') → TOPIC_USERS
+ * - Кліки / callback / /start тощо → TOPIC_ACTIONS (ACTIONS_USERS)
+ * - Якщо send впав → дубль у TOPIC_ERRORS / ERROR_ID
+ * Людський опис через describeUserAction (не сирий "callback").
+ */
 async function notifyAdmin(from, actionText, extra = {}) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !from) return;
@@ -289,45 +511,96 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
 
+    // Стан ДО toggle (notify викликається раніше обробки callback у bot.js)
+    let userSnapshot = null;
+    if (extra.callbackData || actionText === 'callback') {
+        try {
+            userSnapshot = await User.findOne({ telegramId: from.id }).lean();
+        } catch (_) {
+            /* ignore */
+        }
+    }
+    const humanAction = describeUserAction(actionText, extra, userSnapshot);
+
+    // Текст, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
+    const isUserText =
+        Boolean(extra.messageText) ||
+        actionText === 'текст' ||
+        actionText === 'text';
+
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
         `ID: <code>${from.id}</code>\n` +
-        `⚡ Дія: ${escapeHtml(actionText)}`;
+        `⚡ Дія: ${escapeHtml(humanAction)}`;
 
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
     }
-    if (extra.callbackData) {
+    // Сирий callback — лише якщо опис його не «з'їв» (fallback «натиснув кнопку …»)
+    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
     }
     text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
 
-    const usersThread = threadOpts('USERS');
+    const destThread = isUserText ? threadOpts('USERS') : threadOpts('ACTIONS');
+    // fallback: якщо ACTIONS не налаштовано — старе поводження (USERS)
+    const thread =
+        !isUserText && destThread.message_thread_id == null
+            ? threadOpts('USERS')
+            : destThread;
+
     const markup = {
         inline_keyboard: [
             [{ text: '👤 Інфо про користувача', callback_data: `adm|userinfo|${from.id}` }]
         ]
     };
 
+    const sendOpts = {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: markup,
+        ...thread
+    };
+
+    let sentOk = false;
     try {
-        await bot.api.sendMessage(chatId, text, {
-            parse_mode: 'HTML',
-            disable_web_page_preview: true,
-            reply_markup: markup,
-            ...usersThread
-        });
+        await bot.api.sendMessage(chatId, text, sendOpts);
+        sentOk = true;
     } catch (e) {
         console.error('[admin] notify sendMessage failed:', e.message);
         try {
             await bot.api.sendMessage(
                 chatId,
-                `👤 ${name}\nID: ${from.id}\nДія: ${actionText}` +
+                `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
                     (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                { reply_markup: markup, ...usersThread }
+                { reply_markup: markup, ...thread }
             );
+            sentOk = true;
         } catch (e2) {
             console.error('[admin] notify fallback failed:', e2.message);
+        }
+    }
+
+    // Помилка відправки → пінг у гілку ERROR
+    if (!sentOk) {
+        const errThread = threadOpts('ERRORS');
+        const errText =
+            `🚨 <b>Notify failed</b>\n` +
+            `👤 ${escapeHtml(name)} · <code>${from.id}</code>\n` +
+            `Дія: ${escapeHtml(humanAction)}\n` +
+            (extra.messageText
+                ? `💬 ${escapeHtml(String(extra.messageText).slice(0, 300))}\n`
+                : '') +
+            `Гілка: ${isUserText ? 'USERS' : 'ACTIONS'}`;
+        try {
+            await bot.api.sendMessage(chatId, errText, {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                ...errThread
+            });
+        } catch (e3) {
+            console.error('[admin] error-topic notify failed:', e3.message);
         }
     }
 }
