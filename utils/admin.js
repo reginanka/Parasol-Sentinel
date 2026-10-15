@@ -60,21 +60,79 @@ function threadOpts(topicName) {
 }
 
 /**
- * Thread for admin UI replies: stay in the topic where the button was pressed.
- * General often omits message_thread_id — fall back to TOPIC_GENERAL, never USERS.
+ * Thread of the message where the admin pressed a button.
+ * Secrets (TOPIC_*) are for proactive sends — for callbacks Telegram already
+ * tells us the topic via message.message_thread_id.
  */
-function adminThreadFromCtx(ctx) {
-    const mid =
-        ctx?.callbackQuery?.message?.message_thread_id ??
-        ctx?.message?.message_thread_id ??
-        null;
-    if (mid != null && mid !== undefined) {
+function threadFromAdminCallback(ctx) {
+    const mid = ctx?.callbackQuery?.message?.message_thread_id;
+    if (mid != null && mid !== undefined && Number.isFinite(Number(mid))) {
         return { message_thread_id: Number(mid) };
     }
-    const gen = topicId('GENERAL');
-    if (gen != null) return { message_thread_id: gen };
     return {};
 }
+
+/**
+ * Update admin Rich Message in place. Never deletes.
+ * 1) try editMessageText / raw edit (same message_id)
+ * 2) if edit impossible — send a new message in the SAME topic (no delete)
+ */
+async function updateAdminRichMessage(api, chatId, html, ctx, replyMarkup = null) {
+    const msg = ctx?.callbackQuery?.message;
+    const messageId = msg?.message_id;
+    const thr = threadFromAdminCallback(ctx);
+    const optsBase = { ...thr };
+    if (replyMarkup) optsBase.reply_markup = replyMarkup;
+
+    if (messageId != null) {
+        // 1) Ordinary edit (works if message was normal HTML)
+        try {
+            await api.editMessageText(chatId, messageId, html, {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+            });
+            return { ok: true, mode: 'edit' };
+        } catch (_) { /* rich / unsupported tags */ }
+
+        // 2) Raw edit without parse_mode (some clients accept rich body)
+        try {
+            await api.raw.editMessageText({
+                chat_id: chatId,
+                message_id: messageId,
+                text: html,
+                skip_entity_detection: true,
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+            });
+            return { ok: true, mode: 'edit_raw' };
+        } catch (e2) {
+            console.warn('[admin] edit rich in-place failed:', e2.message);
+        }
+    }
+
+    // 3) Cannot edit → send new in the same topic only (no delete of old)
+    try {
+        await api.sendRichMessage(
+            chatId,
+            { html, skip_entity_detection: true },
+            optsBase
+        );
+        return { ok: true, mode: 'send' };
+    } catch (e3) {
+        // Last resort: no thread id (General root)
+        if (thr.message_thread_id != null) {
+            await api.sendRichMessage(
+                chatId,
+                { html, skip_entity_detection: true },
+                replyMarkup ? { reply_markup: replyMarkup } : {}
+            );
+            return { ok: true, mode: 'send_root' };
+        }
+        throw e3;
+    }
+}
+
+
 
 
 function displayName(from) {
@@ -1290,34 +1348,10 @@ async function handleAdminCallback(ctx) {
 <p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
 `.trim();
 
-            const thr = adminThreadFromCtx(ctx);
-            const originId = ctx.callbackQuery?.message?.message_id;
-            if (originId != null) {
-                try { await api.deleteMessage(chatId, originId); } catch (_) {}
-            }
-            try {
-                await api.sendRichMessage(chatId, {
-                    html,
-                    skip_entity_detection: true
-                }, thr);
-            } catch (richErr) {
-                console.warn('[admin] stats sendRichMessage failed, fallback:', richErr.message);
-                // Plain fallback without tables
-                const plain =
-                    `📊 <b>Аналітика Parasol Sentinel</b>\n` +
-                    `<i>${escapeHtml(monthLabel)}</i>\n\n` +
-                    `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
-                    `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
-                    `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
-                    `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
-                    `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
-                    `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
-                    `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
-                await api.sendMessage(chatId, plain, {
-                    parse_mode: 'HTML',
-                    disable_web_page_preview: true
-                });
-            }
+                        const refreshKb = {
+                inline_keyboard: [[{ text: '🔄 Оновити', callback_data: 'adm|stats' }]]
+            };
+            await updateAdminRichMessage(api, chatId, html, ctx, refreshKb);
             return true;
         }
 
@@ -1639,7 +1673,7 @@ async function handleAdminCallback(ctx) {
         if (sub === 'userinfo') {
             const tgId = data[2] ? Number(data[2]) : null;
             if (!tgId || Number.isNaN(tgId)) {
-                await api.sendMessage(chatId, '❌ Невірний ID користувача.', adminThreadFromCtx(ctx));
+                await api.sendMessage(chatId, '❌ Невірний ID користувача.', threadFromAdminCallback(ctx));
                 return true;
             }
             const u = await User.findOne({ telegramId: tgId }).lean();
@@ -1647,44 +1681,19 @@ async function handleAdminCallback(ctx) {
                 await api.sendMessage(
                     chatId,
                     `❌ Користувача <code>${tgId}</code> немає в БД.`,
-                    { parse_mode: 'HTML', ...adminThreadFromCtx(ctx) }
+                    { parse_mode: 'HTML', ...threadFromAdminCallback(ctx) }
                 );
                 return true;
             }
             const html = buildUserInfoHtml(u);
-            const thr = adminThreadFromCtx(ctx);
-            const originMsg = ctx.callbackQuery?.message;
-            const originId = originMsg?.message_id;
-            // Rich HTML (<h1>…) cannot use editMessageText / parse_mode HTML —
-            // delete old card (if any) and send Rich Message in the SAME topic.
-            if (originId != null) {
-                try {
-                    await api.deleteMessage(chatId, originId);
-                } catch (_) { /* ignore */ }
-            }
-            try {
-                await api.sendRichMessage(
-                    chatId,
-                    { html, skip_entity_detection: true },
-                    thr
-                );
-            } catch (richErr) {
-                console.warn('[admin] userinfo rich failed:', richErr.message);
-                const plain = String(html)
-                    .replace(/<h1[^>]*>/gi, '👤 ')
-                    .replace(/<\/h1>/gi, '\n')
-                    .replace(/<h3[^>]*>/gi, '\n')
-                    .replace(/<\/h3>/gi, '\n')
-                    .replace(/<br\s*\/?\s*>/gi, '\n')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/[ \t]+/g, ' ')
-                    .replace(/\n{3,}/g, '\n\n')
-                    .trim();
-                await api.sendMessage(chatId, plain.slice(0, 4000), {
-                    disable_web_page_preview: true,
-                    ...thr
-                });
-            }
+            const tgIdForBtn = u.telegramId || tgId;
+            const refreshKb = {
+                inline_keyboard: [[
+                    { text: '🔄 Оновити', callback_data: `adm|userinfo|${tgIdForBtn}` },
+                    { text: '◀️ Меню', callback_data: 'adm|menu' }
+                ]]
+            };
+            await updateAdminRichMessage(api, chatId, html, ctx, refreshKb);
             try {
                 await ctx.answerCallbackQuery({ text: '🔄 Оновлено' });
             } catch (_) { /* ignore */ }
@@ -1708,7 +1717,15 @@ async function handleAdminCallback(ctx) {
         }
     } catch (e) {
         console.error('[admin] callback error:', e);
-        await api.sendMessage(chatId, `❌ Помилка: ${escapeHtml(e.message)}`, { parse_mode: 'HTML' }).catch(() => {});
+        try {
+            await sendInAdminThread(
+                api,
+                chatId,
+                `❌ Помилка: ${escapeHtml(e.message)}`,
+                { parse_mode: 'HTML' },
+                ctx?.callbackQuery?.message?.message_thread_id
+            );
+        } catch (_) { /* ignore */ }
     }
     return true;
 }
