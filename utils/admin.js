@@ -615,42 +615,55 @@ async function notifyAdmin(from, actionText, extra = {}) {
         ]
     };
 
-    let sentOk = false;
+        let sentOk = false;
+    let sentMessageId = null;
 
     // 1) Rich Message — details розгортається тапом
     try {
-        await bot.api.sendRichMessage(
+        const sent = await bot.api.sendRichMessage(
             chatId,
             { html: richHtml, skip_entity_detection: true },
             { reply_markup: markup, ...thread }
         );
+        sentMessageId = sent?.message_id ?? sent?.message_id;
         sentOk = true;
     } catch (richErr) {
         console.warn('[admin] notify sendRichMessage failed, HTML fallback:', richErr.message);
         try {
-            await bot.api.sendMessage(chatId, text, {
+            const sent = await bot.api.sendMessage(chatId, text, {
                 parse_mode: 'HTML',
                 disable_web_page_preview: true,
                 reply_markup: markup,
                 ...thread
             });
+            sentMessageId = sent?.message_id;
             sentOk = true;
         } catch (e) {
             console.error('[admin] notify sendMessage failed:', e.message);
             try {
-                await bot.api.sendMessage(
+                const sent = await bot.api.sendMessage(
                     chatId,
-                    `👤 ${name}\nID: ${from.id} · #u${from.id}\nДія: ${humanAction}` +
+                    `👤 ${name}
+ID: ${from.id} · #u${from.id}
+Дія: ${humanAction}` +
                         (extra.messageText
-                            ? `\n\n${String(extra.messageText).slice(0, 500)}`
+                            ? `
+
+${String(extra.messageText).slice(0, 500)}`
                             : ''),
                     { reply_markup: markup, ...thread }
                 );
+                sentMessageId = sent?.message_id;
                 sentOk = true;
             } catch (e2) {
                 console.error('[admin] notify fallback failed:', e2.message);
             }
         }
+    }
+
+    // Map message_id → user for reliable Reply (esp. Rich Message)
+    if (sentOk && sentMessageId != null) {
+        await rememberNotifyMessage(from.id, sentMessageId);
     }
 
     // Помилка відправки → пінг у гілку ERROR
@@ -755,6 +768,58 @@ function extractUserIdFromNotifyText(raw) {
 
     return null;
 }
+
+/**
+ * Remember admin-notify message_id → user, so Reply works even for Rich Messages
+ * (where text/ID may be missing in reply_to).
+ * Keeps last 40 ids per user.
+ */
+async function rememberNotifyMessage(telegramId, messageId) {
+    if (!telegramId || messageId == null) return;
+    try {
+        await User.updateOne(
+            { telegramId: Number(telegramId) },
+            {
+                $push: {
+                    'supportHistory.notifyMessageIds': {
+                        $each: [Number(messageId)],
+                        $slice: -40
+                    }
+                },
+                $set: { 'supportHistory.updatedAt': new Date() }
+            },
+            { upsert: false }
+        );
+    } catch (e) {
+        console.warn('[admin] rememberNotifyMessage failed:', e.message);
+    }
+}
+
+/**
+ * Resolve target user id from a reply_to message:
+ * 1) text markers #u / ID:
+ * 2) DB map by message_id (reliable for Rich Message)
+ */
+async function resolveTargetUserId(replyTo) {
+    const fromText = extractUserIdFromNotifyText(replyTo);
+    if (fromText) return fromText;
+
+    const mid = replyTo && replyTo.message_id;
+    if (mid == null) return null;
+
+    try {
+        const u = await User.findOne({
+            'supportHistory.notifyMessageIds': Number(mid)
+        })
+            .select('telegramId')
+            .lean();
+        if (u && u.telegramId) return Number(u.telegramId);
+    } catch (e) {
+        console.warn('[admin] resolveTargetUserId lookup failed:', e.message);
+    }
+    return null;
+}
+
 
 
 async function touchUserProfile(from, lang = 'uk') {
@@ -1991,7 +2056,7 @@ async function handleAdminChannelText(ctx) {
             return true;
         }
 
-        const targetId = extractUserIdFromNotifyText(replyTo);
+        const targetId = await resolveTargetUserId(replyTo);
         if (targetId) {
             try {
                 const kind = await sendAdminReplyToUser(api, targetId, msg);
