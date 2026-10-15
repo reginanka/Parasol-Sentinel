@@ -78,6 +78,9 @@ const UserSchema = new mongoose.Schema({
      */
     supportHistory: {
         messageId: { type: Number, default: null },
+        fileMessageId: { type: Number, default: null },
+        /** Recent admin-notify Telegram message_ids → for Reply resolution */
+        notifyMessageIds: { type: [Number], default: [] },
         transcript: { type: String, default: '' },
         assetSeq: { type: Number, default: 0 },
         updatedAt: { type: Date, default: null }
