@@ -500,6 +500,12 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
  * - Якщо send впав → дубль у TOPIC_ERRORS / ERROR_ID
  * Людський опис через describeUserAction (не сирий "callback").
  */
+/**
+ * Notify admin about a user action.
+ * - Текст юзера → TOPIC_USERS (+ Rich details з хвостом переписки)
+ * - Кліки / callback / /start → TOPIC_ACTIONS
+ * - Якщо send впав → дубль у TOPIC_ERRORS / ERROR_ID
+ */
 async function notifyAdmin(from, actionText, extra = {}) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !from) return;
@@ -511,23 +517,50 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
 
-    // Стан ДО toggle (notify викликається раніше обробки callback у bot.js)
-    let userSnapshot = null;
-    if (extra.callbackData || actionText === 'callback') {
-        try {
-            userSnapshot = await User.findOne({ telegramId: from.id }).lean();
-        } catch (_) {
-            /* ignore */
-        }
-    }
-    const humanAction = describeUserAction(actionText, extra, userSnapshot);
-
-    // Текст, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
+    // Текст юзера → USERS; кліки → ACTIONS
     const isUserText =
         Boolean(extra.messageText) ||
         actionText === 'текст' ||
         actionText === 'text';
 
+    // Snapshot: для callback (toggle state) і для хвоста переписки
+    let userSnapshot = null;
+    try {
+        userSnapshot = await User.findOne({ telegramId: from.id }).lean();
+    } catch (_) {
+        /* ignore */
+    }
+    const humanAction = describeUserAction(actionText, extra, userSnapshot);
+
+    // Хвіст переписки з supportHistory (для details)
+    const DETAILS_LIMIT = 1800;
+    let transcriptTail = '';
+    const fullTranscript =
+        (userSnapshot &&
+            userSnapshot.supportHistory &&
+            userSnapshot.supportHistory.transcript) ||
+        '';
+    // Для текстового notify — додамо поточне повідомлення, якщо його ще немає в transcript
+    // (appendSupportConversation викликається після notify)
+    let previewTranscript = fullTranscript;
+    if (extra.messageText) {
+        const curLine = formatSupportLine(
+            '👤 Юзер',
+            null,
+            String(extra.messageText).slice(0, 500)
+        );
+        previewTranscript = fullTranscript
+            ? `${fullTranscript}\n${curLine}`
+            : curLine;
+    }
+    if (previewTranscript) {
+        transcriptTail =
+            previewTranscript.length > DETAILS_LIMIT
+                ? '…\n' + previewTranscript.slice(previewTranscript.length - DETAILS_LIMIT)
+                : previewTranscript;
+    }
+
+    // --- Plain HTML (sendMessage fallback) ---
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
@@ -537,14 +570,40 @@ async function notifyAdmin(from, actionText, extra = {}) {
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
     }
-    // Сирий callback — лише якщо опис його не «з'їв» (fallback «натиснув кнопку …»)
     if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
     }
+    if (transcriptTail && isUserText) {
+        // у звичайному HTML details може не розгортатись — короткий прев'ю
+        const short = transcriptTail.length > 400
+            ? '…\n' + transcriptTail.slice(transcriptTail.length - 400)
+            : transcriptTail;
+        text += `\n\n💬 <i>Остання переписка:</i>\n<code>${escapeHtml(short)}</code>`;
+    }
     text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
 
+    // --- Rich Message (details collapsible) ---
+    let richHtml =
+        `<p>👤 <b>${escapeHtml(name)}</b><br/>` +
+        `${escapeHtml(uname)} · ID: <code>${from.id}</code></p>` +
+        `<p>⚡ <b>Дія:</b> ${escapeHtml(humanAction)}</p>`;
+    if (extra.messageText) {
+        richHtml += `<p>💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}</p>`;
+    }
+    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
+        richHtml += `<p>🔘 <code>${escapeHtml(extra.callbackData)}</code></p>`;
+    }
+    if (transcriptTail) {
+        const lines = transcriptTail.split('\n').length;
+        richHtml +=
+            `<details>` +
+            `<summary>💬 Остання переписка (${lines} рядків — натисни)</summary>` +
+            `<pre>${escapeHtml(transcriptTail)}</pre>` +
+            `</details>`;
+    }
+    richHtml += `<p><i>↩️ Reply → надіслати юзеру</i></p>`;
+
     const destThread = isUserText ? threadOpts('USERS') : threadOpts('ACTIONS');
-    // fallback: якщо ACTIONS не налаштовано — старе поводження (USERS)
     const thread =
         !isUserText && destThread.message_thread_id == null
             ? threadOpts('USERS')
@@ -556,29 +615,41 @@ async function notifyAdmin(from, actionText, extra = {}) {
         ]
     };
 
-    const sendOpts = {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        reply_markup: markup,
-        ...thread
-    };
-
     let sentOk = false;
+
+    // 1) Rich Message — details розгортається тапом
     try {
-        await bot.api.sendMessage(chatId, text, sendOpts);
+        await bot.api.sendRichMessage(
+            chatId,
+            { html: richHtml, skip_entity_detection: true },
+            { reply_markup: markup, ...thread }
+        );
         sentOk = true;
-    } catch (e) {
-        console.error('[admin] notify sendMessage failed:', e.message);
+    } catch (richErr) {
+        console.warn('[admin] notify sendRichMessage failed, HTML fallback:', richErr.message);
         try {
-            await bot.api.sendMessage(
-                chatId,
-                `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
-                    (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                { reply_markup: markup, ...thread }
-            );
+            await bot.api.sendMessage(chatId, text, {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                reply_markup: markup,
+                ...thread
+            });
             sentOk = true;
-        } catch (e2) {
-            console.error('[admin] notify fallback failed:', e2.message);
+        } catch (e) {
+            console.error('[admin] notify sendMessage failed:', e.message);
+            try {
+                await bot.api.sendMessage(
+                    chatId,
+                    `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
+                        (extra.messageText
+                            ? `\n\n${String(extra.messageText).slice(0, 500)}`
+                            : ''),
+                    { reply_markup: markup, ...thread }
+                );
+                sentOk = true;
+            } catch (e2) {
+                console.error('[admin] notify fallback failed:', e2.message);
+            }
         }
     }
 
@@ -607,7 +678,12 @@ async function notifyAdmin(from, actionText, extra = {}) {
     // Текст юзера → картка розмови в HISTORY
     if (extra.messageText) {
         try {
-            await appendSupportConversation(bot.api, from.id, '👤 Юзер', String(extra.messageText));
+            await appendSupportConversation(
+                bot.api,
+                from.id,
+                '👤 Юзер',
+                String(extra.messageText)
+            );
         } catch (e) {
             console.warn('[admin] support log from notify failed:', e.message);
         }
