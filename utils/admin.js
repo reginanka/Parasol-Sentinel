@@ -181,9 +181,102 @@ function adminKeyboard() {
     };
 }
 
+function fmtUaDate(d) {
+    if (!d) return '—';
+    try {
+        return new Date(d).toLocaleString('uk-UA', {
+            timeZone: 'Europe/Kyiv',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch {
+        return '—';
+    }
+}
+
+/** Full user profile as Rich Message HTML (tables). */
+function buildUserInfoHtml(u, from = null) {
+    const tgId = u?.telegramId || from?.id || '—';
+    const name =
+        (from && displayName(from)) ||
+        (u?.username ? u.username : null) ||
+        [u?.firstName, u?.lastName].filter(Boolean).join(' ') ||
+        `user_${tgId}`;
+    const uname = u?.username
+        ? `@${u.username}`
+        : from?.username
+          ? `@${from.username}`
+          : 'без @username';
+    const tgLang = from?.language_code || u?.languageCode || '—';
+    const access = accessLabel(u?.accessLevel || 'unlimited');
+    const accessIcon = (u?.accessLevel || 'unlimited') === 'none' ? '🚫' : '✅';
+    const botLang = u?.language || tgLang || '—';
+    const city = u?.city || 'не обрано';
+    const geo =
+        u?.lat != null && u?.lon != null
+            ? `${Number(u.lat).toFixed(5)}, ${Number(u.lon).toFixed(5)}`
+            : '—';
+    const tz = u?.timezone || '—';
+    const usage = u?.usage || {};
+    const eveningM = usage.eveningThisMonth || 0;
+    const alertsM = usage.alertsThisMonth || 0;
+    const eveningT = usage.eveningTotal || 0;
+    const alertsT = usage.alertsTotal || 0;
+    const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
+    const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
+    const geomag = u?.geomagMode || 'quiet';
+    const cropsN = Array.isArray(u?.crops) ? u.crops.length : 0;
+    const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
+
+    return `
+<h1>👤 ${escapeHtml(name)}</h1>
+<p>${escapeHtml(uname)} · ID: <code>${tgId}</code></p>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Поле</th><th align="left">Значення</th></tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">Доступ</td><td align="left">${accessIcon} ${escapeHtml(access)}</td></tr>
+    <tr><td align="left">Мова TG / бот</td><td align="left"><code>${escapeHtml(tgLang)}</code> / <code>${escapeHtml(botLang)}</code></td></tr>
+    <tr><td align="left">Місто</td><td align="left">${escapeHtml(city)}</td></tr>
+    <tr><td align="left">Гео</td><td align="left"><code>${geo}</code></td></tr>
+    <tr><td align="left">TZ</td><td align="left"><code>${escapeHtml(tz)}</code></td></tr>
+    <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
+    <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
+    <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
+    <tr><td align="left">Geomag</td><td align="left"><code>${escapeHtml(geomag)}</code></td></tr>
+    <tr><td align="left">Культур</td><td align="left"><b>${cropsN}</b></td></tr>
+  </tbody>
+</table>
+<h3>📬 Доставка</h3>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Показник</th><th align="center">Місяць</th><th align="center">Всього</th></tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">🌆 Вечірні</td><td align="center"><b>${eveningM}</b></td><td align="center"><b>${eveningT}</b></td></tr>
+    <tr><td align="left">🚨 Алерти</td><td align="center"><b>${alertsM}</b></td><td align="center"><b>${alertsT}</b></td></tr>
+    <tr><td align="left">Разом</td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
+  </tbody>
+</table>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Дата</th><th align="left">Значення</th></tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">📅 Реєстрація</td><td align="left">${escapeHtml(fmtUaDate(u?.createdAt))}</td></tr>
+    <tr><td align="left">🕐 Остання активність</td><td align="left">${escapeHtml(fmtUaDate(u?.lastActivityAt))}</td></tr>
+  </tbody>
+</table>
+`.trim();
+}
+
 /**
- * Notify admin channel about a user action.
- * Safe to call from any handler; no-ops if ADMIN_CHAT_ID missing.
+ * Notify admin about a user action — short card + button «Інфо».
+ * Reply to this message → send text/media to the user (ID: in text).
  */
 async function notifyAdmin(from, actionText, extra = {}) {
     const chatId = ADMIN_CHAT_ID();
@@ -195,89 +288,33 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const bot = getBot();
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
-    const tgLang = from.language_code || '—';
 
-    // Load profile from DB for rich card
-    let u = null;
-    try {
-        u = await User.findOne({ telegramId: from.id }).lean();
-    } catch (e) {
-        console.error('[admin] notify DB lookup failed:', e.message);
-    }
-
-    const fmtDate = (d) => {
-        if (!d) return '—';
-        try {
-            return new Date(d).toLocaleString('uk-UA', {
-                timeZone: 'Europe/Kyiv',
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        } catch {
-            return '—';
-        }
-    };
-
-    const access = accessLabel(u?.accessLevel || 'unlimited');
-    const accessIcon = (u?.accessLevel || 'unlimited') === 'none' ? '🚫' : '✅';
-    const botLang = u?.language || tgLang || '—';
-    const city = u?.city
-        ? `${u.city}${u.lat != null ? ` (${Number(u.lat).toFixed(2)}, ${Number(u.lon).toFixed(2)})` : ''}`
-        : 'не обрано';
-    const tz = u?.timezone || '—';
-    const usage = u?.usage || {};
-    const eveningM = usage.eveningThisMonth || 0;
-    const alertsM = usage.alertsThisMonth || 0;
-    const eveningT = usage.eveningTotal || 0;
-    const alertsT = usage.alertsTotal || 0;
-    const totalAct = eveningT + alertsT;
-    const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
-    const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
-    const geomag = u?.geomagMode || 'quiet';
-    const cropsN = Array.isArray(u?.crops) ? u.crops.length : 0;
-    const created = fmtDate(u?.createdAt);
-    const lastAct = fmtDate(u?.lastActivityAt);
-    const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
-
-    let html =
-        `<h3>👤 ${escapeHtml(name)}</h3>` +
-        `<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>` +
-        `<p>${accessIcon} <b>Доступ:</b> ${escapeHtml(access)}<br/>` +
-        `🌐 Мова: TG <code>${escapeHtml(tgLang)}</code> · бот <code>${escapeHtml(botLang)}</code><br/>` +
-        `📍 <b>Місто:</b> ${escapeHtml(city)}<br/>` +
-        `🕒 TZ: <code>${escapeHtml(tz)}</code> · зараз ~ <b>${temp}</b></p>` +
-        `<h3>Статус</h3>` +
-        `<p>${notif} · ${evening}<br/>` +
-        `🧲 geomag: <code>${escapeHtml(geomag)}</code> · 🌱 культур: <b>${cropsN}</b></p>` +
-        `<p><b>Цього місяця</b> — вечірніх: <b>${eveningM}</b> · алертів: <b>${alertsM}</b><br/>` +
-        `<b>За весь час</b> — вечірніх: <b>${eveningT}</b> · алертів: <b>${alertsT}</b> · разом: <b>${totalAct}</b></p>` +
-        `<p>📅 реєстрація: <code>${escapeHtml(created)}</code><br/>` +
-        `🕐 остання активність: <code>${escapeHtml(lastAct)}</code></p>` +
-        `<p>⚡ <b>Дія:</b> ${escapeHtml(actionText)}</p>`;
+    let text =
+        `👤 <b>${escapeHtml(name)}</b>\n` +
+        `${escapeHtml(uname)}\n` +
+        `ID: <code>${from.id}</code>\n` +
+        `⚡ Дія: ${escapeHtml(actionText)}`;
 
     if (extra.messageText) {
-        html +=
-            `<h3>💬 Повідомлення</h3>` +
-            `<blockquote>${escapeHtml(extra.messageText).slice(0, 800)}</blockquote>`;
+        text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
     }
     if (extra.callbackData) {
-        html += `<p>🔘 Callback: <code>${escapeHtml(extra.callbackData)}</code></p>`;
+        text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
     }
-
-    html += `<p><i>↩️ Відповісти на це повідомлення → надіслати юзеру</i></p>`;
-    // Plain "ID: …" MUST stay in message.text so reply_to works (rich often has empty .text)
-    html += `<p>ID: ${from.id}</p>`;
+    text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
 
     const usersThread = threadOpts('USERS');
+    const markup = {
+        inline_keyboard: [
+            [{ text: '👤 Інфо про користувача', callback_data: `adm|userinfo|${from.id}` }]
+        ]
+    };
 
-    // HTML sendMessage (not Rich) — so reply_to_message.text contains ID
     try {
-        await bot.api.sendMessage(chatId, html, {
+        await bot.api.sendMessage(chatId, text, {
             parse_mode: 'HTML',
             disable_web_page_preview: true,
+            reply_markup: markup,
             ...usersThread
         });
     } catch (e) {
@@ -285,9 +322,9 @@ async function notifyAdmin(from, actionText, extra = {}) {
         try {
             await bot.api.sendMessage(
                 chatId,
-                `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
+                `👤 ${name}\nID: ${from.id}\nДія: ${actionText}` +
                     (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                { disable_web_page_preview: true, ...usersThread }
+                { reply_markup: markup, ...usersThread }
             );
         } catch (e2) {
             console.error('[admin] notify fallback failed:', e2.message);
@@ -1039,6 +1076,37 @@ async function handleAdminCallback(ctx) {
             } catch (e) {
                 await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
                     parse_mode: 'HTML'
+                });
+            }
+            return true;
+        }
+
+        if (sub === 'userinfo') {
+            const tgId = data[2] ? Number(data[2]) : null;
+            if (!tgId || Number.isNaN(tgId)) {
+                await api.sendMessage(chatId, '❌ Невірний ID користувача.');
+                return true;
+            }
+            const u = await User.findOne({ telegramId: tgId }).lean();
+            if (!u) {
+                await api.sendMessage(chatId, `❌ Користувача <code>${tgId}</code> немає в БД.`, {
+                    parse_mode: 'HTML'
+                });
+                return true;
+            }
+            const html = buildUserInfoHtml(u);
+            const thr =
+                ctx.callbackQuery?.message?.message_thread_id != null
+                    ? { message_thread_id: ctx.callbackQuery.message.message_thread_id }
+                    : threadOpts('USERS');
+            try {
+                await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
+            } catch (richErr) {
+                console.warn('[admin] userinfo rich failed:', richErr.message);
+                await api.sendMessage(chatId, html, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true,
+                    ...thr
                 });
             }
             return true;
