@@ -640,12 +640,23 @@ const sendHelpMenu = async (ctx) => {
 // /help command
 bot.command('help', sendHelpMenu);
 
+// /admin /menu — admin panel in supergroup (works with privacy mode ON)
+bot.command(['admin', 'menu'], async (ctx) => {
+    try {
+        if (!isAdminChat(ctx.chat?.id)) return;
+        await connectDB();
+        await handleAdminChannelText(ctx);
+    } catch (e) {
+        console.error('[admin] /admin error:', e.message);
+    }
+});
+
 // Handle text messages (City search or Menu buttons)
 bot.on("message:text", async (ctx) => {
     const query = ctx.message.text.trim();
     const lang = getLang(ctx);
 
-    // Admin channel commands / menu
+    // Admin channel / forum group commands / menu
     if (isAdminChat(ctx.chat?.id)) {
         await connectDB();
         if (await handleAdminChannelText(ctx)) return;
