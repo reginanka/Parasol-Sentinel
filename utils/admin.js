@@ -1653,7 +1653,8 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
     let assetId = null;
     if (kind && rawMsg) {
         const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
-        assetId = `A${seq}`;
+        // Унікально між юзерами: A{telegramId}-{seq} (напр. A7574257471-1)
+        assetId = `A${telegramId}-${seq}`;
         if (!user.supportHistory) user.supportHistory = {};
         user.supportHistory.assetSeq = seq;
     }
