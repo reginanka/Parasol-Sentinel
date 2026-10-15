@@ -2058,7 +2058,8 @@ async function handleAdminCallback(ctx) {
             const cbMsg = ctx.callbackQuery?.message;
             const fromPicker = (cbMsg?.text || '').includes('Інфо про');
             const fromRefresh = isRefreshClick(cbMsg);
-            // Гілка: з повідомлення → GENERAL/USERS з env
+            // list/stats у General — без message_thread_id (інакше часто «thread not found»).
+            // thr лише для notify з гілки USERS.
             const preferredThr =
                 cbMsg?.message_thread_id != null
                     ? cbMsg.message_thread_id
@@ -2066,6 +2067,8 @@ async function handleAdminCallback(ctx) {
                       ? topicId('GENERAL')
                       : topicId('USERS');
             const thr =
+                !fromPicker &&
+                !fromRefresh &&
                 preferredThr != null &&
                 Number.isFinite(Number(preferredThr)) &&
                 Number(preferredThr) > 0
@@ -2085,12 +2088,20 @@ async function handleAdminCallback(ctx) {
                 await deleteCallbackMessage(api, ctx);
             }
 
+            // list/stats працюють БЕЗ thread. При «thread not found» — теж без thread.
             const sendRich = async (payload) => {
                 if (Object.keys(thr).length) {
-                    await api.sendRichMessage(chatId, payload, thr);
-                } else {
-                    await api.sendRichMessage(chatId, payload);
+                    try {
+                        return await api.sendRichMessage(chatId, payload, thr);
+                    } catch (e) {
+                        const msg = e?.message || String(e);
+                        if (!/thread not found|MESSAGE_THREAD|message thread/i.test(msg)) {
+                            throw e;
+                        }
+                        console.warn('[admin] userinfo rich: thread not found → no-thread');
+                    }
                 }
+                return await api.sendRichMessage(chatId, payload);
             };
 
             try {
@@ -2100,7 +2111,6 @@ async function handleAdminCallback(ctx) {
                 console.warn('[admin] userinfo rich+markup failed:', richErr.message);
                 try {
                     await sendRich(richOnly);
-                    // Fallback: смужка лише якщо markup на rich не прийняли
                     const name =
                         u.username
                             ? `@${u.username}`
