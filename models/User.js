@@ -86,6 +86,18 @@ const UserSchema = new mongoose.Schema({
         updatedAt: { type: Date, default: null }
     },
 
+    /**
+     * Text input mode for free-form messages:
+     *  - idle          — ignore free text (admin still notified)
+     *  - awaiting_city — Nominatim city search
+     *  - support       — accept as support ticket (after Help)
+     */
+    botMode: {
+        type: String,
+        enum: ['idle', 'awaiting_city', 'support'],
+        default: 'idle'
+    },
+
     lastActivityAt: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }
 });
