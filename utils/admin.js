@@ -278,12 +278,21 @@ function refreshMarkup(callbackData) {
     };
 }
 
-/** Клік по кнопці «Оновити» (не з головного меню). */
+/**
+ * Клік «🔄 Оновити» саме на картці аналітики / інфо.
+ * НЕ спрацьовує на головному меню («🔄 Оновити меню»).
+ * Ознака: одна кнопка в розмітці, текст рівно «🔄 Оновити» (без «меню»),
+ * callback_data = adm|stats або adm|userinfo|…
+ */
 function isRefreshClick(msg) {
     const rows = msg?.reply_markup?.inline_keyboard || [];
-    return rows.some((row) =>
-        (row || []).some((b) => String(b?.text || '').includes('Оновити'))
-    );
+    if (rows.length !== 1 || (rows[0] || []).length !== 1) return false;
+    const b = rows[0][0] || {};
+    const t = String(b.text || '').trim();
+    const cb = String(b.callback_data || '');
+    if (t.includes('меню') || t.includes('Меню')) return false;
+    if (t !== '🔄 Оновити' && !/^🔄\s*Оновити$/.test(t)) return false;
+    return cb === 'adm|stats' || /^adm\|userinfo\|\d+$/.test(cb);
 }
 
 function fmtUaDate(d) {
@@ -2747,21 +2756,22 @@ async function incrementUsage(telegramId, type) {
  * Ping ERROR topic when a user hits a handler error (button / text / etc.).
  * Also persists a short row in ErrorLog (source: user).
  * Never sends to ACTIONS/USERS — only ERRORS.
- * Debounced 8s so the same error is not duplicated.
+ * Debounce: uid + текст (без where) — один клік часто дає 2 виклики
+ * (reply-hook + catch у handler) з різним where.
  */
 const _recentUserErrors = new Map(); // key -> ts
 
 async function notifyUserError(from, err, extra = {}) {
-    const _msgKey = [
-        from && from.id,
-        extra && extra.where,
-        (err && err.message) || String(err || '')
-    ]
-        .join('|')
-        .slice(0, 240);
+    const _plainMsg = String((err && err.message) || err || '')
+        .replace(/^Error:\s*/i, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 200);
+    const _msgKey = `${from && from.id}|${_plainMsg}`;
     const _now = Date.now();
     const _prev = _recentUserErrors.get(_msgKey);
-    if (_prev && _now - _prev < 8000) return;
+    if (_prev && _now - _prev < 15000) return; // 15 с: один клік = одне в ERROR
     _recentUserErrors.set(_msgKey, _now);
     if (_recentUserErrors.size > 200) {
         for (const [k, ts] of _recentUserErrors) {
