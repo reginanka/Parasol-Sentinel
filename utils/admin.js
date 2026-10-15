@@ -16,6 +16,7 @@
 const User = require('../models/User');
 const ErrorLog = require('../models/ErrorLog');
 const getBot = require('./bot');
+const { CROPS_DATA } = require('./crops');
 
 const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
 
@@ -218,6 +219,35 @@ function fmtUaDate(d) {
 }
 
 /** Full user profile as Rich Message HTML (tables). */
+
+/** Crop ids → Ukrainian labels from CROPS_DATA */
+function formatCropsUa(crops) {
+    if (!Array.isArray(crops) || crops.length === 0) return '—';
+    const map = {};
+    try {
+        for (const cat of Object.values(CROPS_DATA || {})) {
+            const items = cat && cat.items;
+            if (!items) continue;
+            for (const [id, labels] of Object.entries(items)) {
+                map[id] = (labels && (labels.uk || labels.en)) || id;
+            }
+        }
+    } catch (_) { /* ignore */ }
+    const names = crops.map((raw) => {
+        const id = String(raw || '').includes('|')
+            ? String(raw).split('|').pop()
+            : String(raw);
+        return map[id] || id;
+    });
+    return `${names.length} — ${names.join(', ')}`;
+}
+
+const GEOMAG_UA = {
+    quiet: 'тихий',
+    active: 'активний',
+    off: 'вимк'
+};
+
 function buildUserInfoHtml(u, from = null) {
     const tgId = u?.telegramId || from?.id || '—';
     const name =
@@ -247,9 +277,39 @@ function buildUserInfoHtml(u, from = null) {
     const alertsT = usage.alertsTotal || 0;
     const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
     const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
-    const geomag = u?.geomagMode || 'quiet';
-    const cropsN = Array.isArray(u?.crops) ? u.crops.length : 0;
+    const geomagMode = u?.geomagMode || 'quiet';
+    const geomag = GEOMAG_UA[geomagMode] || geomagMode;
+    const cropsLabel = formatCropsUa(u?.crops);
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
+
+    // Evening forecast metrics (UA labels)
+    const enabledMetrics = Array.isArray(u?.forecastSettings?.enabledMetrics)
+        ? u.forecastSettings.enabledMetrics
+        : [];
+    const metricsLabel = enabledMetrics.length
+        ? enabledMetrics.map((k) => METRIC_NAMES_UA[k] || k).join(', ')
+        : '—';
+    const daysCount = u?.forecastSettings?.daysCount != null ? u.forecastSettings.daysCount : '—';
+
+    // Alert triggers — for magnetic storms show geomag mode, not just on/off
+    const triggers = u?.alertTriggers || {};
+    const chk = (on) => (on ? '✅' : '⬜️');
+    const alertTemp = triggers.temperature !== false;
+    const alertPrecip = triggers.precip !== false;
+    const alertAir = triggers.airQuality !== false;
+    // magneticStorm false / geomag off → вимк; else show mode (тихий / активний)
+    let alertGeomagLabel;
+    if (geomagMode === 'off' || triggers.magneticStorm === false) {
+        alertGeomagLabel = `${chk(false)} вимк`;
+    } else {
+        alertGeomagLabel = `${chk(true)} ${geomag}`;
+    }
+    const alertsLabel = [
+        `${chk(alertTemp)} температура`,
+        `${chk(alertPrecip)} опади`,
+        `${chk(alertAir)} якість повітря`,
+        `${alertGeomagLabel} · магнітні бурі`
+    ].join('<br/>');
 
     return `
 <h1>👤 ${escapeHtml(name)}</h1>
@@ -266,9 +326,10 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">TZ</td><td align="left"><code>${escapeHtml(tz)}</code></td></tr>
     <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
     <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
-    <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
-    <tr><td align="left">Geomag</td><td align="left"><code>${escapeHtml(geomag)}</code></td></tr>
-    <tr><td align="left">Культур</td><td align="left"><b>${cropsN}</b></td></tr>
+    <tr><td align="left">Вечірній</td><td align="left">${evening} · ${daysCount} дн.</td></tr>
+    <tr><td align="left">Культури</td><td align="left">${escapeHtml(cropsLabel)}</td></tr>
+    <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsLabel)}</td></tr>
+    <tr><td align="left">Алерти</td><td align="left">${alertsLabel}</td></tr>
   </tbody>
 </table>
 <h3>📬 Доставка</h3>
@@ -324,6 +385,12 @@ const METRIC_NAMES_UA = {
  * userSnapshot — стан ДО обробки callback (notify викликається раніше toggle).
  */
 function describeUserAction(actionText, extra = {}, userSnapshot = null) {
+    const rawAct = String(actionText || '').trim();
+    if (rawAct.startsWith('меню:')) {
+        return rawAct; // already human uk label from bot.js
+    }
+    if (rawAct === 'меню') return 'натиснув пункт меню';
+
     const cb = String(extra.callbackData || '').trim();
     const parts = cb ? cb.split('|') : [];
     const head = parts[0] || '';
