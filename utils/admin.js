@@ -511,6 +511,23 @@ async function editMessageById(api, chatId, messageId, text, extra = {}, threadI
     return false;
 }
 
+/**
+ * Start a new admin scenario as a SEPARATE message (keeps main menu intact).
+ * Same forum topic as the callback message.
+ */
+async function startScenarioMessage(api, ctx, text, extra = {}) {
+    const msg = ctx.callbackQuery?.message;
+    const chatId = msg?.chat?.id;
+    const thr =
+        msg?.message_thread_id != null
+            ? { message_thread_id: msg.message_thread_id }
+            : threadOpts('GENERAL');
+    const opts = { parse_mode: 'HTML', ...extra, ...thr };
+    const sent = await api.sendMessage(chatId, text, opts);
+    return sent?.message_id;
+}
+
+
 
 /** Users per page in «Змінити доступ» (2 buttons/row → keep under TG limits). */
 const ACCESS_PAGE_SIZE = 8;
@@ -599,7 +616,17 @@ async function handleAdminCallback(ctx) {
 
     try {
         if (sub === 'menu') {
-            await sendAdminMenu(api, chatId, ctx.callbackQuery.message.message_id);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            const isMainMenu =
+                curText.includes('Адмін-панель Parasol Sentinel') ||
+                curText.includes('Оберіть дію кнопкою');
+            if (isMainMenu) {
+                // Refresh main menu in place
+                await sendAdminMenu(api, chatId, ctx.callbackQuery.message.message_id);
+            } else {
+                // Scenario cancel / back — close this message, leave main menu alone
+                await editCallbackMessage(api, ctx, '❌ Скасовано');
+            }
             return true;
         }
 
@@ -893,12 +920,23 @@ async function handleAdminCallback(ctx) {
             const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
             const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
             if (!users.length) {
-                await editCallbackMessage(api, ctx, '📭 Немає користувачів.');
+                const curText = ctx.callbackQuery?.message?.text || '';
+                if (curText.includes('Змінити доступ')) {
+                    await editCallbackMessage(api, ctx, '📭 Немає користувачів.');
+                } else {
+                    await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                }
                 return true;
             }
             const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
             const { text, reply_markup } = buildAccessPage(users, safePage);
-            await editCallbackMessage(api, ctx, text, { reply_markup });
+            const curText = ctx.callbackQuery?.message?.text || '';
+            // Pagination / refresh after setaccess → edit; open from main menu → new message
+            if (curText.includes('Змінити доступ')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
             return true;
         }
 
@@ -924,7 +962,7 @@ async function handleAdminCallback(ctx) {
         }
 
         if (sub === 'broadcast_evening') {
-            await editCallbackMessage(
+            await startScenarioMessage(
                 api,
                 ctx,
                 '🌆 <b>Розсилка вечірнього прогнозу</b>\n\n' +
@@ -993,7 +1031,7 @@ async function handleAdminCallback(ctx) {
 
         // ─── Вечірній тест (cron-forecast-test, TEST_USER_ID) ───
         if (sub === 'evening_test') {
-            await editCallbackMessage(
+            await startScenarioMessage(
                 api,
                 ctx,
                 '🧪 <b>Вечірній тест</b>\n\n' +
@@ -1074,7 +1112,7 @@ async function handleAdminCallback(ctx) {
                 .lean();
 
             if (!users.length) {
-                await editCallbackMessage(
+                await startScenarioMessage(
                     api,
                     ctx,
                     '📭 Немає підходящих користувачів для вечірнього прогнозу.'
@@ -1095,7 +1133,7 @@ async function handleAdminCallback(ctx) {
             });
             rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
 
-            await editCallbackMessage(
+            await startScenarioMessage(
                 api,
                 ctx,
                 '🎯 <b>Вечірній крон обраним</b>\n\n' +
@@ -1164,7 +1202,7 @@ async function handleAdminCallback(ctx) {
 
         // ─── Крон чек (light) ───
         if (sub === 'cron_check') {
-            await editCallbackMessage(
+            await startScenarioMessage(
                 api,
                 ctx,
                 '🔍 <b>Крон чек (light)</b>\n\n' +
