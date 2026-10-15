@@ -618,6 +618,23 @@ async function deleteCallbackMessage(api, ctx) {
 }
 
 /**
+ * After successful outbound message: delete admin reply + bot instruction in General.
+ */
+async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg) {
+    const ids = [];
+    if (adminMsg?.message_id != null) ids.push(adminMsg.message_id);
+    if (instructionMsg?.message_id != null) ids.push(instructionMsg.message_id);
+    for (const id of ids) {
+        try {
+            await api.deleteMessage(chatId, id);
+        } catch (e) {
+            console.warn('[admin] cleanupScenarioMessages failed', id, e.message);
+        }
+    }
+}
+
+
+/**
  * Final step of cron/scenario: show «Зроблено», then delete the scenario message.
  */
 async function finishScenarioDone(api, ctx, summaryHtml = '') {
@@ -1728,6 +1745,7 @@ async function handleAdminChannelText(ctx) {
                     failCount: fail,
                     total
                 });
+                await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
                 await api.sendMessage(
                     chatId,
@@ -1755,6 +1773,7 @@ async function handleAdminChannelText(ctx) {
                     msg
                 });
                 await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
+                await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
                 await api.sendMessage(
                     chatId,
