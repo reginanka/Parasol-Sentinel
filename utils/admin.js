@@ -18,8 +18,9 @@ const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
 
 function isAdminChat(chatId) {
     const id = ADMIN_CHAT_ID();
-    if (!id) return false;
-    return String(chatId) === String(id);
+    if (!id || chatId == null) return false;
+    // Normalize: "-100123" vs -100123, ignore whitespace
+    return String(chatId).trim() === String(id).trim();
 }
 
 /** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS */
@@ -267,53 +268,66 @@ async function notifyAdmin(from, actionText, extra = {}) {
     }
 
     html += `<p><i>↩️ Відповісти на це повідомлення → надіслати юзеру</i></p>`;
-    // Keep plain ID in text for reply parser
+    // Plain "ID: …" MUST stay in message.text so reply_to works (rich often has empty .text)
     html += `<p>ID: ${from.id}</p>`;
 
     const usersThread = threadOpts('USERS');
 
+    // HTML sendMessage (not Rich) — so reply_to_message.text contains ID
     try {
-        await bot.api.sendRichMessage(
-            chatId,
-            { html, skip_entity_detection: true },
-            usersThread
-        );
+        await bot.api.sendMessage(chatId, html, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+            ...usersThread
+        });
     } catch (e) {
-        console.error('[admin] notify sendRichMessage failed:', e.message);
+        console.error('[admin] notify sendMessage failed:', e.message);
         try {
-            await bot.api.sendMessage(chatId, html, {
-                parse_mode: 'HTML',
-                disable_web_page_preview: true,
-                ...usersThread
-            });
+            await bot.api.sendMessage(
+                chatId,
+                `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
+                    (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
+                { disable_web_page_preview: true, ...usersThread }
+            );
         } catch (e2) {
-            try {
-                await bot.api.sendMessage(
-                    chatId,
-                    `👤 ${name} (${uname})\nID: ${from.id}\nДія: ${actionText}` +
-                        (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                    { disable_web_page_preview: true, ...usersThread }
-                );
-            } catch (e3) {
-                console.error('[admin] notify fallback failed:', e3.message);
-            }
+            console.error('[admin] notify fallback failed:', e2.message);
         }
     }
 }
 
-/** Extract user telegram id from an admin notification / confirmation message text */
+/** Extract user telegram id from an admin notification / reply_to message */
 function extractUserIdFromNotifyText(raw) {
-    if (!raw) return null;
-    const s = String(raw);
+    if (raw == null) return null;
+    // Accept full reply_to_message object or plain string
+    let s;
+    if (typeof raw === 'object') {
+        const parts = [
+            raw.text,
+            raw.caption,
+            raw.quote?.text,
+            // last resort: stringify (rich / partial payloads)
+            JSON.stringify(raw)
+        ].filter(Boolean);
+        s = parts.join('\n');
+    } else {
+        s = String(raw);
+    }
     const patterns = [
         /ID:\s*(\d{5,15})/i,
+        /\bID[:\s]+(\d{5,15})\b/i,
         /#u(\d{5,15})\b/,
         /користувачу\s+(\d{5,15})/i,
-        /user[_\s-]?id[:\s]+(\d{5,15})/i
+        /user[_\s-]?id[:\s]+(\d{5,15})/i,
+        // bare telegram id in code/tags
+        /(?:^|[^\d])(\d{8,15})(?:[^\d]|$)/
     ];
     for (const re of patterns) {
         const m = s.match(re);
-        if (m) return parseInt(m[1], 10);
+        if (m) {
+            const id = parseInt(m[1], 10);
+            // skip obvious non-user ids (too short already filtered)
+            if (id > 99999) return id;
+        }
     }
     return null;
 }
@@ -371,30 +385,42 @@ function ensureMonthCounters(user) {
     return user;
 }
 
-async function sendAdminMenu(api, chatId, messageId = null) {
+async function sendAdminMenu(api, chatId, messageId = null, preferredThreadId = null) {
     const text =
         '🛡 <b>Адмін-панель Parasol Sentinel</b>\n\n' +
         'Оберіть дію кнопкою нижче.\n' +
-        'Будь-яке повідомлення в гілці General знову покаже це меню.';
+        'Напиши /admin або будь-який текст у General — знову покаже меню.';
 
-    const opts = {
-        parse_mode: 'HTML',
-        reply_markup: adminKeyboard(),
-        ...threadOpts('GENERAL')
-    };
+    const base = { parse_mode: 'HTML', reply_markup: adminKeyboard() };
     if (messageId) {
         try {
-            // edit stays in the same topic as the original message
-            await api.editMessageText(chatId, messageId, text, {
-                parse_mode: 'HTML',
-                reply_markup: adminKeyboard()
-            });
+            await api.editMessageText(chatId, messageId, text, base);
             return;
         } catch (_) {
             /* fall through to send */
         }
     }
-    await api.sendMessage(chatId, text, opts);
+
+    // Try: caller's thread → TOPIC_GENERAL → no thread (Telegram General default)
+    const attempts = [];
+    if (preferredThreadId != null && preferredThreadId !== undefined) {
+        attempts.push({ message_thread_id: preferredThreadId });
+    }
+    const gen = topicId('GENERAL');
+    if (gen != null) attempts.push({ message_thread_id: gen });
+    attempts.push({});
+
+    let lastErr = null;
+    for (const thr of attempts) {
+        try {
+            await api.sendMessage(chatId, text, { ...base, ...thr });
+            return;
+        } catch (e) {
+            lastErr = e;
+            console.warn('[admin] sendAdminMenu failed:', e.message, thr);
+        }
+    }
+    throw lastErr || new Error('sendAdminMenu failed');
 }
 
 async function handleAdminCallback(ctx) {
@@ -1123,9 +1149,8 @@ async function handleAdminChannelText(ctx) {
     // ── Reply to a user-notification → send text and/or media to that user ──
     const replyTo = msg.reply_to_message;
     if (replyTo && (text || caption || hasMedia) && !(text || '').startsWith('/')) {
-        const src = replyTo.text || replyTo.caption || '';
-        // Rich messages may put ID only in caption/entities — also scan full JSON-ish text
-        const targetId = extractUserIdFromNotifyText(src);
+        // Pass full message object — text/caption may be empty for some message types
+        const targetId = extractUserIdFromNotifyText(replyTo);
         if (targetId) {
             try {
                 const kind = await sendAdminReplyToUser(api, targetId, msg);
@@ -1160,6 +1185,23 @@ async function handleAdminChannelText(ctx) {
 
     // Media without reply in admin channel — ignore (don't open menu)
     if (hasMedia && !replyTo) {
+        return true;
+    }
+
+    // /admin or /menu → always show panel
+    if (/^\/(admin|menu)(@\w+)?\s*$/i.test(text)) {
+        try {
+            await sendAdminMenu(api, chatId, null, msg.message_thread_id);
+        } catch (e) {
+            await api
+                .sendMessage(
+                    chatId,
+                    `❌ Не вдалося показати меню: ${escapeHtml(e.message)}\n` +
+                        `chat=${chatId} thread=${msg.message_thread_id ?? '—'} ADMIN_CHAT_ID=${ADMIN_CHAT_ID()}`,
+                    { parse_mode: 'HTML', ...sameThread }
+                )
+                .catch(() => {});
+        }
         return true;
     }
 
@@ -1202,9 +1244,20 @@ async function handleAdminChannelText(ctx) {
         return true;
     }
 
-    // Any other text in admin channel → show menu
+    // Any other text in admin chat → show menu
     if (text) {
-        await sendAdminMenu(api, chatId);
+        try {
+            await sendAdminMenu(api, chatId, null, msg.message_thread_id);
+        } catch (e) {
+            await api
+                .sendMessage(
+                    chatId,
+                    `❌ Не вдалося показати меню: ${escapeHtml(e.message)}\n` +
+                        `chat=${chatId} thread=${msg.message_thread_id ?? '—'} ADMIN=${ADMIN_CHAT_ID()}`,
+                    { parse_mode: 'HTML', ...sameThread }
+                )
+                .catch(() => {});
+        }
     }
     return true;
 }
