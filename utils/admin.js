@@ -227,6 +227,7 @@ function adminKeyboard() {
                 { text: '📣 Написати всім', callback_data: 'adm|msg_all' }
             ],
             [
+                { text: '👤 Інфо про 👤', callback_data: 'adm|userinfo_pick|0' },
                 { text: '🔄 Оновити меню', callback_data: 'adm|menu' }
             ]
         ]
@@ -958,6 +959,43 @@ function buildMsgUserPage(users, page) {
     return { text, reply_markup: { inline_keyboard: rows } };
 }
 
+/** Paginated user picker for «Інфо про 👤». */
+function buildUserInfoPickPage(users, page) {
+    const PAGE = ACCESS_PAGE_SIZE;
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
+
+    const rows = slice.map((u) => {
+        const label =
+            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+            (u.city ? ` · ${u.city}` : '');
+        return [
+            {
+                text: label.slice(0, 60),
+                callback_data: `adm|userinfo|${u.telegramId}`
+            }
+        ];
+    });
+
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|userinfo_pick|${p - 1}` });
+        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
+        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|userinfo_pick|${p + 1}` });
+        rows.push(nav);
+    }
+    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * PAGE + 1 : 0;
+    const to = Math.min((p + 1) * PAGE, total);
+    const text =
+        `👤 <b>Інфо про 👤</b>\n` +
+        `<i>Оберіть користувача (${from}–${to} з ${total})</i>`;
+    return { text, reply_markup: { inline_keyboard: rows } };
+}
+
 
 
 /** Users per page in «Змінити доступ» (2 buttons/row → keep under TG limits). */
@@ -1658,6 +1696,25 @@ async function handleAdminCallback(ctx) {
             return true;
         }
 
+        // ─── Інфо про 👤: список → вибір → замінити повідомлення на профіль ───
+        if (sub === 'userinfo_pick') {
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            if (!users.length) {
+                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                return true;
+            }
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildUserInfoPickPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            if (curText.includes('Інфо про')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
+            return true;
+        }
+
         if (sub === 'userinfo') {
             const tgId = data[2] ? Number(data[2]) : null;
             if (!tgId || Number.isNaN(tgId)) {
@@ -1672,10 +1729,36 @@ async function handleAdminCallback(ctx) {
                 return true;
             }
             const html = buildUserInfoHtml(u);
+            const cbMsg = ctx.callbackQuery?.message;
+            const fromPicker = (cbMsg?.text || '').includes('Інфо про');
+            const preferredThread =
+                cbMsg?.message_thread_id != null
+                    ? cbMsg.message_thread_id
+                    : fromPicker
+                      ? topicId('GENERAL')
+                      : topicId('USERS');
             const thr =
-                ctx.callbackQuery?.message?.message_thread_id != null
-                    ? { message_thread_id: ctx.callbackQuery.message.message_thread_id }
-                    : threadOpts('USERS');
+                preferredThread != null ? { message_thread_id: preferredThread } : {};
+
+            // З пікера: замінити повідомлення списку на інфо (в тій же гілці General)
+            if (fromPicker) {
+                try {
+                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
+                    await deleteCallbackMessage(api, ctx);
+                } catch (richErr) {
+                    console.warn('[admin] userinfo_pick rich failed:', richErr.message);
+                    // Fallback: редагуємо поточне повідомлення plain HTML
+                    await editCallbackMessage(api, ctx, html, {
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '◀️ Меню', callback_data: 'adm|menu' }]]
+                        },
+                        disable_web_page_preview: true
+                    });
+                }
+                return true;
+            }
+
+            // З notifyAdmin (кнопка «Інфо про користувача») — нове повідомлення в USERS
             try {
                 await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
             } catch (richErr) {
