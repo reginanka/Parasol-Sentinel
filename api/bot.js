@@ -686,6 +686,7 @@ function installUserErrorReplyHook(ctx, where = 'handler') {
         const result = await origReply(text, ...rest);
         try {
             if (looksLikeUserFacingError(text)) {
+                // Set BEFORE any await — finally must not fire ACTIONS
                 ctx.__userSoftError = true;
                 const plain = String(text)
                     .replace(/<[^>]+>/g, ' ')
@@ -701,6 +702,21 @@ function installUserErrorReplyHook(ctx, where = 'handler') {
         } catch (_e) { /* never break user reply */ }
         return result;
     };
+}
+
+
+/** Soft UX error: ERROR topic only (never ACTIONS). Flag set sync before awaits. */
+async function reportSoftUserError(ctx, message, extra = {}) {
+    if (ctx) ctx.__userSoftError = true;
+    try {
+        await notifyUserError(ctx && ctx.from, new Error(String(message)), {
+            where: extra.where || 'soft',
+            callbackData:
+                extra.callbackData ||
+                (ctx && ctx.callbackQuery && ctx.callbackQuery.data),
+            messageText: extra.messageText
+        });
+    } catch (_e) { /* ignore */ }
 }
 
 /** Persist free-text input mode: idle | awaiting_city | support */
@@ -851,13 +867,12 @@ bot.on("message:text", async (ctx) => {
 
         if (!cityData || !cityData.eveningState?.forecast) {
             const softMsg = lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.';
-            try {
-                await notifyUserError(ctx.from, new Error(softMsg), {
+            await reportSoftUserError(ctx, softMsg, {
                     where: 'agro_spraying',
                     callbackData: ctx.callbackQuery && ctx.callbackQuery.data
                 });
-            } catch (_n) {}
-            return ctx.reply(softMsg);
+            await ctx.reply(softMsg);
+                return;
         }
 
         const history = await History.find({ externalId: cityKey }).sort({ date: -1 }).limit(7).lean();
@@ -1324,13 +1339,12 @@ bot.on("callback_query:data", async (ctx) => {
                 const softMsg = lang === 'uk'
                     ? `⚠️ Прогноз на ${shortDate} ще недоступний.`
                     : `⚠️ Forecast for ${shortDate} is not yet available.`;
-                try {
-                    await notifyUserError(ctx.from, new Error(softMsg), {
+                await reportSoftUserError(ctx, softMsg, {
                         where: 'forecast_hourly',
                         callbackData: ctx.callbackQuery && ctx.callbackQuery.data
                     });
-                } catch (_n) {}
-                return ctx.reply(softMsg);
+                await ctx.reply(softMsg);
+                return;
             }
 
             const temps = dayIndices.map(i => temperature_2m[i]);
@@ -1687,9 +1701,12 @@ bot.on("callback_query:data", async (ctx) => {
             const dayRelEn = isToday ? 'today' : (targetDateStr < todayStr ? 'yesterday' : 'tomorrow');
 
             if (!dayHours.length) {
-                return ctx.reply(lang === 'uk'
+                const softMsg = lang === 'uk'
                     ? `⚠️ Немає даних Tomorrow.io на ${shortDate}. Спробуйте пізніше.`
-                    : `⚠️ No Tomorrow.io data for ${shortDate}. Try again later.`);
+                    : `⚠️ No Tomorrow.io data for ${shortDate}. Try again later.`;
+                await reportSoftUserError(ctx, softMsg, { where: 'forecast_verify' });
+                await ctx.reply(softMsg);
+                return;
             }
 
             const { tioWeatherEmoji, summarizeDayHours } = require('../utils/tomorrow');
@@ -1860,13 +1877,12 @@ bot.on("callback_query:data", async (ctx) => {
                     const softMsg = lang === 'uk'
                         ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу (зазвичай після 18:00).'
                         : '⚠️ Data not yet updated. Wait for the evening forecast (usually after 18:00).';
-                    try {
-                        await notifyUserError(ctx.from, new Error(softMsg), {
+                    await reportSoftUserError(ctx, softMsg, {
                             where: 'agro_stale',
                             callbackData: ctx.callbackQuery && ctx.callbackQuery.data
                         });
-                    } catch (_n) {}
-                    return ctx.reply(softMsg);
+                    await ctx.reply(softMsg);
+                return;
                 }
             }
 
@@ -1955,13 +1971,12 @@ bot.on("callback_query:data", async (ctx) => {
             if (!cityData || !cityData.eveningState?.forecast) {
                 {
                 const softMsg = lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.';
-                try {
-                    await notifyUserError(ctx.from, new Error(softMsg), {
+                await reportSoftUserError(ctx, softMsg, {
                         where: 'data_not_ready',
                         callbackData: ctx.callbackQuery && ctx.callbackQuery.data
                     });
-                } catch (_n) {}
-                return ctx.reply(softMsg);
+                await ctx.reply(softMsg);
+                return;
             }
             }
 
@@ -1986,13 +2001,12 @@ bot.on("callback_query:data", async (ctx) => {
             if (!cityData || !cityData.eveningState?.forecast) {
                 {
                 const softMsg = lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.';
-                try {
-                    await notifyUserError(ctx.from, new Error(softMsg), {
+                await reportSoftUserError(ctx, softMsg, {
                         where: 'data_not_ready',
                         callbackData: ctx.callbackQuery && ctx.callbackQuery.data
                     });
-                } catch (_n) {}
-                return ctx.reply(softMsg);
+                await ctx.reply(softMsg);
+                return;
             }
             }
 
