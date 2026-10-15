@@ -1249,16 +1249,29 @@ module.exports = async (req, res) => {
             }).catch(() => {});
         }
 
-        await log(
-            `<h3>🧪 Вечірній тест (Rich)</h3>` +
-                `<p>🕐 ${escapeHTML(startTime)}</p>` +
-                `<p>👤 User: <code>${TEST_USER_ID}</code><br/>✅ Надіслано</p>`
-        );
+        const cityName = user.city || '—';
+        await log(`
+<h1>🧪 Вечірній тест</h1>
+<p>🕐 ${escapeHTML(startTime)}</p>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Показник</th>
+      <th align="center">Значення</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">👤 User ID</td><td align="center"><code>${TEST_USER_ID}</code></td></tr>
+    <tr><td align="left">📍 Місто</td><td align="center">${escapeHTML(cityName)}</td></tr>
+    <tr><td align="left">Статус</td><td align="center"><b>✅ Надіслано</b></td></tr>
+  </tbody>
+</table>
+`.trim());
         res.status(200).send(`Test forecast (Rich Message) sent to ${TEST_USER_ID}`);
     } catch (error) {
         console.error(error);
         await log(
-            `<h3>❌ Test forecast FAILED</h3>` +
+            `<h1>❌ Test forecast FAILED</h1>` +
                 `<p><code>${escapeHTML(error.message)}</code></p>`
         );
         res.status(500).send('Test forecast error');

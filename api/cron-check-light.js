@@ -1320,29 +1320,72 @@ module.exports = async (req, res) => {
                 }
 
                 const statusStr = alertTriggered ? `🚨 ${reasons.join(', ')}` : '✅ без змін';
-                logLines.push(`• ${cityInfo.name} | ${curTemp}°C | ${statusStr}`);
+                logLines.push({
+                    city: cityInfo.name,
+                    temp: curTemp != null ? `${curTemp}°C` : '—',
+                    status: statusStr
+                });
             } catch (err) {
                 errorsCount++;
-                logLines.push(`• ${cityInfo.name} | ❌ помилка: ${err.message}`);
+                logLines.push({
+                    city: cityInfo.name || '—',
+                    temp: '—',
+                    status: `❌ ${err.message}`
+                });
             }
         }
 
-        const citiesHtml = logLines.length
-            ? `<h3>Міста</h3><p>${logLines.map((l) => escapeHTML(l)).join('<br/>')}</p>`
-            : '';
-        const summary =
-            `<h3>🔍 Крон чек (light)</h3>` +
-            `<p>🕐 ${escapeHTML(startTime)}</p>` +
-            `<p>👥 Користувачів: <b>${users.length}</b><br/>` +
-            `🚨 Алертів надіслано: <b>${alertsTotal}</b><br/>` +
-            `❌ Помилок: <b>${errorsCount}</b></p>` +
-            citiesHtml;
+        const cityRows = logLines
+            .map(
+                (r) =>
+                    `<tr>` +
+                    `<td align="left">${escapeHTML(r.city)}</td>` +
+                    `<td align="center">${escapeHTML(r.temp)}</td>` +
+                    `<td align="left">${escapeHTML(r.status)}</td>` +
+                    `</tr>`
+            )
+            .join('');
+
+        const summary = `
+<h1>🔍 Крон чек (light)</h1>
+<p>🕐 ${escapeHTML(startTime)}</p>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Показник</th>
+      <th align="center">Значення</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">👥 Користувачів</td><td align="center"><b>${users.length}</b></td></tr>
+    <tr><td align="left">🚨 Алертів</td><td align="center"><b>${alertsTotal}</b></td></tr>
+    <tr><td align="left">❌ Помилок</td><td align="center"><b>${errorsCount}</b></td></tr>
+  </tbody>
+</table>
+${
+    logLines.length
+        ? `<h3>📍 Міста</h3>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Місто</th>
+      <th align="center">°C</th>
+      <th align="left">Статус</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${cityRows}
+  </tbody>
+</table>`
+        : ''
+}
+`.trim();
         await log(summary);
         res.status(200).send('Processed (light)');
     } catch (error) {
         console.error(error);
         await log(
-            `<h3>❌ Light Weather Check FAILED</h3>` +
+            `<h1>❌ Light Weather Check FAILED</h1>` +
                 `<p><code>${escapeHTML(error.message)}</code></p>`
         );
         res.status(500).send('Error');

@@ -1392,10 +1392,18 @@ module.exports = async (req, res) => {
                     sent++;
                         await incrementUsage(user.telegramId, 'evening').catch(() => {});
                 }
-                logLines.push(`• ${cityInfo.name} | ${cityInfo.users.length} ос. | ✅`);
+                logLines.push({
+                    city: cityInfo.name,
+                    users: cityInfo.users.length,
+                    status: '✅'
+                });
             } catch (err) {
                 errors++;
-                logLines.push(`• ${cityInfo.name} | ❌ error: ${err.message}`);
+                logLines.push({
+                    city: cityInfo.name || '—',
+                    users: 0,
+                    status: `❌ ${err.message}`
+                });
                 console.error(`Forecast error for ${cityInfo.name}:`, err.message);
             }
         }
@@ -1403,23 +1411,58 @@ module.exports = async (req, res) => {
         const modeNote = singleUserId
             ? `<p>🎯 <i>Режим: один користувач <code>${singleUserId}</code></i></p>`
             : '';
-        const citiesHtml = logLines.length
-            ? `<h3>Міста</h3><p>${logLines.map((l) => escapeHTML(l)).join('<br/>')}</p>`
-            : '';
-        const summary =
-            `<h3>🌆 Вечірній прогноз</h3>` +
-            `<p>🕐 ${escapeHTML(startTime)}</p>` +
-            modeNote +
-            `<p>👥 Користувачів: <b>${users.length}</b><br/>` +
-            `📨 Надіслано: <b>${sent}</b><br/>` +
-            `❌ Помилок: <b>${errors}</b></p>` +
-            citiesHtml;
+        const cityRows = logLines
+            .map(
+                (r) =>
+                    `<tr>` +
+                    `<td align="left">${escapeHTML(r.city)}</td>` +
+                    `<td align="center"><b>${r.users}</b></td>` +
+                    `<td align="left">${escapeHTML(r.status)}</td>` +
+                    `</tr>`
+            )
+            .join('');
+
+        const summary = `
+<h1>🌆 Вечірній прогноз</h1>
+<p>🕐 ${escapeHTML(startTime)}</p>
+${modeNote}
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Показник</th>
+      <th align="center">Значення</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">👥 Користувачів</td><td align="center"><b>${users.length}</b></td></tr>
+    <tr><td align="left">📨 Надіслано</td><td align="center"><b>${sent}</b></td></tr>
+    <tr><td align="left">❌ Помилок</td><td align="center"><b>${errors}</b></td></tr>
+  </tbody>
+</table>
+${
+    logLines.length
+        ? `<h3>📍 Міста</h3>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th align="left">Місто</th>
+      <th align="center">Юзерів</th>
+      <th align="left">Статус</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${cityRows}
+  </tbody>
+</table>`
+        : ''
+}
+`.trim();
         await log(summary);
         res.status(200).send(`Sent ${sent} forecasts` + (singleUserId ? ` (user ${singleUserId})` : ''));
     } catch (error) {
         console.error(error);
         await log(
-            `<h3>❌ Cron Forecast FAILED</h3>` +
+            `<h1>❌ Cron Forecast FAILED</h1>` +
                 `<p>🕐 ${escapeHTML(startTime)}</p>` +
                 `<p><code>${escapeHTML(error.message)}</code></p>`
         );
