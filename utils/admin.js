@@ -1556,24 +1556,48 @@ async function sendAdminReplyToUser(api, targetId, msg) {
  * Describe media on an admin/user message for logs.
  */
 function describeMsgContent(msg) {
-    if (!msg) return { media: null, text: '' };
+    if (!msg) return { media: null, text: '', kind: null, fileId: null };
     const text = (msg.caption || msg.text || '').trim();
     let media = null;
-    if (msg.photo && msg.photo.length) media = '📷 фото';
-    else if (msg.document) media = `📎 ${msg.document.file_name || 'документ'}`;
-    else if (msg.video) media = '🎬 відео';
-    else if (msg.animation) media = '🎞 gif';
-    else if (msg.voice) media = '🎤 голосове';
-    else if (msg.audio) media = '🎵 аудіо';
-    else if (msg.sticker) media = '😊 sticker';
-    return { media, text };
+    let kind = null;
+    let fileId = null;
+    if (msg.photo && msg.photo.length) {
+        media = '📷 фото';
+        kind = 'photo';
+        fileId = msg.photo[msg.photo.length - 1].file_id;
+    } else if (msg.document) {
+        media = `📎 ${msg.document.file_name || 'документ'}`;
+        kind = 'document';
+        fileId = msg.document.file_id;
+    } else if (msg.video) {
+        media = '🎬 відео';
+        kind = 'video';
+        fileId = msg.video.file_id;
+    } else if (msg.animation) {
+        media = '🎞 gif';
+        kind = 'animation';
+        fileId = msg.animation.file_id;
+    } else if (msg.voice) {
+        media = '🎤 голосове';
+        kind = 'voice';
+        fileId = msg.voice.file_id;
+    } else if (msg.audio) {
+        media = '🎵 аудіо';
+        kind = 'audio';
+        fileId = msg.audio.file_id;
+    } else if (msg.sticker) {
+        media = '😊 sticker';
+        kind = 'sticker';
+        fileId = msg.sticker.file_id;
+    }
+    return { media, text, kind, fileId };
 }
 
 function historyThreadOpts() {
     return threadOpts('HISTORY');
 }
 
-function formatSupportLine(who, media, text, ts = new Date()) {
+function formatSupportLine(who, media, text, assetId, ts = new Date()) {
     const time = ts.toLocaleString('uk-UA', {
         timeZone: 'Europe/Kyiv',
         day: '2-digit',
@@ -1582,36 +1606,77 @@ function formatSupportLine(who, media, text, ts = new Date()) {
         minute: '2-digit'
     });
     const parts = [`[${time}] ${who}:`];
-    if (media) parts.push(media);
+    if (media) {
+        parts.push(assetId ? `${media} #${assetId}` : media);
+    }
     if (text) parts.push(text.slice(0, 1500));
     if (!media && !text) parts.push('(порожньо)');
     return parts.join(' ');
 }
 
 /**
- * Log outbound admin delivery into HISTORY topic (not USERS).
- * kind: 'all' | 'one'
+ * Send media asset into HISTORY topic with label + #assetId for later search.
+ */
+async function sendAssetToHistory(api, msg, assetId, mediaLabel) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId || !msg) return;
+    const thrId = topicId('HISTORY');
+    const { kind, fileId } = describeMsgContent(msg);
+    if (!kind || !fileId) return;
+
+    const caption = `${mediaLabel} <code>#${assetId}</code>`;
+    const attempts = [];
+    if (thrId != null) attempts.push({ message_thread_id: thrId });
+    attempts.push({});
+
+    const sendOnce = async (thr) => {
+        const opts = { caption, parse_mode: 'HTML', ...thr };
+        if (kind === 'photo') return api.sendPhoto(chatId, fileId, opts);
+        if (kind === 'document') return api.sendDocument(chatId, fileId, opts);
+        if (kind === 'video') return api.sendVideo(chatId, fileId, opts);
+        if (kind === 'animation') return api.sendAnimation(chatId, fileId, opts);
+        if (kind === 'voice') return api.sendVoice(chatId, fileId, opts);
+        if (kind === 'audio') return api.sendAudio(chatId, fileId, opts);
+        if (kind === 'sticker') {
+            await api.sendSticker(chatId, fileId, thr);
+            return api.sendMessage(chatId, caption, { parse_mode: 'HTML', ...thr });
+        }
+        return null;
+    };
+
+    let lastErr = null;
+    for (const thr of attempts) {
+        try {
+            await sendOnce(thr);
+            return;
+        } catch (e) {
+            lastErr = e;
+            if (!/thread not found|MESSAGE_THREAD/i.test(e.message || '')) throw e;
+        }
+    }
+    if (lastErr) console.warn('[admin] sendAssetToHistory failed:', lastErr.message);
+}
+
+/**
+ * Log outbound broadcast summary into HISTORY (personal replies use conversation card only).
  */
 async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, failCount, total }) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId) return;
+    // Personal one-to-one: no separate «Відправлено» card (already in «Розмова з…»)
+    if (kind === 'one') return;
+
     const { media, text } = describeMsgContent(msg);
-    let head;
-    if (kind === 'all') {
-        head = `📣 <b>Відправлено всім</b>`;
-        if (okCount != null) {
-            head += `\n✅ ${okCount}` + (failCount != null ? ` · ❌ ${failCount}` : '') +
-                (total != null ? ` · з ${total}` : '');
-        }
-    } else {
-        head = `✉️ <b>Відправлено</b> ${targetLabel || ''}`;
+    let head = `📣 <b>Відправлено всім</b>`;
+    if (okCount != null) {
+        head += `\n✅ ${okCount}` + (failCount != null ? ` · ❌ ${failCount}` : '') +
+            (total != null ? ` · з ${total}` : '');
     }
     const bodyParts = [head];
     if (media) bodyParts.push(escapeHtml(media));
     if (text) bodyParts.push(escapeHtml(text.slice(0, 1000)));
-    const body = bodyParts.join('\n');
     try {
-        await sendInAdminThread(api, chatId, body, {
+        await sendInAdminThread(api, chatId, bodyParts.join('\n'), {
             parse_mode: 'HTML',
             disable_web_page_preview: true
         }, topicId('HISTORY'));
@@ -1622,7 +1687,7 @@ async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, fail
 
 /**
  * Append a line to per-user support transcript and upsert one message in HISTORY topic.
- * Stores supportHistory.messageId on User for later edits.
+ * Media → line has type + #assetId; asset itself is sent as a separate HISTORY message.
  */
 async function appendSupportConversation(api, telegramId, who, msgOrText) {
     const chatId = ADMIN_CHAT_ID();
@@ -1630,15 +1695,18 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
 
     let media = null;
     let text = '';
+    let kind = null;
+    let rawMsg = null;
     if (typeof msgOrText === 'string') {
         text = msgOrText;
-    } else {
+    } else if (msgOrText) {
+        rawMsg = msgOrText;
         const d = describeMsgContent(msgOrText);
         media = d.media;
         text = d.text;
+        kind = d.kind;
     }
 
-    const line = formatSupportLine(who, media, text);
     let user = await User.findOne({ telegramId: Number(telegramId) });
     if (!user) {
         user = await User.findOneAndUpdate(
@@ -1648,16 +1716,28 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         );
     }
 
+    let assetId = null;
+    if (kind && rawMsg) {
+        const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
+        assetId = `A${seq}`;
+        if (!user.supportHistory) user.supportHistory = {};
+        user.supportHistory.assetSeq = seq;
+    }
+
+    const line = formatSupportLine(who, media, text, assetId);
     const prev = (user.supportHistory && user.supportHistory.transcript) || '';
     let transcript = prev ? `${prev}\n${line}` : line;
     if (transcript.length > 3500) {
         transcript = '…\n' + transcript.slice(transcript.length - 3400);
     }
 
-    const label =
-        (user.username ? `@${user.username}` : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user') +
-        ` · <code>${telegramId}</code>`;
-    const header = `💬 <b>Розмова з</b> ${label}\n<code>ID: ${telegramId}</code>\n\n`;
+    // One ID only (in the title line)
+    const namePart =
+        user.username
+            ? `@${user.username}`
+            : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
+    const header =
+        `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n`;
     const full = header + escapeHtml(transcript);
 
     const thrId = topicId('HISTORY');
@@ -1696,9 +1776,19 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         console.warn('[admin] appendSupportConversation send failed:', e.message);
     }
 
+    // Mirror media asset next to the conversation card
+    if (assetId && rawMsg) {
+        try {
+            await sendAssetToHistory(api, rawMsg, assetId, media || '📎');
+        } catch (e) {
+            console.warn('[admin] mirror asset failed:', e.message);
+        }
+    }
+
     user.supportHistory = {
         messageId: newMsgId || histMsgId || null,
         transcript,
+        assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
         updatedAt: new Date()
     };
     user.markModified('supportHistory');
@@ -1763,15 +1853,6 @@ async function handleAdminChannelText(ctx) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
-                const uDoc = await User.findOne({ telegramId: targetId }).lean();
-                const whoLabel =
-                    (uDoc?.username ? `@${uDoc.username}` : uDoc?.firstName || '') +
-                    ` <code>${targetId}</code>`;
-                await logDeliveryToHistory(api, {
-                    kind: 'one',
-                    targetLabel: whoLabel,
-                    msg
-                });
                 await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
                 await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
@@ -1822,12 +1903,6 @@ async function handleAdminChannelText(ctx) {
         const body = msgMatch[2].trim();
         try {
             await api.sendMessage(targetId, body);
-            const fakeMsg = { text: body };
-            const uDoc = await User.findOne({ telegramId: targetId }).lean();
-            const whoLabel =
-                (uDoc?.username ? `@${uDoc.username}` : uDoc?.firstName || '') +
-                ` <code>${targetId}</code>`;
-            await logDeliveryToHistory(api, { kind: 'one', targetLabel: whoLabel, msg: fakeMsg });
             await appendSupportConversation(api, targetId, '🛡 Адмін', body);
         } catch (e) {
             await api.sendMessage(
