@@ -79,6 +79,7 @@ const UserSchema = new mongoose.Schema({
     supportHistory: {
         messageId: { type: Number, default: null },
         transcript: { type: String, default: '' },
+        assetSeq: { type: Number, default: 0 },
         updatedAt: { type: Date, default: null }
     },
 
