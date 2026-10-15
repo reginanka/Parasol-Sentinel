@@ -212,7 +212,10 @@ function adminKeyboard() {
                 { text: '🔍 Крон чек', callback_data: 'adm|cron_check' }
             ],
             [
-                { text: '✉️ Написати користувачу', callback_data: 'adm|msg_user' },
+                { text: '✉️ Написати користувачу', callback_data: 'adm|msg_user|0' },
+                { text: '📣 Написати всім', callback_data: 'adm|msg_all' }
+            ],
+            [
                 { text: '🔄 Оновити меню', callback_data: 'adm|menu' }
             ]
         ]
@@ -407,6 +410,42 @@ function extractUserIdFromNotifyText(raw) {
     return null;
 }
 
+/** true if reply target is «надіслати всім» instruction */
+function isBroadcastAllTarget(raw) {
+    if (raw == null) return false;
+    let s;
+    if (typeof raw === 'object') {
+        s = [raw.text, raw.caption].filter(Boolean).join('\n');
+    } else {
+        s = String(raw);
+    }
+    return /ID:\s*BROADCAST_ALL\b/i.test(s) || /#broadcast_all\b/i.test(s);
+}
+
+/**
+ * Broadcast admin media/text to all users with access ≠ none.
+ * Returns { ok, fail, total }.
+ */
+async function broadcastToAllUsers(api, msg) {
+    const users = await User.find({ accessLevel: { $ne: 'none' } })
+        .select('telegramId')
+        .lean();
+    let ok = 0;
+    let fail = 0;
+    for (const u of users) {
+        if (!u?.telegramId) continue;
+        try {
+            const kind = await sendAdminReplyToUser(api, u.telegramId, msg);
+            if (kind) ok += 1;
+            else fail += 1;
+        } catch (e) {
+            fail += 1;
+            console.warn('[admin] broadcast fail', u.telegramId, e.message);
+        }
+    }
+    return { ok, fail, total: users.length };
+}
+
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
     const now = new Date();
@@ -546,6 +585,82 @@ async function startScenarioMessage(api, ctx, text, extra = {}) {
     return sent?.message_id;
 }
 
+/** Delete the callback message (cancel / cleanup). */
+async function deleteCallbackMessage(api, ctx) {
+    const msg = ctx.callbackQuery?.message;
+    if (!msg?.chat?.id || msg.message_id == null) return false;
+    try {
+        await api.deleteMessage(msg.chat.id, msg.message_id);
+        return true;
+    } catch (e) {
+        console.warn('[admin] deleteCallbackMessage failed:', e.message);
+        return false;
+    }
+}
+
+/**
+ * Final step of cron/scenario: show «Зроблено», then delete the scenario message.
+ */
+async function finishScenarioDone(api, ctx, summaryHtml = '') {
+    const msg = ctx.callbackQuery?.message;
+    const chatId = msg?.chat?.id;
+    const messageId = msg?.message_id;
+    const body =
+        `✅ <b>Зроблено</b>` + (summaryHtml ? `\n${summaryHtml}` : '');
+    if (chatId != null && messageId != null) {
+        try {
+            await api.editMessageText(chatId, messageId, body, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [] }
+            });
+        } catch (e) {
+            console.warn('[admin] finishScenarioDone edit failed:', e.message);
+        }
+        try {
+            await api.deleteMessage(chatId, messageId);
+        } catch (e) {
+            console.warn('[admin] finishScenarioDone delete failed:', e.message);
+        }
+    }
+}
+
+/** Paginated user picker for «Написати користувачу». */
+function buildMsgUserPage(users, page) {
+    const PAGE = ACCESS_PAGE_SIZE;
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
+
+    const rows = slice.map((u) => {
+        const label =
+            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+            (u.city ? ` · ${u.city}` : '');
+        return [
+            {
+                text: label.slice(0, 60),
+                callback_data: `adm|msg_pick|${u.telegramId}`
+            }
+        ];
+    });
+
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|msg_user|${p - 1}` });
+        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
+        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|msg_user|${p + 1}` });
+        rows.push(nav);
+    }
+    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * PAGE + 1 : 0;
+    const to = Math.min((p + 1) * PAGE, total);
+    const text =
+        `✉️ <b>Написати користувачу</b>\n` +
+        `<i>Оберіть отримувача (${from}–${to} з ${total})</i>`;
+    return { text, reply_markup: { inline_keyboard: rows } };
+}
+
 
 
 /** Users per page in «Змінити доступ» (2 buttons/row → keep under TG limits). */
@@ -643,8 +758,8 @@ async function handleAdminCallback(ctx) {
                 // Refresh main menu in place
                 await sendAdminMenu(api, chatId, ctx.callbackQuery.message.message_id);
             } else {
-                // Scenario cancel / back — close this message, leave main menu alone
-                await editCallbackMessage(api, ctx, '❌ Скасовано');
+                // Scenario cancel — delete this message, leave main menu alone
+                await deleteCallbackMessage(api, ctx);
             }
             return true;
         }
@@ -1023,17 +1138,10 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await editMessageById(
+                await finishScenarioDone(
                     api,
-                    chatId,
-                    msgId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🌆 <b>Розсилка вечір. прогнозу</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    {},
-                    threadId
+                    ctx,
+                    `🌆 Розсилка · статус <code>${res.status}</code>`
                 );
             } catch (e) {
                 await editMessageById(
@@ -1092,17 +1200,10 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await editMessageById(
+                await finishScenarioDone(
                     api,
-                    chatId,
-                    msgId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🧪 <b>Вечірній тест</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    {},
-                    threadId
+                    ctx,
+                    `🧪 Вечірній тест · статус <code>${res.status}</code>`
                 );
             } catch (e) {
                 await editMessageById(
@@ -1193,18 +1294,10 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await editMessageById(
+                await finishScenarioDone(
                     api,
-                    chatId,
-                    msgId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🎯 <b>Вечірній крон (1 юзер)</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Користувач: <code>${escapeHtml(targetId)}</code>\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    {},
-                    threadId
+                    ctx,
+                    `🎯 Юзер <code>${escapeHtml(targetId)}</code> · статус <code>${res.status}</code>`
                 );
             } catch (e) {
                 await editMessageById(
@@ -1263,17 +1356,10 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await editMessageById(
+                await finishScenarioDone(
                     api,
-                    chatId,
-                    msgId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🔍 <b>Крон чек (light)</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    {},
-                    threadId
+                    ctx,
+                    `🔍 Крон чек · статус <code>${res.status}</code>`
                 );
             } catch (e) {
                 await editMessageById(
@@ -1320,13 +1406,49 @@ async function handleAdminCallback(ctx) {
         }
 
         if (sub === 'msg_user') {
-            await api.sendMessage(
-                chatId,
-                '✉️ <b>Написати користувачу</b>\n\n' +
-                    'Надішліть у цей канал повідомлення у форматі:\n' +
-                    '<code>/msg USER_ID текст повідомлення</code>\n\n' +
-                    'Приклад:\n<code>/msg 7574257471 Привіт! Перевірка адмінки.</code>',
-                { parse_mode: 'HTML' }
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            if (!users.length) {
+                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                return true;
+            }
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildMsgUserPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            if (curText.includes('Написати користувачу')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
+            return true;
+        }
+
+        if (sub === 'msg_pick') {
+            const targetId = data[2];
+            if (!targetId) {
+                await startScenarioMessage(api, ctx, '❌ Невірний ID.');
+                return true;
+            }
+            await deleteCallbackMessage(api, ctx);
+            await startScenarioMessage(
+                api,
+                ctx,
+                `✉️ <b>Написати користувачу</b> <code>${escapeHtml(String(targetId))}</code>\n\n` +
+                    `Відповідай на <b>це</b> повідомлення (Reply) — текст, фото, голос, файл.\n` +
+                    `Після відправки воно піде цьому користувачу.\n\n` +
+                    `ID: <code>${escapeHtml(String(targetId))}</code>`
+            );
+            return true;
+        }
+
+        if (sub === 'msg_all') {
+            await startScenarioMessage(
+                api,
+                ctx,
+                `📣 <b>Написати всім</b>\n\n` +
+                    `Відповідай на <b>це</b> повідомлення (Reply) — текст, фото, голос, файл.\n` +
+                    `Після відправки воно піде <b>усім</b> користувачам з доступом (access ≠ none).\n\n` +
+                    `ID: <code>BROADCAST_ALL</code>`
             );
             return true;
         }
@@ -1421,10 +1543,27 @@ async function handleAdminChannelText(ctx) {
             ? { message_thread_id: msg.message_thread_id }
             : threadOpts('USERS');
 
-    // ── Reply to a user-notification → send text and/or media to that user ──
+    // ── Reply to instruction / user-notification → one user or ALL ──
     const replyTo = msg.reply_to_message;
     if (replyTo && (text || caption || hasMedia) && !(text || '').startsWith('/')) {
-        // Pass full message object — text/caption may be empty for some message types
+        if (isBroadcastAllTarget(replyTo)) {
+            try {
+                const { ok, fail, total } = await broadcastToAllUsers(api, msg);
+                await api.sendMessage(
+                    chatId,
+                    `📣 <b>Розсилка всім завершена</b>\n` +
+                        `✅ Доставлено: <b>${ok}</b> · ❌ Помилок: <b>${fail}</b> · Всього: <b>${total}</b>`,
+                    { parse_mode: 'HTML', ...sameThread }
+                );
+            } catch (e) {
+                await api.sendMessage(
+                    chatId,
+                    `❌ Помилка розсилки всім: ${escapeHtml(e.message)}`,
+                    { parse_mode: 'HTML', ...sameThread }
+                );
+            }
+            return true;
+        }
         const targetId = extractUserIdFromNotifyText(replyTo);
         if (targetId) {
             try {
@@ -1451,8 +1590,7 @@ async function handleAdminChannelText(ctx) {
         await api.sendMessage(
             chatId,
             'ℹ️ Відповідь не привʼязана до користувача.\n' +
-                'Відповідай на сповіщення з <code>ID: …</code> або використай:\n' +
-                '<code>/msg USER_ID текст</code>',
+                'Відповідай на інструкцію з <code>ID: …</code> або оберіть «Написати користувачу» в меню.',
             { parse_mode: 'HTML', ...sameThread }
         );
         return true;
