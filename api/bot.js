@@ -769,15 +769,36 @@ bot.on("message:text", async (ctx) => {
         if (await handleAdminChannelText(ctx)) return;
     }
 
-    // Notify admin about user activity (skip admin chat)
+    // Reply-keyboard labels look like plain text — treat as ACTIONS, not USERS
+    const isSettings = query === dict.uk.settingsBtn || query === dict.en.settingsBtn
+        || query.includes(dict.uk.settingsBtn) || query.includes(dict.en.settingsBtn);
+    const isHelpBtn = query === dict.uk.helpBtn || query === dict.en.helpBtn
+        || query.includes(dict.uk.helpBtn) || query.includes(dict.en.helpBtn);
+    const isCropsBtn = query === dict.uk.cropsBtn || query === dict.en.cropsBtn;
+    const isAgroAnalytics = query.includes(dict.uk.agroAnalyticsBtn) || query.includes(dict.en.agroAnalyticsBtn);
+    const isAgroForecast = query.includes(dict.uk.agroForecastBtn) || query.includes(dict.en.agroForecastBtn);
+    const isArchive = query.includes(dict.uk.agroArchiveBtn) || query.includes(dict.en.agroArchiveBtn);
+    const isMenuButton = isSettings || isHelpBtn || isCropsBtn || isAgroAnalytics || isAgroForecast || isArchive;
+
+    // Notify admin (skip admin chat)
     if (!isAdminChat(ctx.chat?.id) && ctx.from) {
         await connectDB();
         await touchUserProfile(ctx.from, lang);
-        await notifyAdmin(ctx.from, 'текст', { chatId: ctx.chat?.id, messageText: query });
+        if (isMenuButton) {
+            let menuAction = 'меню';
+            if (isSettings) menuAction = 'меню: налаштування';
+            else if (isHelpBtn) menuAction = 'меню: допомога';
+            else if (isCropsBtn) menuAction = 'меню: культури';
+            else if (isAgroAnalytics) menuAction = 'меню: агро-аналітика';
+            else if (isAgroForecast) menuAction = 'меню: агро-прогноз';
+            else if (isArchive) menuAction = 'меню: архів';
+            await notifyAdmin(ctx.from, menuAction, { chatId: ctx.chat?.id });
+        } else {
+            await notifyAdmin(ctx.from, 'текст', { chatId: ctx.chat?.id, messageText: query });
+        }
     }
 
     // Handle Menu Buttons
-    const isSettings = query.includes(dict.uk.settingsBtn) || query.includes(dict.en.settingsBtn);
     if (isSettings) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user) {
@@ -786,8 +807,7 @@ bot.on("message:text", async (ctx) => {
         return ctx.reply(dict[lang].settings, { parse_mode: 'Markdown', reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) });
     }
 
-    const isHelp = query.includes(dict.uk.helpBtn) || query.includes(dict.en.helpBtn);
-    if (isHelp) {
+    if (isHelpBtn) {
         return sendHelpMenu(ctx);
     }
 
@@ -797,7 +817,6 @@ bot.on("message:text", async (ctx) => {
         });
     }
 
-    const isAgroAnalytics = query.includes(dict.uk.agroAnalyticsBtn) || query.includes(dict.en.agroAnalyticsBtn);
     if (isAgroAnalytics) {
         return ctx.reply(lang === 'uk' ? '📉 Оберіть інструмент агро-аналітики:' : '📉 Select agro-analytics tool:', {
             reply_markup: {
@@ -809,7 +828,6 @@ bot.on("message:text", async (ctx) => {
         });
     }
 
-    const isAgroForecast = query.includes(dict.uk.agroForecastBtn) || query.includes(dict.en.agroForecastBtn);
     if (isAgroForecast) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
@@ -846,7 +864,6 @@ bot.on("message:text", async (ctx) => {
         return ctx.reply(report, { parse_mode: 'HTML' });
     }
 
-    const isArchive = query.includes(dict.uk.agroArchiveBtn) || query.includes(dict.en.agroArchiveBtn);
     if (isArchive) {
         const user = await User.findOne({ telegramId: ctx.from.id });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
