@@ -373,6 +373,101 @@ function buildUserInfoHtml(u, from = null) {
 }
 
 /**
+ * Same profile as buildUserInfoHtml, but only Telegram-safe HTML tags
+ * (b, i, code — no h1/table). For sendMessage / editMessageText fallback.
+ */
+function buildUserInfoPlain(u, from = null) {
+    const tgId = u?.telegramId || from?.id || '—';
+    const name =
+        (from && displayName(from)) ||
+        (u?.username ? u.username : null) ||
+        [u?.firstName, u?.lastName].filter(Boolean).join(' ') ||
+        `user_${tgId}`;
+    const uname = u?.username
+        ? `@${u.username}`
+        : from?.username
+          ? `@${from.username}`
+          : 'без @username';
+    const tgLang = from?.language_code || u?.languageCode || '—';
+    const access = accessLabel(u?.accessLevel || 'unlimited');
+    const accessIcon = (u?.accessLevel || 'unlimited') === 'none' ? '🚫' : '✅';
+    const botLang = u?.language || tgLang || '—';
+    const city = u?.city || 'не обрано';
+    const geo =
+        u?.lat != null && u?.lon != null
+            ? `${Number(u.lat).toFixed(5)}, ${Number(u.lon).toFixed(5)}`
+            : '—';
+    const tz = u?.timezone || '—';
+    const usage = u?.usage || {};
+    const eveningM = usage.eveningThisMonth || 0;
+    const alertsM = usage.alertsThisMonth || 0;
+    const eveningT = usage.eveningTotal || 0;
+    const alertsT = usage.alertsTotal || 0;
+    const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
+    const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
+    const geomagModes = {
+        active: 'активний (усі зміни)',
+        quiet: 'тихий',
+        off: 'вимкнено'
+    };
+    const geomag = geomagModes[u?.geomagMode] || u?.geomagMode || 'тихий';
+    const cropsList = Array.isArray(u?.crops) ? u.crops : [];
+    const cropsN = cropsList.length;
+    const cropsStr = cropsN ? cropsList.join(', ') : '—';
+    const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
+
+    const units = u?.units || {};
+    const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
+    const pressU = units.pressure === 'hpa' ? 'гПа' : 'мм рт. ст.';
+    const tempU = units.temp === 'f' ? '°F' : '°C';
+
+    const daysCount = u?.forecastSettings?.daysCount ?? 3;
+    let metrics = u?.forecastSettings?.enabledMetrics || [];
+    if (metrics.includes('aqi')) {
+        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
+    }
+    const metricsStr = metrics.length
+        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
+        : 'немає';
+
+    const triggers = u?.alertTriggers || {};
+    const alertLine = (key, label) =>
+        `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
+    const alertsStr = [
+        alertLine('temperature', 'температура'),
+        alertLine('precip', 'опади'),
+        alertLine('airQuality', 'якість повітря'),
+        alertLine('magneticStorm', 'магнітні бурі')
+    ].join(' · ');
+
+    return (
+        `👤 <b>${escapeHtml(name)}</b>\n` +
+        `${escapeHtml(uname)} · ID: <code>${tgId}</code>\n\n` +
+        `${accessIcon} Доступ: <b>${escapeHtml(access)}</b>\n` +
+        `Мова TG / бот: <code>${escapeHtml(tgLang)}</code> / <code>${escapeHtml(botLang)}</code>\n` +
+        `📍 Місто: ${escapeHtml(city)}\n` +
+        `Гео: <code>${geo}</code>\n` +
+        `TZ: <code>${escapeHtml(tz)}</code>\n` +
+        `Темп. зараз: <b>${temp}</b>\n` +
+        `Сповіщення: ${notif}\n` +
+        `Вечірній: ${evening}\n` +
+        `Магнітні бурі: ${escapeHtml(geomag)}\n` +
+        `Культури: <b>${cropsN}</b> — ${escapeHtml(cropsStr)}\n\n` +
+        `<b>⚙️ Налаштування</b>\n` +
+        `Одиниці: ${windU} · ${pressU} · ${tempU}\n` +
+        `Днів у прогнозі: <b>${daysCount}</b>\n` +
+        `Метрики: ${escapeHtml(metricsStr)}\n` +
+        `Алерти: ${escapeHtml(alertsStr)}\n\n` +
+        `<b>📬 Доставка</b>\n` +
+        `🌆 Вечірні: <b>${eveningM}</b> / <b>${eveningT}</b> (міс/всього)\n` +
+        `🚨 Алерти: <b>${alertsM}</b> / <b>${alertsT}</b>\n` +
+        `Разом: <b>${eveningM + alertsM}</b> / <b>${eveningT + alertsT}</b>\n\n` +
+        `📅 Реєстрація: ${escapeHtml(fmtUaDate(u?.createdAt))}\n` +
+        `🕐 Остання активність: ${escapeHtml(fmtUaDate(u?.lastActivityAt))}`
+    );
+}
+
+/**
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
@@ -1729,8 +1824,10 @@ async function handleAdminCallback(ctx) {
                 return true;
             }
             const html = buildUserInfoHtml(u);
+            const plain = buildUserInfoPlain(u);
             const cbMsg = ctx.callbackQuery?.message;
             const fromPicker = (cbMsg?.text || '').includes('Інфо про');
+            // Та сама гілка, звідки натиснули
             const preferredThread =
                 cbMsg?.message_thread_id != null
                     ? cbMsg.message_thread_id
@@ -1738,36 +1835,55 @@ async function handleAdminCallback(ctx) {
                       ? topicId('GENERAL')
                       : topicId('USERS');
             const thr =
-                preferredThread != null ? { message_thread_id: preferredThread } : {};
+                preferredThread != null && preferredThread !== ''
+                    ? { message_thread_id: Number(preferredThread) }
+                    : {};
+            const backBtn = {
+                inline_keyboard: [[{ text: '◀️ Меню', callback_data: 'adm|menu' }]]
+            };
 
-            // З пікера: замінити повідомлення списку на інфо (в тій же гілці General)
+            // Як у list / stats: sendRichMessage(chatId, { html }, thr) — thr окремим 3-м аргументом
+            const sendRichInfo = async () => {
+                const payload = { html, skip_entity_detection: true };
+                if (Object.keys(thr).length) {
+                    await api.sendRichMessage(chatId, payload, thr);
+                } else {
+                    await api.sendRichMessage(chatId, payload);
+                }
+            };
+
             if (fromPicker) {
+                // Список → rich у тій же гілці; список прибираємо (заміна)
                 try {
-                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
+                    await sendRichInfo();
                     await deleteCallbackMessage(api, ctx);
                 } catch (richErr) {
                     console.warn('[admin] userinfo_pick rich failed:', richErr.message);
-                    // Fallback: редагуємо поточне повідомлення plain HTML
-                    await editCallbackMessage(api, ctx, html, {
-                        reply_markup: {
-                            inline_keyboard: [[{ text: '◀️ Меню', callback_data: 'adm|menu' }]]
-                        },
+                    // Лише якщо rich реально впав — plain без h1/table
+                    await editCallbackMessage(api, ctx, plain, {
+                        reply_markup: backBtn,
                         disable_web_page_preview: true
                     });
                 }
                 return true;
             }
 
-            // З notifyAdmin (кнопка «Інфо про користувача») — нове повідомлення в USERS
+            // Кнопка з notifyAdmin — нове rich (як було)
             try {
-                await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
+                await sendRichInfo();
             } catch (richErr) {
                 console.warn('[admin] userinfo rich failed:', richErr.message);
-                await api.sendMessage(chatId, html, {
-                    parse_mode: 'HTML',
-                    disable_web_page_preview: true,
-                    ...thr
-                });
+                await sendInAdminThread(
+                    api,
+                    chatId,
+                    plain,
+                    {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true,
+                        reply_markup: backBtn
+                    },
+                    preferredThread
+                );
             }
             return true;
         }
