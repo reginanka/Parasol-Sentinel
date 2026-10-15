@@ -262,6 +262,21 @@ function cleanEnabledMetrics(raw) {
     return { metrics, changed, removed: [...new Set(removed)] };
 }
 
+/** Inline «🔄 Оновити» для аналітики / інфо. */
+function refreshMarkup(callbackData) {
+    return {
+        inline_keyboard: [[{ text: '🔄 Оновити', callback_data: callbackData }]]
+    };
+}
+
+/** Клік по кнопці «Оновити» (не з головного меню). */
+function isRefreshClick(msg) {
+    const rows = msg?.reply_markup?.inline_keyboard || [];
+    return rows.some((row) =>
+        (row || []).some((b) => String(b?.text || '').includes('Оновити'))
+    );
+}
+
 function fmtUaDate(d) {
     if (!d) return '—';
     try {
@@ -1512,28 +1527,57 @@ async function handleAdminCallback(ctx) {
 <p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
 `.trim();
 
+            const statsRefresh = refreshMarkup('adm|stats');
+            // Оновлення: прибрати старе повідомлення аналітики (не чіпати головне меню)
+            if (isRefreshClick(ctx.callbackQuery?.message)) {
+                await deleteCallbackMessage(api, ctx);
+            }
+            const sendStatsRefreshStrip = async (preferredThr = null) => {
+                try {
+                    await sendInAdminThread(
+                        api,
+                        chatId,
+                        '🔄',
+                        { reply_markup: statsRefresh },
+                        preferredThr
+                    );
+                } catch (e) {
+                    console.warn('[admin] stats refresh strip failed:', e.message);
+                }
+            };
             try {
                 await api.sendRichMessage(chatId, {
                     html,
-                    skip_entity_detection: true
+                    skip_entity_detection: true,
+                    reply_markup: statsRefresh
                 });
             } catch (richErr) {
-                console.warn('[admin] stats sendRichMessage failed, fallback:', richErr.message);
-                // Plain fallback without tables
-                const plain =
-                    `📊 <b>Аналітика Parasol Sentinel</b>\n` +
-                    `<i>${escapeHtml(monthLabel)}</i>\n\n` +
-                    `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
-                    `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
-                    `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
-                    `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
-                    `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
-                    `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
-                    `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
-                await api.sendMessage(chatId, plain, {
-                    parse_mode: 'HTML',
-                    disable_web_page_preview: true
-                });
+                console.warn('[admin] stats sendRichMessage (+markup) failed:', richErr.message);
+                try {
+                    // Rich без кнопок + окрема смужка «Оновити»
+                    await api.sendRichMessage(chatId, {
+                        html,
+                        skip_entity_detection: true
+                    });
+                    await sendStatsRefreshStrip();
+                } catch (richErr2) {
+                    console.warn('[admin] stats sendRichMessage failed, fallback:', richErr2.message);
+                    const plain =
+                        `📊 <b>Аналітика Parasol Sentinel</b>\n` +
+                        `<i>${escapeHtml(monthLabel)}</i>\n\n` +
+                        `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
+                        `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
+                        `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
+                        `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
+                        `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
+                        `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
+                        `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
+                    await api.sendMessage(chatId, plain, {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true,
+                        reply_markup: statsRefresh
+                    });
+                }
             }
             return true;
         }
@@ -2009,38 +2053,67 @@ async function handleAdminCallback(ctx) {
             const html = buildUserInfoHtml(u);
             const cbMsg = ctx.callbackQuery?.message;
             const fromPicker = (cbMsg?.text || '').includes('Інфо про');
+            const fromRefresh = isRefreshClick(cbMsg);
             // Та сама гілка, звідки натиснули (як у старому userinfo)
             const thr =
                 cbMsg?.message_thread_id != null
                     ? { message_thread_id: cbMsg.message_thread_id }
-                    : fromPicker
+                    : fromPicker || fromRefresh
                       ? threadOpts('GENERAL')
                       : threadOpts('USERS');
 
-            // Точно як list / stats / notify userinfo — тільки rich з таблицями
+            const infoRefresh = refreshMarkup(`adm|userinfo|${tgId}`);
+            const richWithBtn = {
+                html,
+                skip_entity_detection: true,
+                reply_markup: infoRefresh
+            };
+            const richOnly = { html, skip_entity_detection: true };
+
+            // Пікер / оновити — прибрати старе повідомлення, щоб не копились
+            if (fromPicker || fromRefresh) {
+                await deleteCallbackMessage(api, ctx);
+            }
+
+            const preferredThr =
+                thr.message_thread_id != null ? thr.message_thread_id : null;
+
+            const sendInfoRefreshStrip = async () => {
+                try {
+                    await sendInAdminThread(
+                        api,
+                        chatId,
+                        '🔄',
+                        { reply_markup: infoRefresh },
+                        preferredThr
+                    );
+                } catch (e) {
+                    console.warn('[admin] userinfo refresh strip failed:', e.message);
+                }
+            };
+
+            // Rich з таблицями + 🔄 (якщо API не приймає markup — смужка окремо)
             try {
                 if (Object.keys(thr).length) {
-                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
+                    await api.sendRichMessage(chatId, richWithBtn, thr);
                 } else {
-                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true });
-                }
-                if (fromPicker) {
-                    await deleteCallbackMessage(api, ctx);
+                    await api.sendRichMessage(chatId, richWithBtn);
                 }
             } catch (richErr) {
-                console.warn('[admin] userinfo rich failed:', richErr.message);
-                // Повтор без thread — як sendUsersRich (list)
+                console.warn('[admin] userinfo rich (+markup) failed:', richErr.message);
                 try {
-                    await api.sendRichMessage(chatId, { html, skip_entity_detection: true });
-                    if (fromPicker) {
-                        await deleteCallbackMessage(api, ctx);
+                    if (Object.keys(thr).length) {
+                        await api.sendRichMessage(chatId, richOnly, thr);
+                    } else {
+                        await api.sendRichMessage(chatId, richOnly);
                     }
+                    await sendInfoRefreshStrip();
                 } catch (e2) {
                     console.error('[admin] userinfo rich no-thread failed:', e2.message);
                     await api.sendMessage(
                         chatId,
                         `❌ Не вдалося надіслати інфо (rich): ${escapeHtml(e2.message)}`,
-                        { parse_mode: 'HTML', ...thr }
+                        { parse_mode: 'HTML', reply_markup: infoRefresh, ...thr }
                     );
                 }
             }
