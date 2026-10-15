@@ -2246,9 +2246,71 @@ async function incrementUsage(telegramId, type) {
     }
 }
 
+
+/**
+ * Ping ERROR topic when a user hits a handler error (button / text / etc.).
+ * Also persists a short row in ErrorLog (source: user).
+ */
+async function notifyUserError(from, err, extra = {}) {
+    const chatId = ADMIN_CHAT_ID();
+    const msg = (err && err.message) || String(err || 'unknown error');
+    const stack = err && err.stack ? String(err.stack).slice(0, 900) : '';
+    const name = from ? displayName(from) : 'unknown';
+    const uid = from && from.id != null ? from.id : null;
+    const cb = extra.callbackData ? String(extra.callbackData) : '';
+    const where = extra.where ? String(extra.where) : '';
+
+    const lines = [
+        `🚨 <b>User error</b>` + (where ? ` · <code>${escapeHtml(where)}</code>` : ''),
+        uid != null
+            ? `👤 ${escapeHtml(name)} · <code>${uid}</code> · #u${uid}`
+            : `👤 ${escapeHtml(name)}`,
+    ];
+    if (cb) lines.push(`🔘 <code>${escapeHtml(cb.slice(0, 200))}</code>`);
+    if (extra.messageText) {
+        lines.push(`💬 ${escapeHtml(String(extra.messageText).slice(0, 300))}`);
+    }
+    lines.push(`❌ ${escapeHtml(msg.slice(0, 500))}`);
+    if (stack) {
+        lines.push(`<pre>${escapeHtml(stack)}</pre>`);
+    }
+    const text = lines.join('\n');
+
+    if (chatId) {
+        const bot = getBot();
+        try {
+            await bot.api.sendMessage(chatId, text, {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                ...threadOpts('ERRORS')
+            });
+        } catch (e) {
+            console.error('[admin] notifyUserError send failed:', e.message);
+        }
+    }
+
+    try {
+        await ErrorLog.create({
+            source: 'user',
+            message: [
+                uid != null ? `uid=${uid}` : '',
+                cb ? `cb=${cb.slice(0, 120)}` : '',
+                where ? `where=${where}` : '',
+                msg
+            ]
+                .filter(Boolean)
+                .join(' | ')
+                .slice(0, 1500)
+        });
+    } catch (e) {
+        console.error('[admin] notifyUserError ErrorLog failed:', e.message);
+    }
+}
+
 module.exports = {
     isAdminChat,
     notifyAdmin,
+    notifyUserError,
     touchUserProfile,
     ensureMonthCounters,
     incrementUsage,
