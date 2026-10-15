@@ -330,6 +330,170 @@ function buildUserInfoHtml(u, from = null) {
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
+/**
+ * Людський опис дії користувача для адмін-нотифікацій.
+ * raw actionText + optional callbackData → зрозумілий рядок українською.
+ */
+function describeUserAction(actionText, extra = {}) {
+    const cb = String(extra.callbackData || '').trim();
+    const parts = cb ? cb.split('|') : [];
+    const head = parts[0] || '';
+
+    const metricNames = {
+        condition: 'стан неба',
+        temp: 'температура',
+        precip: 'опади',
+        wind: 'вітер',
+        pressure: 'тиск',
+        dew: 'точка роси',
+        uv: 'УФ-індекс',
+        visibility: 'видимість',
+        soil0: 'ґрунт 0 см',
+        soil6: 'ґрунт 6 см',
+        moon: 'місяць',
+        sun: 'сонце',
+        aqi_now: 'AQI зараз',
+        aqi_main: 'AQI основний',
+        aqi_ext: 'AQI розширений',
+        aqi: 'якість повітря',
+        geomag: 'магнітні бурі'
+    };
+
+    const helpTopics = {
+        uv: 'УФ-індекс',
+        wind: 'вітер',
+        press: 'тиск',
+        hum: 'вологість',
+        precip: 'опади',
+        dew: 'точка роси',
+        feels: 'відчувається як',
+        cloud: 'хмарність',
+        soil0: 'ґрунт 0 см',
+        soil6: 'ґрунт 6 см',
+        geomag: 'магнітні бурі',
+        how: 'як це працює'
+    };
+
+    // Explicit known actions without callback payload
+    if (!cb) {
+        if (actionText === '/start') return 'натиснув /start (старт бота)';
+        if (actionText === 'текст') return 'надіслав текст (пошук міста або повідомлення)';
+        return String(actionText || 'невідома дія');
+    }
+
+    // City pick: set|lat|lon
+    if (head === 'set' && parts.length >= 3) {
+        return `обрав місто на карті (${parts[1]}, ${parts[2]})`;
+    }
+
+    const map = {
+        open_settings: 'відкрив загальні налаштування',
+        open_help: 'відкрив допомогу',
+        forecast_menu: 'відкрив налаштування вечірнього прогнозу',
+        alert_settings: 'відкрив налаштування сповіщень',
+        change_city: 'хоче змінити місто',
+        delete_city: 'видалив місто',
+        toggle_notifications: 'перемкнув усі сповіщення',
+        toggle_evening_forecast: 'перемкнув вечірній прогноз',
+        crops_main: 'відкрив меню культур',
+        agro_forecast_menu: 'відкрив агро-прогноз',
+        agro_archive_menu: 'відкрив агро-архів',
+        agro_tomorrow: 'запросив агро-рекомендації на завтра',
+        agro_schedule_only: 'запросив графік обробок',
+        agro_5day: 'запросив 5-денний агро-прогноз',
+        geomag_fc: 'відкрив прогноз магнітних бур',
+        noop: 'натиснув службову кнопку (без дії)'
+    };
+    if (map[cb] || map[head]) {
+        // Prefer full key match, then head-only simple keys
+        if (map[cb]) return map[cb];
+        if (parts.length === 1 && map[head]) return map[head];
+    }
+
+    if (head === 'forecast') {
+        if (parts[1] === 'days' && parts[2]) {
+            return `обрав ${parts[2]} дн. у вечірньому прогнозі`;
+        }
+        if (parts[1] === 'toggle' && parts[2]) {
+            const m = metricNames[parts[2]] || parts[2];
+            return `перемкнув метрику «${m}» у вечірньому прогнозі`;
+        }
+    }
+
+    if (head === 'alert') {
+        if (parts[1] === 'toggle_all' && parts[2] === 'on') return 'увімкнув усі алерти';
+        if (parts[1] === 'toggle_all' && parts[2] === 'off') return 'вимкнув усі алерти';
+        if (parts[1] === 'toggle' && parts[2]) {
+            const names = {
+                temperature: 'температура',
+                precip: 'опади',
+                airQuality: 'якість повітря'
+            };
+            return `перемкнув алерт «${names[parts[2]] || parts[2]}»`;
+        }
+    }
+
+    if (head === 'geomag_mode') {
+        const modes = {
+            active: 'активний (усі зміни)',
+            quiet: 'тихий (лише сильніші за план)',
+            off: 'вимкнено'
+        };
+        return `режим магнітних бур: ${modes[parts[1]] || parts[1]}`;
+    }
+
+    if (head === 'unit') {
+        if (parts[1] === 'wind') {
+            return parts[2] === 'kmh' ? 'одиниці вітру: км/год' : 'одиниці вітру: м/с';
+        }
+        if (parts[1] === 'pressure') {
+            return parts[2] === 'hpa' ? 'одиниці тиску: гПа' : 'одиниці тиску: мм рт. ст.';
+        }
+        if (parts[1] === 'temp') {
+            return parts[2] === 'f' ? 'температура: °F' : 'температура: °C';
+        }
+    }
+
+    if (head === 'help') {
+        const t = helpTopics[parts[1]] || parts[1];
+        return `читає довідку: ${t}`;
+    }
+
+    if (head === 'crops_cat') return `обрав категорію культур: ${parts[1] || '—'}`;
+    if (head === 'crops_toggle') {
+        return `перемкнув культуру (${parts[1] || '?'}/${parts[2] || '?'})`;
+    }
+
+    if (head === 'archive') {
+        const periods = {
+            '7': '7 днів',
+            '30': '30 днів',
+            '180': '6 місяців',
+            '365': 'рік',
+            custom: 'своя дата',
+            last_year: 'минулий рік'
+        };
+        return `агро-архів: ${periods[parts[1]] || parts[1]}`;
+    }
+
+    if (head === 'forecast_hourly') {
+        return parts[1]
+            ? `погодинний прогноз (Open-Meteo) на ${parts[1]}`
+            : 'погодинний прогноз (Open-Meteo)';
+    }
+    if (head === 'forecast_verify') {
+        return parts[1]
+            ? `перевірка прогнозу (Tomorrow.io) на ${parts[1]}`
+            : 'перевірка прогнозу (Tomorrow.io)';
+    }
+
+    // Fallback: still human-ish
+    if (actionText === 'callback') {
+        return `натиснув кнопку «${cb}»`;
+    }
+    return `${actionText}${cb ? ` (${cb})` : ''}`;
+}
+
 async function notifyAdmin(from, actionText, extra = {}) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !from) return;
@@ -340,17 +504,19 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const bot = getBot();
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
+    const humanAction = describeUserAction(actionText, extra);
 
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
         `ID: <code>${from.id}</code>\n` +
-        `⚡ Дія: ${escapeHtml(actionText)}`;
+        `⚡ Дія: ${escapeHtml(humanAction)}`;
 
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
     }
-    if (extra.callbackData) {
+    // Сирий callback лишаємо дрібним сірим рядком лише якщо не впізнали
+    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
     }
     text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
@@ -374,7 +540,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
         try {
             await bot.api.sendMessage(
                 chatId,
-                `👤 ${name}\nID: ${from.id}\nДія: ${actionText}` +
+                `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
                     (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
                 { reply_markup: markup, ...usersThread }
             );
@@ -529,13 +695,22 @@ async function sendAdminMenu(api, chatId, messageId = null, preferredThreadId = 
     if (messageId) {
         try {
             await api.editMessageText(chatId, messageId, text, base);
-            return;
-        } catch (_) {
-            /* fall through to send */
+            return { edited: true, messageId };
+        } catch (e) {
+            const msg = e?.message || String(e);
+            // Telegram: same text+markup → "message is not modified" — це успіх, не слати нове
+            if (/message is not modified/i.test(msg)) {
+                return { edited: true, messageId, unchanged: true };
+            }
+            console.warn('[admin] sendAdminMenu edit failed:', msg);
+            // Не шлемо дубль, якщо редагування не вдалось з іншої причини —
+            // лише коли messageId не передавали (нове меню з /admin).
+            return { edited: false, messageId, error: msg };
         }
     }
 
-    await sendInAdminThread(api, chatId, text, base, preferredThreadId);
+    const sent = await sendInAdminThread(api, chatId, text, base, preferredThreadId);
+    return { edited: false, messageId: sent?.message_id };
 }
 
 
@@ -787,13 +962,23 @@ async function handleAdminCallback(ctx) {
 
     try {
         if (sub === 'menu') {
-            const curText = ctx.callbackQuery?.message?.text || '';
+            const curMsg = ctx.callbackQuery?.message;
+            const curText = curMsg?.text || curMsg?.caption || '';
             const isMainMenu =
                 curText.includes('Адмін-панель Parasol Sentinel') ||
                 curText.includes('Оберіть дію кнопкою');
-            if (isMainMenu) {
-                // Refresh main menu in place
-                await sendAdminMenu(api, chatId, ctx.callbackQuery.message.message_id);
+            if (isMainMenu && curMsg?.message_id != null) {
+                // Єдина кнопка, що має перезаписувати повідомлення меню (edit, не send)
+                const result = await sendAdminMenu(api, chatId, curMsg.message_id);
+                if (!result.edited && result.error) {
+                    // Повідомлення зникло / недоступне — тоді вже нове
+                    await sendAdminMenu(
+                        api,
+                        chatId,
+                        null,
+                        curMsg.message_thread_id ?? topicId('GENERAL')
+                    );
+                }
             } else {
                 // Scenario cancel — delete this message, leave main menu alone
                 await deleteCallbackMessage(api, ctx);

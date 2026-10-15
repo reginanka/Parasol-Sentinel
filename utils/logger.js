@@ -7,17 +7,45 @@
  * 1) ADMIN_CHAT_ID + TOPIC_LOGS  → forum topic "Логи"
  * 2) chatId argument (usually process.env.LOG_CHAT_ID)
  *
- * Errors (FAILED / ❌ / Error: / …) go only to:
- *   ADMIN_CHAT_ID + ERROR_ID  (or TOPIC_ERRORS) → окрема гілка помилок
+ * Real errors only → ADMIN_CHAT_ID + ERROR_ID (or TOPIC_ERRORS)
+ * Success summaries with "Помилок: 0" stay in normal logs.
  */
 
+function stripHtml(text) {
+    return String(text || '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * True only for real failures — not success reports that merely mention "Помилок 0".
+ */
+function looksLikeErrorText(text) {
+    if (!text || typeof text !== 'string') return false;
+    const plain = stripHtml(text);
+
+    // Explicit failure titles / stack traces
+    if (/\bFAILED\b|EXCEPTION|Error:\s*\S/i.test(plain)) return true;
+    if (/Weather Check FAILED|Light Weather Check FAILED/i.test(plain)) return true;
+
+    // "Помилок" / "errors" with a non-zero number nearby
+    // e.g. "Помилок 3", "Помилок: 2", "errors: 1", "errorsCount 5"
+    const errCount =
+        plain.match(/Помилок\s*:?\s*(\d+)/i) ||
+        plain.match(/\berrors?\s*:?\s*(\d+)/i) ||
+        plain.match(/errorsCount\s*[:=]?\s*(\d+)/i);
+    if (errCount && Number(errCount[1]) > 0) return true;
+
+    // Standalone failure markers without a zero-error report structure
+    // Avoid matching the label "❌ Помилок" in a successful table
+    if (/❌\s*(FAILED|Помилка\b|Error\b)/i.test(plain)) return true;
+
+    return false;
+}
+
 async function persistErrorIfNeeded(text) {
-    if (!text || typeof text !== 'string') return;
-    const plain = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    const looksLikeError =
-        /FAILED|Помилок\s*:|❌|Error:|failed|EXCEPTION/i.test(plain) ||
-        /errorsCount|errors:\s*[1-9]/i.test(plain);
-    if (!looksLikeError) return;
+    if (!looksLikeErrorText(text)) return;
 
     try {
         const connectDB = require('./db');
@@ -25,20 +53,11 @@ async function persistErrorIfNeeded(text) {
         await connectDB();
         await ErrorLog.create({
             source: 'cron',
-            message: plain.slice(0, 1500)
+            message: stripHtml(text).slice(0, 1500)
         });
     } catch (e) {
         console.error('[logger] ErrorLog persist failed:', e.message);
     }
-}
-
-function looksLikeErrorText(text) {
-    if (!text || typeof text !== 'string') return false;
-    const plain = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    return (
-        /FAILED|Помилок\s*:|❌|Error:|failed|EXCEPTION/i.test(plain) ||
-        /errorsCount|errors:\s*[1-9]/i.test(plain)
-    );
 }
 
 function resolveLogDest(chatId) {
@@ -97,8 +116,7 @@ async function sendToDest(bot, dest, html) {
             try {
                 await bot.api.sendMessage(
                     dest.chatId,
-                    '🚨 Log (plain):\n\n' +
-                        String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
+                    '🚨 Log (plain):\n\n' + stripHtml(html),
                     threadOpts
                 );
                 return true;
@@ -120,7 +138,7 @@ async function logToTelegram(bot, chatId, html) {
     const isError = looksLikeErrorText(html);
     const errorDest = isError ? resolveErrorDest() : null;
 
-    // Помилки — лише в ERROR_ID (окрема гілка), без дубля в загальний лог
+    // Реальні помилки — лише в ERROR_ID; успішні звіти з «Помилок: 0» — у звичайний лог
     if (errorDest) {
         console.log(`📡 Error log → chat ${errorDest.chatId} topic ${errorDest.threadId}`);
         const ok = await sendToDest(bot, errorDest, html);
