@@ -1623,9 +1623,18 @@ async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, fail
     }
 }
 
+/**
+ * Append a line to per-user support transcript and upsert one message in HISTORY topic.
+ * - Full transcript always stored in DB (never truncated).
+ * - Telegram card shows only the recent tail if too long.
+ * - When over limit: attach/update a .txt file with the FULL conversation.
+ * Media → line has type + #assetId; asset itself is sent as a separate HISTORY message.
+ */
 async function appendSupportConversation(api, telegramId, who, msgOrText) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !telegramId) return;
+
+    const CARD_LIMIT = 3200; // tail visible in message (under TG 4096 with header)
 
     let media = null;
     let text = '';
@@ -1653,7 +1662,7 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
     let assetId = null;
     if (kind && rawMsg) {
         const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
-        // Унікально між юзерами: A{telegramId}-{seq} (напр. A7574257471-1)
+        // Унікально між юзерами: A{telegramId}-{seq}
         assetId = `A${telegramId}-${seq}`;
         if (!user.supportHistory) user.supportHistory = {};
         user.supportHistory.assetSeq = seq;
@@ -1661,28 +1670,36 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
 
     const line = formatSupportLine(who, media, text, assetId);
     const prev = (user.supportHistory && user.supportHistory.transcript) || '';
-    let transcript = prev ? `${prev}\n${line}` : line;
-    if (transcript.length > 3500) {
-        transcript = '…\n' + transcript.slice(transcript.length - 3400);
-    }
+    // FULL history — never truncate in DB
+    const transcript = prev ? `${prev}\n${line}` : line;
 
-    // One ID only (in the title line)
     const namePart =
         user.username
             ? `@${user.username}`
             : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
     const header =
         `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n`;
-    const full = header + escapeHtml(transcript);
+
+    const overflow = transcript.length > CARD_LIMIT;
+    let visible = transcript;
+    if (overflow) {
+        visible = '…\n' + transcript.slice(transcript.length - CARD_LIMIT);
+    }
+    let body =
+        header +
+        escapeHtml(visible) +
+        (overflow
+            ? `\n\n<i>📎 Повна розмова у файлі <code>chat_${telegramId}.txt</code> (усі рядки збережено)</i>`
+            : '');
 
     const thrId = topicId('HISTORY');
     const histMsgId = user.supportHistory && user.supportHistory.messageId;
-
     let newMsgId = histMsgId;
+
     try {
         if (histMsgId) {
             try {
-                await api.editMessageText(chatId, histMsgId, full, {
+                await api.editMessageText(chatId, histMsgId, body, {
                     parse_mode: 'HTML',
                     disable_web_page_preview: true
                 });
@@ -1691,7 +1708,7 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
                 const sent = await sendInAdminThread(
                     api,
                     chatId,
-                    full,
+                    body,
                     { parse_mode: 'HTML', disable_web_page_preview: true },
                     thrId
                 );
@@ -1701,7 +1718,7 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
             const sent = await sendInAdminThread(
                 api,
                 chatId,
-                full,
+                body,
                 { parse_mode: 'HTML', disable_web_page_preview: true },
                 thrId
             );
@@ -1709,6 +1726,40 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         }
     } catch (e) {
         console.warn('[admin] appendSupportConversation send failed:', e.message);
+    }
+
+    // Over limit → .txt with FULL transcript (replace previous file msg if any)
+    let fileMessageId = (user.supportHistory && user.supportHistory.fileMessageId) || null;
+    if (overflow) {
+        try {
+            if (fileMessageId) {
+                try {
+                    await api.deleteMessage(chatId, fileMessageId);
+                } catch (_) {
+                    /* ignore — already gone */
+                }
+            }
+            const { InputFile } = require('grammy');
+            const fileName = `chat_${telegramId}.txt`;
+            const fileBody =
+                `Parasol support chat · user ${telegramId} · ${namePart}\n` +
+                `Updated: ${new Date().toISOString()}\n` +
+                `${'='.repeat(40)}\n\n` +
+                transcript;
+            const thr = thrId != null ? { message_thread_id: thrId } : {};
+            const doc = await api.sendDocument(
+                chatId,
+                new InputFile(Buffer.from(fileBody, 'utf8'), fileName),
+                {
+                    caption: `📎 Повна розмова з <code>${telegramId}</code> (${transcript.split('\n').length} рядків)`,
+                    parse_mode: 'HTML',
+                    ...thr
+                }
+            );
+            fileMessageId = doc?.message_id || null;
+        } catch (e) {
+            console.warn('[admin] support full-file failed:', e.message);
+        }
     }
 
     // Mirror media asset next to the conversation card
@@ -1722,7 +1773,8 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
 
     user.supportHistory = {
         messageId: newMsgId || histMsgId || null,
-        transcript,
+        fileMessageId: fileMessageId,
+        transcript, // full, never truncated
         assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
         updatedAt: new Date()
     };
