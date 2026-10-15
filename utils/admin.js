@@ -593,7 +593,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
     if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         richHtml += `<p>🔘 <code>${escapeHtml(extra.callbackData)}</code></p>`;
     }
-    if (transcriptTail) {
+    if (transcriptTail && isUserText) {
         const lines = transcriptTail.split('\n').length;
         richHtml +=
             `<details>` +
