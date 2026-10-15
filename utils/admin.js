@@ -625,7 +625,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
             { html: richHtml, skip_entity_detection: true },
             { reply_markup: markup, ...thread }
         );
-        sentMessageId = sent?.message_id ?? sent?.message_id;
+        sentMessageId = sent?.message_id ?? sent?.message?.message_id ?? sent?.result?.message_id ?? null;
         sentOk = true;
     } catch (richErr) {
         console.warn('[admin] notify sendRichMessage failed, HTML fallback:', richErr.message);
@@ -770,19 +770,23 @@ function extractUserIdFromNotifyText(raw) {
 }
 
 /**
- * Remember admin-notify message_id → user, so Reply works even for Rich Messages
- * (where text/ID may be missing in reply_to).
- * Keeps last 40 ids per user.
+ * Remember admin-notify message_id → user, so Reply works for Rich Messages.
+ * Writes to User.supportHistory.notifyMessageIds (last 40).
+ * Also mirrors into collection admin_notify_map as belt-and-suspenders (serverless).
  */
 async function rememberNotifyMessage(telegramId, messageId) {
     if (!telegramId || messageId == null) return;
+    const tid = Number(telegramId);
+    const mid = Number(messageId);
+    if (!Number.isFinite(tid) || !Number.isFinite(mid)) return;
+
     try {
         await User.updateOne(
-            { telegramId: Number(telegramId) },
+            { telegramId: tid },
             {
                 $push: {
                     'supportHistory.notifyMessageIds': {
-                        $each: [Number(messageId)],
+                        $each: [mid],
                         $slice: -40
                     }
                 },
@@ -791,14 +795,33 @@ async function rememberNotifyMessage(telegramId, messageId) {
             { upsert: false }
         );
     } catch (e) {
-        console.warn('[admin] rememberNotifyMessage failed:', e.message);
+        console.warn('[admin] rememberNotifyMessage User.updateOne:', e.message);
+    }
+
+    // Fallback map (survives schema lag / strict paths)
+    try {
+        const col = User.db.collection('admin_notify_map');
+        await col.updateOne(
+            { messageId: mid },
+            {
+                $set: {
+                    messageId: mid,
+                    telegramId: tid,
+                    at: new Date()
+                }
+            },
+            { upsert: true }
+        );
+    } catch (e) {
+        console.warn('[admin] rememberNotifyMessage map:', e.message);
     }
 }
 
 /**
  * Resolve target user id from a reply_to message:
  * 1) text markers #u / ID:
- * 2) DB map by message_id (reliable for Rich Message)
+ * 2) User.supportHistory.notifyMessageIds
+ * 3) admin_notify_map collection
  */
 async function resolveTargetUserId(replyTo) {
     const fromText = extractUserIdFromNotifyText(replyTo);
@@ -806,19 +829,30 @@ async function resolveTargetUserId(replyTo) {
 
     const mid = replyTo && replyTo.message_id;
     if (mid == null) return null;
+    const midN = Number(mid);
 
     try {
         const u = await User.findOne({
-            'supportHistory.notifyMessageIds': Number(mid)
+            'supportHistory.notifyMessageIds': midN
         })
             .select('telegramId')
             .lean();
         if (u && u.telegramId) return Number(u.telegramId);
     } catch (e) {
-        console.warn('[admin] resolveTargetUserId lookup failed:', e.message);
+        console.warn('[admin] resolveTargetUserId user lookup:', e.message);
     }
+
+    try {
+        const col = User.db.collection('admin_notify_map');
+        const row = await col.findOne({ messageId: midN });
+        if (row && row.telegramId) return Number(row.telegramId);
+    } catch (e) {
+        console.warn('[admin] resolveTargetUserId map lookup:', e.message);
+    }
+
     return null;
 }
+
 
 
 
@@ -1942,9 +1976,12 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         }
     }
 
+    const prevNotifyIds =
+        (user.supportHistory && user.supportHistory.notifyMessageIds) || [];
     user.supportHistory = {
         messageId: newMsgId || histMsgId || null,
         fileMessageId: fileMessageId,
+        notifyMessageIds: prevNotifyIds,
         transcript, // full, never truncated
         assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
         updatedAt: new Date()
@@ -2081,14 +2118,22 @@ async function handleAdminChannelText(ctx) {
             }
             return true;
         }
-        await api.sendMessage(
-            chatId,
-            'ℹ️ Відповідь не привʼязана до користувача.\n' +
-                'Відповідай на сповіщення з <code>ID: …</code> або використай:\n' +
-                '<code>/msg USER_ID текст</code>',
-            { parse_mode: 'HTML', ...sameThread }
-        );
-        return true;
+        {
+            const mid = replyTo?.message_id;
+            const preview = [replyTo?.text, replyTo?.caption].filter(Boolean).join(' ').slice(0, 120);
+            await api.sendMessage(
+                chatId,
+                'ℹ️ Не вдалося визначити користувача з цієї відповіді.\n' +
+                    (mid != null ? `message_id сповіщення: <code>${mid}</code>\n` : '') +
+                    (preview
+                        ? `текст: <code>${escapeHtml(preview)}</code>\n`
+                        : 'текст reply_to порожній (типово для Rich Message)\n') +
+                    'Відповідь спрацює на <b>нових</b> сповіщеннях після деплою.\n' +
+                    'Або: <code>/msg USER_ID текст</code>',
+                { parse_mode: 'HTML', ...sameThread }
+            );
+            return true;
+        }
     }
 
     // Media without reply in admin channel — ignore (don't open menu)
