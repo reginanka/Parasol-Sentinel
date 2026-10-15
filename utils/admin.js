@@ -1612,34 +1612,34 @@ async function handleAdminCallback(ctx) {
                 `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
                 `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
 
-            try {
-                if (isRefresh && messageId != null) {
-                    // Оновлюємо ІСНУЮЧЕ rich-повідомлення (як Help у bot.js)
-                    await api.raw.editMessageText({
-                        chat_id: chatId,
-                        message_id: messageId,
-                        rich_message: { html, skip_entity_detection: true },
-                        reply_markup: statsRefresh
-                    });
-                } else {
-                    // Перше відкриття — нове повідомлення в правильній гілці
-                    await api.sendRichMessage(
-                        chatId,
-                        { html, skip_entity_detection: true },
-                        { reply_markup: statsRefresh, ...thr }
-                    );
+            // Оновити: edit rich нестабільний (2-й клік → plain).
+            // Надійно: прибрати старе повідомлення картки і надіслати нове rich.
+            // Головне меню НЕ чіпаємо — isRefreshClick вже відсікає «Оновити меню».
+            if (isRefresh && messageId != null) {
+                try {
+                    await api.deleteMessage(chatId, messageId);
+                } catch (_) {
+                    /* ignore */
                 }
+            }
+
+            try {
+                await api.sendRichMessage(
+                    chatId,
+                    { html, skip_entity_detection: true },
+                    { reply_markup: statsRefresh, ...thr }
+                );
             } catch (richErr) {
-                console.warn('[admin] stats rich failed:', richErr.message);
-                // Якщо edit не вийшов (старе було plain / інший тип) — шлемо нове rich
+                console.warn('[admin] stats sendRichMessage failed:', richErr.message);
+                // Без thread
                 try {
                     await api.sendRichMessage(
                         chatId,
                         { html, skip_entity_detection: true },
-                        { reply_markup: statsRefresh, ...thr }
+                        { reply_markup: statsRefresh }
                     );
                 } catch (e2) {
-                    console.warn('[admin] stats sendRichMessage fallback failed:', e2.message);
+                    console.warn('[admin] stats rich no-thread failed:', e2.message);
                     await sendInAdminThread(
                         api,
                         chatId,
@@ -2149,31 +2149,25 @@ async function handleAdminCallback(ctx) {
 
             const infoRefresh = refreshMarkup(`adm|userinfo|${tgId}`);
 
-            try {
-                if (fromRefresh && messageId != null) {
-                    // Оновлюємо ІСНУЮЧЕ rich-повідомлення
-                    await api.raw.editMessageText({
-                        chat_id: chatId,
-                        message_id: messageId,
-                        rich_message: { html, skip_entity_detection: true },
-                        reply_markup: infoRefresh
-                    });
-                } else {
-                    // З пікера — прибираємо список, шлемо профіль новим
-                    if (fromPicker) {
-                        await deleteCallbackMessage(api, ctx);
-                    }
-                    await api.sendRichMessage(
-                        chatId,
-                        { html, skip_entity_detection: true },
-                        { reply_markup: infoRefresh, ...thr }
-                    );
+            // Оновити / пікер: delete + нове rich (edit rich ламається з 2-го кліку)
+            if ((fromRefresh || fromPicker) && messageId != null) {
+                try {
+                    await api.deleteMessage(chatId, messageId);
+                } catch (_) {
+                    /* ignore */
                 }
+            }
+
+            try {
+                await api.sendRichMessage(
+                    chatId,
+                    { html, skip_entity_detection: true },
+                    { reply_markup: infoRefresh, ...thr }
+                );
             } catch (richErr) {
                 const msg = richErr?.message || String(richErr);
                 console.warn('[admin] userinfo rich failed:', msg);
 
-                // thread not found → повтор без thread
                 if (/thread not found|MESSAGE_THREAD|message thread/i.test(msg) && Object.keys(thr).length) {
                     try {
                         await api.sendRichMessage(
@@ -2187,15 +2181,13 @@ async function handleAdminCallback(ctx) {
                     }
                 }
 
-                // Якщо edit не вийшов — нове rich
                 try {
                     await api.sendRichMessage(
                         chatId,
                         { html, skip_entity_detection: true },
-                        { reply_markup: infoRefresh, ...thr }
+                        { reply_markup: infoRefresh }
                     );
                 } catch (e3) {
-                    // Остаточний fallback — plain (безпечні теги, без h1/table)
                     await sendInAdminThread(
                         api,
                         chatId,
@@ -2507,41 +2499,85 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         user.username
             ? `@${user.username}`
             : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
-    const header =
-        `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n`;
-    const full = header + escapeHtml(transcript);
+
+    // Rich card with expandable transcript (accordion in Telegram clients)
+    const richHtml = `
+<h2>💬 Розмова з ${escapeHtml(namePart)}</h2>
+<p><code>${telegramId}</code></p>
+<blockquote expandable>${escapeHtml(transcript)}</blockquote>
+`.trim();
+
+    // Plain fallback (HTML parse_mode) — expandable blockquote works here too
+    const plainFull =
+        `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
+        `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
 
     const thrId = topicId('HISTORY');
+    const thr =
+        thrId != null && Number.isFinite(Number(thrId)) && Number(thrId) > 0
+            ? { message_thread_id: Number(thrId) }
+            : {};
     const histMsgId = user.supportHistory && user.supportHistory.messageId;
 
     let newMsgId = histMsgId;
     try {
         if (histMsgId) {
+            // Prefer edit as rich; if fails — plain edit; if fails — resend rich
             try {
-                await api.editMessageText(chatId, histMsgId, full, {
-                    parse_mode: 'HTML',
-                    disable_web_page_preview: true
+                await api.raw.editMessageText({
+                    chat_id: chatId,
+                    message_id: histMsgId,
+                    rich_message: { html: richHtml, skip_entity_detection: true }
                 });
-            } catch (editErr) {
-                console.warn('[admin] support edit failed, resend:', editErr.message);
+            } catch (editRichErr) {
+                try {
+                    await api.editMessageText(chatId, histMsgId, plainFull, {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true
+                    });
+                } catch (editPlainErr) {
+                    console.warn(
+                        '[admin] support edit failed, resend:',
+                        editPlainErr.message || editRichErr.message
+                    );
+                    try {
+                        const sent = await api.sendRichMessage(
+                            chatId,
+                            { html: richHtml, skip_entity_detection: true },
+                            thr
+                        );
+                        newMsgId = sent?.message_id;
+                    } catch (sendRichErr) {
+                        const sent = await sendInAdminThread(
+                            api,
+                            chatId,
+                            plainFull,
+                            { parse_mode: 'HTML', disable_web_page_preview: true },
+                            thrId
+                        );
+                        newMsgId = sent?.message_id;
+                    }
+                }
+            }
+        } else {
+            try {
+                const sent = await api.sendRichMessage(
+                    chatId,
+                    { html: richHtml, skip_entity_detection: true },
+                    thr
+                );
+                newMsgId = sent?.message_id;
+            } catch (sendRichErr) {
+                console.warn('[admin] support rich failed, plain:', sendRichErr.message);
                 const sent = await sendInAdminThread(
                     api,
                     chatId,
-                    full,
+                    plainFull,
                     { parse_mode: 'HTML', disable_web_page_preview: true },
                     thrId
                 );
                 newMsgId = sent?.message_id;
             }
-        } else {
-            const sent = await sendInAdminThread(
-                api,
-                chatId,
-                full,
-                { parse_mode: 'HTML', disable_web_page_preview: true },
-                thrId
-            );
-            newMsgId = sent?.message_id;
         }
     } catch (e) {
         console.warn('[admin] appendSupportConversation send failed:', e.message);
