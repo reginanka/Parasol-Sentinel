@@ -228,10 +228,38 @@ function adminKeyboard() {
             ],
             [
                 { text: '👤 Інфо про 👤', callback_data: 'adm|userinfo_pick|0' },
+                { text: '🧹 Очистити метрики', callback_data: 'adm|clean_metrics_pick|0' }
+            ],
+            [
                 { text: '🔄 Оновити меню', callback_data: 'adm|menu' }
             ]
         ]
     };
+}
+
+/** Застарілі ключі метрик (вже не в меню). Denylist — майбутні ключі не чіпаємо. */
+const DEPRECATED_METRICS = new Set(['pollen', 'solar', 'ozone']);
+
+/**
+ * Прибрати deprecated + міграція legacy 'aqi' → aqi_now/main/ext.
+ * @returns {{ metrics: string[], changed: boolean, removed: string[] }}
+ */
+function cleanEnabledMetrics(raw) {
+    const original = Array.isArray(raw) ? [...raw] : [];
+    let metrics = original.filter((m) => !DEPRECATED_METRICS.has(m));
+    const removed = original.filter((m) => DEPRECATED_METRICS.has(m));
+    if (metrics.includes('aqi')) {
+        metrics = metrics.filter((m) => m !== 'aqi');
+        removed.push('aqi');
+        for (const k of ['aqi_now', 'aqi_main', 'aqi_ext']) {
+            if (!metrics.includes(k)) metrics.push(k);
+        }
+    }
+    const changed =
+        removed.length > 0 ||
+        metrics.length !== original.length ||
+        metrics.some((m, i) => m !== original[i]);
+    return { metrics, changed, removed: [...new Set(removed)] };
 }
 
 function fmtUaDate(d) {
@@ -1091,6 +1119,49 @@ function buildUserInfoPickPage(users, page) {
     return { text, reply_markup: { inline_keyboard: rows } };
 }
 
+/** Paginated user picker for «Очистити метрики». */
+function buildCleanMetricsPickPage(users, page) {
+    const PAGE = ACCESS_PAGE_SIZE;
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
+
+    const rows = slice.map((u) => {
+        const raw = u.forecastSettings?.enabledMetrics || [];
+        const { changed, removed } = cleanEnabledMetrics(raw);
+        const dirty = changed ? ' ⚠️' : '';
+        const label =
+            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+            (u.city ? ` · ${u.city}` : '') +
+            dirty;
+        return [
+            {
+                text: label.slice(0, 60),
+                callback_data: `adm|clean_metrics|${u.telegramId}`
+            }
+        ];
+    });
+
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|clean_metrics_pick|${p - 1}` });
+        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
+        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|clean_metrics_pick|${p + 1}` });
+        rows.push(nav);
+    }
+    rows.push([{ text: '🧹 Очистити всім', callback_data: 'adm|clean_metrics_all' }]);
+    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * PAGE + 1 : 0;
+    const to = Math.min((p + 1) * PAGE, total);
+    const text =
+        `🧹 <b>Очистити метрики</b>\n` +
+        `<i>Прибирає pollen / solar / ozone + legacy aqi.\n` +
+        `⚠️ = є що чистити. Оберіть юзера (${from}–${to} з ${total})</i>`;
+    return { text, reply_markup: { inline_keyboard: rows } };
+}
+
 
 
 /** Users per page in «Змінити доступ» (2 buttons/row → keep under TG limits). */
@@ -1788,6 +1859,118 @@ async function handleAdminCallback(ctx) {
                     threadId
                 );
             }
+            return true;
+        }
+
+        // ─── Очистити застарілі метрики (denylist) ───
+        if (sub === 'clean_metrics_pick') {
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            if (!users.length) {
+                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                return true;
+            }
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildCleanMetricsPickPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            if (curText.includes('Очистити метрики')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
+            return true;
+        }
+
+        if (sub === 'clean_metrics') {
+            const tgId = data[2] ? Number(data[2]) : null;
+            if (!tgId || Number.isNaN(tgId)) {
+                await startScenarioMessage(api, ctx, '❌ Невірний ID користувача.');
+                return true;
+            }
+            const u = await User.findOne({ telegramId: tgId });
+            if (!u) {
+                await startScenarioMessage(
+                    api,
+                    ctx,
+                    `❌ Користувача <code>${tgId}</code> немає в БД.`
+                );
+                return true;
+            }
+            const before = Array.isArray(u.forecastSettings?.enabledMetrics)
+                ? [...u.forecastSettings.enabledMetrics]
+                : [];
+            const { metrics, changed, removed } = cleanEnabledMetrics(before);
+            if (!changed) {
+                await editCallbackMessage(
+                    api,
+                    ctx,
+                    `✅ <b>ID ${tgId}</b> — метрики вже чисті.\n<code>${escapeHtml(before.join(', ') || '—')}</code>`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '◀️ Назад', callback_data: 'adm|clean_metrics_pick|0' }],
+                                [{ text: '🏠 Меню', callback_data: 'adm|menu' }]
+                            ]
+                        }
+                    }
+                );
+                return true;
+            }
+            if (!u.forecastSettings) u.forecastSettings = {};
+            u.forecastSettings.enabledMetrics = metrics;
+            u.markModified('forecastSettings');
+            await u.save();
+            await editCallbackMessage(
+                api,
+                ctx,
+                `🧹 <b>Очищено ID ${tgId}</b>\n` +
+                    `Прибрано: <code>${escapeHtml(removed.join(', ') || '—')}</code>\n` +
+                    `Було: <code>${escapeHtml(before.join(', ') || '—')}</code>\n` +
+                    `Стало: <code>${escapeHtml(metrics.join(', ') || '—')}</code>`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '◀️ Назад', callback_data: 'adm|clean_metrics_pick|0' }],
+                            [{ text: '🏠 Меню', callback_data: 'adm|menu' }]
+                        ]
+                    }
+                }
+            );
+            return true;
+        }
+
+        if (sub === 'clean_metrics_all') {
+            const users = await User.find({}).lean();
+            let cleaned = 0;
+            const details = [];
+            for (const u of users) {
+                const before = Array.isArray(u.forecastSettings?.enabledMetrics)
+                    ? u.forecastSettings.enabledMetrics
+                    : [];
+                const { metrics, changed, removed } = cleanEnabledMetrics(before);
+                if (!changed) continue;
+                await User.updateOne(
+                    { telegramId: u.telegramId },
+                    { $set: { 'forecastSettings.enabledMetrics': metrics } }
+                );
+                cleaned += 1;
+                if (details.length < 15) {
+                    details.push(
+                        `<code>${u.telegramId}</code> −${escapeHtml(removed.join(','))}`
+                    );
+                }
+            }
+            const body =
+                cleaned === 0
+                    ? '✅ У всіх користувачів метрики вже чисті.'
+                    : `🧹 <b>Очищено: ${cleaned}</b> з ${users.length}\n` +
+                      (details.length ? details.join('\n') : '') +
+                      (cleaned > details.length ? `\n… ще ${cleaned - details.length}` : '');
+            await editCallbackMessage(api, ctx, body, {
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🏠 Меню', callback_data: 'adm|menu' }]]
+                }
+            });
             return true;
         }
 
