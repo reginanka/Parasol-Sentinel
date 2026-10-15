@@ -45,6 +45,8 @@ const dict = {
         settingsBtn: "Налаштування",
         helpBtn: "Допомога",
         helpSelect: "🔍 Оберіть тему, яка вас цікавить:",
+        helpWriteAdmin: "<i>💬 Можна просто написати повідомлення — його отримає підтримка.</i>",
+        supportAccepted: "✅ Ваше звернення прийнято. Ми відповімо, щойно зможемо.",
         help_uv: "☀️ Що таке УФ-індекс?",
         help_wind: "🌬️ Напрямки вітру",
         help_press: "🧭 Тиск та здоров'я",
@@ -184,6 +186,8 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         settingsBtn: "Settings",
         helpBtn: "Help",
         helpSelect: "🔍 Choose a topic you are interested in:",
+        helpWriteAdmin: "<i>💬 You can also just type a message — support will receive it.</i>",
+        supportAccepted: "✅ Your message has been received. We will reply as soon as we can.",
         help_uv: "☀️ What is UV index?",
         help_wind: "🌬️ Wind directions",
         help_press: "🧭 Pressure & Health",
@@ -594,6 +598,7 @@ bot.command("start", async (ctx) => {
         resize_keyboard: true
     };
 
+    await setBotMode(ctx.from.id, 'awaiting_city');
     await ctx.reply(dict[lang].welcome, { parse_mode: 'Markdown', reply_markup: keyboard });
 
     // Register commands for the user
@@ -620,7 +625,8 @@ bot.command('settings', async (ctx) => {
     const lang = getLang(ctx);
     await connectDB();
     const user = await User.findOne({ telegramId: ctx.from.id });
-    if (!user) {
+    if (!user || !user.city) {
+        await setBotMode(ctx.from.id, 'awaiting_city');
         return ctx.reply(lang === 'uk'
             ? '❌ Спочатку встановіть місто, надіславши його назву.'
             : '❌ Please set your city first by sending its name.', { parse_mode: 'Markdown' });
@@ -629,11 +635,44 @@ bot.command('settings', async (ctx) => {
         dict[lang].settings, { parse_mode: 'Markdown', reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) });
 });
 
+
+/** Persist free-text input mode: idle | awaiting_city | support */
+async function setBotMode(telegramId, mode) {
+    if (!telegramId) return;
+    try {
+        await User.updateOne(
+            { telegramId: Number(telegramId) },
+            { $set: { botMode: mode, lastActivityAt: new Date() } },
+            { upsert: false }
+        );
+    } catch (e) {
+        console.warn('[bot] setBotMode failed:', e.message);
+    }
+}
+
+async function getBotMode(telegramId) {
+    if (!telegramId) return 'idle';
+    try {
+        const u = await User.findOne({ telegramId: Number(telegramId) })
+            .select('botMode')
+            .lean();
+        return (u && u.botMode) || 'idle';
+    } catch (_) {
+        return 'idle';
+    }
+}
+
 // Help menu logic
 const sendHelpMenu = async (ctx) => {
     const lang = getLang(ctx);
     const d = dict[lang];
-    await ctx.reply(d.helpSelect, {
+    await connectDB();
+    if (ctx.from) await setBotMode(ctx.from.id, 'support');
+    const text = `${d.helpSelect}
+
+${d.helpWriteAdmin}`;
+    await ctx.reply(text, {
+        parse_mode: 'HTML',
         reply_markup: buildHelpKeyboard(lang)
     });
 };
@@ -725,7 +764,14 @@ bot.on("message:text", async (ctx) => {
         const cityData = await City.findOne({ externalId: cityKey });
 
         if (!cityData || !cityData.eveningState?.forecast) {
-            return ctx.reply(lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.');
+            const softMsg = lang === 'uk' ? '⚠️ Дані прогнозу ще не готові.' : '⚠️ Forecast data not ready.';
+            try {
+                await notifyUserError(ctx.from, new Error(softMsg), {
+                    where: 'agro_spraying',
+                    callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                });
+            } catch (_n) {}
+            return ctx.reply(softMsg);
         }
 
         const history = await History.find({ externalId: cityKey }).sort({ date: -1 }).limit(7).lean();
@@ -784,6 +830,21 @@ bot.on("message:text", async (ctx) => {
 
 
     if (query.startsWith('/')) return;
+
+    // Free-text routing by botMode
+    await connectDB();
+    const mode = await getBotMode(ctx.from && ctx.from.id);
+
+    // After Help — accept as support ticket, do not search city
+    if (mode === 'support') {
+        return ctx.reply(dict[lang].supportAccepted);
+    }
+
+    // Only search city when explicitly waiting ( /start or «Змінити місто» )
+    if (mode !== 'awaiting_city') {
+        // Silent: admin already notified above
+        return;
+    }
 
     try {
         console.log(`Searching for: ${query}`);
@@ -950,6 +1011,7 @@ bot.on("callback_query:data", async (ctx) => {
                     lon: parseFloat(lon),
                     timezone: weather.timezone,
                     language: lang,
+                    botMode: 'idle',
                     lastActivityAt: new Date(),
                     lastState: {
                         temp: weather.temp,
@@ -1174,9 +1236,16 @@ bot.on("callback_query:data", async (ctx) => {
             }
 
             if (dayIndices.length === 0) {
-                return ctx.reply(lang === 'uk'
+                const softMsg = lang === 'uk'
                     ? `⚠️ Прогноз на ${shortDate} ще недоступний.`
-                    : `⚠️ Forecast for ${shortDate} is not yet available.`);
+                    : `⚠️ Forecast for ${shortDate} is not yet available.`;
+                try {
+                    await notifyUserError(ctx.from, new Error(softMsg), {
+                        where: 'forecast_hourly',
+                        callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                    });
+                } catch (_n) {}
+                return ctx.reply(softMsg);
             }
 
             const temps = dayIndices.map(i => temperature_2m[i]);
@@ -1702,9 +1771,18 @@ bot.on("callback_query:data", async (ctx) => {
             const cityDoc = await City.findOne({ externalId: cityKey });
 
             if (!cityDoc || !cityDoc.eveningState?.forecast?.[1]) {
-                return ctx.reply(lang === 'uk'
-                    ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу (зазвичай після 18:00).'
-                    : '⚠️ Data not yet updated. Wait for the evening forecast (usually after 18:00).');
+                {
+                    const softMsg = lang === 'uk'
+                        ? '⚠️ Дані ще не оновлені. Зачекайте вечірнього прогнозу (зазвичай після 18:00).'
+                        : '⚠️ Data not yet updated. Wait for the evening forecast (usually after 18:00).';
+                    try {
+                        await notifyUserError(ctx.from, new Error(softMsg), {
+                            where: 'agro_stale',
+                            callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                        });
+                    } catch (_n) {}
+                    return ctx.reply(softMsg);
+                }
             }
 
             const tomorrowForecast = cityDoc.eveningState.forecast[1];
@@ -1790,7 +1868,16 @@ bot.on("callback_query:data", async (ctx) => {
             const cityData = await City.findOne({ externalId: cityKey });
 
             if (!cityData || !cityData.eveningState?.forecast) {
-                return ctx.reply(lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.');
+                {
+                const softMsg = lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.';
+                try {
+                    await notifyUserError(ctx.from, new Error(softMsg), {
+                        where: 'data_not_ready',
+                        callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                    });
+                } catch (_n) {}
+                return ctx.reply(softMsg);
+            }
             }
 
             const history = await History.find({ externalId: cityKey }).sort({ date: -1 }).limit(7).lean();
@@ -1812,7 +1899,16 @@ bot.on("callback_query:data", async (ctx) => {
             const cityData = await City.findOne({ externalId: cityKey });
 
             if (!cityData || !cityData.eveningState?.forecast) {
-                return ctx.reply(lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.');
+                {
+                const softMsg = lang === 'uk' ? '⚠️ Дані ще не готові.' : '⚠️ Data not ready.';
+                try {
+                    await notifyUserError(ctx.from, new Error(softMsg), {
+                        where: 'data_not_ready',
+                        callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                    });
+                } catch (_n) {}
+                return ctx.reply(softMsg);
+            }
             }
 
             const report = await generateAgroForecastReport(cityData.eveningState.forecast.slice(0, 7), lang, user.crops || [], cityKey);
@@ -2463,6 +2559,8 @@ bot.on("callback_query:data", async (ctx) => {
     // --- Change city callback ---
     else if (data[0] === 'change_city') {
         await ctx.answerCallbackQuery();
+        await connectDB();
+        await setBotMode(ctx.from.id, 'awaiting_city');
         await ctx.reply(lang === 'uk'
             ? '📍 Надішліть назву нового міста:'
             : '📍 Send the name of the new city:');
