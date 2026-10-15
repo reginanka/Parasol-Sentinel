@@ -16,7 +16,6 @@
 const User = require('../models/User');
 const ErrorLog = require('../models/ErrorLog');
 const getBot = require('./bot');
-const { CROPS_DATA } = require('./crops');
 
 const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
 
@@ -60,80 +59,42 @@ function threadOpts(topicName) {
 }
 
 /**
- * Thread of the message where the admin pressed a button.
- * Secrets (TOPIC_*) are for proactive sends — for callbacks Telegram already
- * tells us the topic via message.message_thread_id.
+ * Send message into admin forum: try preferred thread → TOPIC_GENERAL → no thread.
+ * Avoids 400 "message thread not found" when TOPIC_* is wrong or General has no id.
  */
-function threadFromAdminCallback(ctx) {
-    const mid = ctx?.callbackQuery?.message?.message_thread_id;
-    if (mid != null && mid !== undefined && Number.isFinite(Number(mid))) {
-        return { message_thread_id: Number(mid) };
+async function sendInAdminThread(api, chatId, text, extra = {}, preferredThreadId = null) {
+    const attempts = [];
+    const seen = new Set();
+    const push = (thr) => {
+        const key = thr.message_thread_id != null ? String(thr.message_thread_id) : '__none__';
+        if (seen.has(key)) return;
+        seen.add(key);
+        attempts.push(thr);
+    };
+    if (preferredThreadId != null && preferredThreadId !== undefined && preferredThreadId !== '') {
+        const n = Number(preferredThreadId);
+        if (Number.isFinite(n)) push({ message_thread_id: n });
     }
-    return {};
-}
+    const gen = topicId('GENERAL');
+    if (gen != null) push({ message_thread_id: gen });
+    push({}); // root / non-forum / default General
 
-/**
- * Update admin Rich Message in place. Never deletes.
- * 1) try editMessageText / raw edit (same message_id)
- * 2) if edit impossible — send a new message in the SAME topic (no delete)
- */
-async function updateAdminRichMessage(api, chatId, html, ctx, replyMarkup = null) {
-    const msg = ctx?.callbackQuery?.message;
-    const messageId = msg?.message_id;
-    const thr = threadFromAdminCallback(ctx);
-    const optsBase = { ...thr };
-    if (replyMarkup) optsBase.reply_markup = replyMarkup;
-
-    if (messageId != null) {
-        // 1) Ordinary edit (works if message was normal HTML)
+    let lastErr = null;
+    for (const thr of attempts) {
         try {
-            await api.editMessageText(chatId, messageId, html, {
-                parse_mode: 'HTML',
-                disable_web_page_preview: true,
-                ...(replyMarkup ? { reply_markup: replyMarkup } : {})
-            });
-            return { ok: true, mode: 'edit' };
-        } catch (_) { /* rich / unsupported tags */ }
-
-        // 2) Raw edit without parse_mode (some clients accept rich body)
-        try {
-            await api.raw.editMessageText({
-                chat_id: chatId,
-                message_id: messageId,
-                text: html,
-                skip_entity_detection: true,
-                ...(replyMarkup ? { reply_markup: replyMarkup } : {})
-            });
-            return { ok: true, mode: 'edit_raw' };
-        } catch (e2) {
-            console.warn('[admin] edit rich in-place failed:', e2.message);
+            return await api.sendMessage(chatId, text, { ...extra, ...thr });
+        } catch (e) {
+            lastErr = e;
+            const msg = e?.message || String(e);
+            // Only retry on thread-related errors; rethrow others
+            if (!/thread not found|MESSAGE_THREAD|message thread/i.test(msg)) {
+                throw e;
+            }
+            console.warn('[admin] sendInAdminThread retry:', msg, thr);
         }
     }
-
-    // 3) Cannot edit → send new in the same topic only (no delete of old)
-    try {
-        await api.sendRichMessage(
-            chatId,
-            { html, skip_entity_detection: true },
-            optsBase
-        );
-        return { ok: true, mode: 'send' };
-    } catch (e3) {
-        // Last resort: no thread id (General root)
-        if (thr.message_thread_id != null) {
-            await api.sendRichMessage(
-                chatId,
-                { html, skip_entity_detection: true },
-                replyMarkup ? { reply_markup: replyMarkup } : {}
-            );
-            return { ok: true, mode: 'send_root' };
-        }
-        throw e3;
-    }
+    throw lastErr || new Error('sendInAdminThread failed');
 }
-
-
-
 
 function displayName(from) {
     if (!from) return 'unknown';
@@ -259,7 +220,7 @@ function adminKeyboard() {
                 { text: '🟢 Активні', callback_data: 'adm|active' }
             ],
             [
-                { text: '🔑 Змінити доступ', callback_data: 'adm|access' },
+                { text: '🔑 Змінити доступ', callback_data: 'adm|access|0' },
                 { text: '📊 Аналітика', callback_data: 'adm|stats' }
             ],
             [
@@ -271,11 +232,58 @@ function adminKeyboard() {
                 { text: '🔍 Крон чек', callback_data: 'adm|cron_check' }
             ],
             [
-                { text: '✉️ Написати користувачу', callback_data: 'adm|msg_user' },
+                { text: '✉️ Написати користувачу', callback_data: 'adm|msg_user|0' },
+                { text: '📣 Написати всім', callback_data: 'adm|msg_all' }
+            ],
+            [
+                { text: '👤 Інфо про 👤', callback_data: 'adm|userinfo_pick|0' },
+                { text: '🧹 Очистити метрики', callback_data: 'adm|clean_metrics_pick|0' }
+            ],
+            [
                 { text: '🔄 Оновити меню', callback_data: 'adm|menu' }
             ]
         ]
     };
+}
+
+/** Застарілі ключі метрик (вже не в меню). Denylist — майбутні ключі не чіпаємо. */
+const DEPRECATED_METRICS = new Set(['pollen', 'solar', 'ozone']);
+
+/**
+ * Прибрати deprecated + міграція legacy 'aqi' → aqi_now/main/ext.
+ * @returns {{ metrics: string[], changed: boolean, removed: string[] }}
+ */
+function cleanEnabledMetrics(raw) {
+    const original = Array.isArray(raw) ? [...raw] : [];
+    let metrics = original.filter((m) => !DEPRECATED_METRICS.has(m));
+    const removed = original.filter((m) => DEPRECATED_METRICS.has(m));
+    if (metrics.includes('aqi')) {
+        metrics = metrics.filter((m) => m !== 'aqi');
+        removed.push('aqi');
+        for (const k of ['aqi_now', 'aqi_main', 'aqi_ext']) {
+            if (!metrics.includes(k)) metrics.push(k);
+        }
+    }
+    const changed =
+        removed.length > 0 ||
+        metrics.length !== original.length ||
+        metrics.some((m, i) => m !== original[i]);
+    return { metrics, changed, removed: [...new Set(removed)] };
+}
+
+/** Inline «🔄 Оновити» для аналітики / інфо. */
+function refreshMarkup(callbackData) {
+    return {
+        inline_keyboard: [[{ text: '🔄 Оновити', callback_data: callbackData }]]
+    };
+}
+
+/** Клік по кнопці «Оновити» (не з головного меню). */
+function isRefreshClick(msg) {
+    const rows = msg?.reply_markup?.inline_keyboard || [];
+    return rows.some((row) =>
+        (row || []).some((b) => String(b?.text || '').includes('Оновити'))
+    );
 }
 
 function fmtUaDate(d) {
@@ -295,35 +303,6 @@ function fmtUaDate(d) {
 }
 
 /** Full user profile as Rich Message HTML (tables). */
-
-/** Crop ids → Ukrainian labels from CROPS_DATA */
-function formatCropsUa(crops) {
-    if (!Array.isArray(crops) || crops.length === 0) return '—';
-    const map = {};
-    try {
-        for (const cat of Object.values(CROPS_DATA || {})) {
-            const items = cat && cat.items;
-            if (!items) continue;
-            for (const [id, labels] of Object.entries(items)) {
-                map[id] = (labels && (labels.uk || labels.en)) || id;
-            }
-        }
-    } catch (_) { /* ignore */ }
-    const names = crops.map((raw) => {
-        const id = String(raw || '').includes('|')
-            ? String(raw).split('|').pop()
-            : String(raw);
-        return map[id] || id;
-    });
-    return `${names.length} — ${names.join(', ')}`;
-}
-
-const GEOMAG_UA = {
-    quiet: 'тихий',
-    active: 'активний',
-    off: 'вимк'
-};
-
 function buildUserInfoHtml(u, from = null) {
     const tgId = u?.telegramId || from?.id || '—';
     const name =
@@ -353,39 +332,40 @@ function buildUserInfoHtml(u, from = null) {
     const alertsT = usage.alertsTotal || 0;
     const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
     const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
-    const geomagMode = u?.geomagMode || 'quiet';
-    const geomag = GEOMAG_UA[geomagMode] || geomagMode;
-    const cropsLabel = formatCropsUa(u?.crops);
+    const geomagModes = {
+        active: 'активний (усі зміни)',
+        quiet: 'тихий',
+        off: 'вимкнено'
+    };
+    const geomag = geomagModes[u?.geomagMode] || u?.geomagMode || 'тихий';
+    const cropsList = Array.isArray(u?.crops) ? u.crops : [];
+    const cropsN = cropsList.length;
+    const cropsStr = cropsN ? cropsList.join(', ') : '—';
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
 
-    // Evening forecast metrics (UA labels)
-    const enabledMetrics = Array.isArray(u?.forecastSettings?.enabledMetrics)
-        ? u.forecastSettings.enabledMetrics
-        : [];
-    const metricsLabel = enabledMetrics.length
-        ? enabledMetrics.map((k) => METRIC_NAMES_UA[k] || k).join(', ')
-        : '—';
-    const daysCount = u?.forecastSettings?.daysCount != null ? u.forecastSettings.daysCount : '—';
+    const units = u?.units || {};
+    const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
+    const pressU = units.pressure === 'hpa' ? 'гПа' : 'мм рт. ст.';
+    const tempU = units.temp === 'f' ? '°F' : '°C';
 
-    // Alert triggers — for magnetic storms show geomag mode, not just on/off
-    const triggers = u?.alertTriggers || {};
-    const chk = (on) => (on ? '✅' : '⬜️');
-    const alertTemp = triggers.temperature !== false;
-    const alertPrecip = triggers.precip !== false;
-    const alertAir = triggers.airQuality !== false;
-    // magneticStorm false / geomag off → вимк; else show mode (тихий / активний)
-    let alertGeomagLabel;
-    if (geomagMode === 'off' || triggers.magneticStorm === false) {
-        alertGeomagLabel = `${chk(false)} вимк`;
-    } else {
-        alertGeomagLabel = `${chk(true)} ${geomag}`;
+    const daysCount = u?.forecastSettings?.daysCount ?? 3;
+    let metrics = u?.forecastSettings?.enabledMetrics || [];
+    if (metrics.includes('aqi')) {
+        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
     }
-    const alertsLabel = [
-        `${chk(alertTemp)} температура`,
-        `${chk(alertPrecip)} опади`,
-        `${chk(alertAir)} якість повітря`,
-        `${alertGeomagLabel} · магнітні бурі`
-    ].join('<br/>');
+    const metricsStr = metrics.length
+        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
+        : 'немає';
+
+    const triggers = u?.alertTriggers || {};
+    const alertLine = (key, label) =>
+        `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
+    const alertsStr = [
+        alertLine('temperature', 'температура'),
+        alertLine('precip', 'опади'),
+        alertLine('airQuality', 'якість повітря'),
+        alertLine('magneticStorm', 'магнітні бурі')
+    ].join(' · ');
 
     return `
 <h1>👤 ${escapeHtml(name)}</h1>
@@ -402,12 +382,25 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">TZ</td><td align="left"><code>${escapeHtml(tz)}</code></td></tr>
     <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
     <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
-    <tr><td align="left">Вечірній</td><td align="left">${evening} · ${daysCount} дн.</td></tr>
-    <tr><td align="left">Культури</td><td align="left">${escapeHtml(cropsLabel)}</td></tr>
-    <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsLabel)}</td></tr>
-    <tr><td align="left">Алерти</td><td align="left">${alertsLabel}</td></tr>
+    <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
+    <tr><td align="left">Магнітні бурі</td><td align="left">${escapeHtml(geomag)}</td></tr>
+    <tr><td align="left">Культури</td><td align="left"><b>${cropsN}</b> — ${escapeHtml(cropsStr)}</td></tr>
   </tbody>
 </table>
+
+<h3>⚙️ Налаштування</h3>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Параметр</th><th align="left">Значення</th></tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">Одиниці</td><td align="left">${windU} · ${pressU} · ${tempU}</td></tr>
+    <tr><td align="left">Днів у прогнозі</td><td align="left"><b>${daysCount}</b></td></tr>
+    <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsStr)}</td></tr>
+    <tr><td align="left">Алерти</td><td align="left">${escapeHtml(alertsStr)}</td></tr>
+  </tbody>
+</table>
+
 <h3>📬 Доставка</h3>
 <table bordered striped>
   <thead>
@@ -432,10 +425,104 @@ function buildUserInfoHtml(u, from = null) {
 }
 
 /**
+ * Same profile as buildUserInfoHtml, but only Telegram-safe HTML tags
+ * (b, i, code — no h1/table). For sendMessage / editMessageText fallback.
+ */
+function buildUserInfoPlain(u, from = null) {
+    const tgId = u?.telegramId || from?.id || '—';
+    const name =
+        (from && displayName(from)) ||
+        (u?.username ? u.username : null) ||
+        [u?.firstName, u?.lastName].filter(Boolean).join(' ') ||
+        `user_${tgId}`;
+    const uname = u?.username
+        ? `@${u.username}`
+        : from?.username
+          ? `@${from.username}`
+          : 'без @username';
+    const tgLang = from?.language_code || u?.languageCode || '—';
+    const access = accessLabel(u?.accessLevel || 'unlimited');
+    const accessIcon = (u?.accessLevel || 'unlimited') === 'none' ? '🚫' : '✅';
+    const botLang = u?.language || tgLang || '—';
+    const city = u?.city || 'не обрано';
+    const geo =
+        u?.lat != null && u?.lon != null
+            ? `${Number(u.lat).toFixed(5)}, ${Number(u.lon).toFixed(5)}`
+            : '—';
+    const tz = u?.timezone || '—';
+    const usage = u?.usage || {};
+    const eveningM = usage.eveningThisMonth || 0;
+    const alertsM = usage.alertsThisMonth || 0;
+    const eveningT = usage.eveningTotal || 0;
+    const alertsT = usage.alertsTotal || 0;
+    const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
+    const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
+    const geomagModes = {
+        active: 'активний (усі зміни)',
+        quiet: 'тихий',
+        off: 'вимкнено'
+    };
+    const geomag = geomagModes[u?.geomagMode] || u?.geomagMode || 'тихий';
+    const cropsList = Array.isArray(u?.crops) ? u.crops : [];
+    const cropsN = cropsList.length;
+    const cropsStr = cropsN ? cropsList.join(', ') : '—';
+    const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
+
+    const units = u?.units || {};
+    const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
+    const pressU = units.pressure === 'hpa' ? 'гПа' : 'мм рт. ст.';
+    const tempU = units.temp === 'f' ? '°F' : '°C';
+
+    const daysCount = u?.forecastSettings?.daysCount ?? 3;
+    let metrics = u?.forecastSettings?.enabledMetrics || [];
+    if (metrics.includes('aqi')) {
+        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
+    }
+    const metricsStr = metrics.length
+        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
+        : 'немає';
+
+    const triggers = u?.alertTriggers || {};
+    const alertLine = (key, label) =>
+        `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
+    const alertsStr = [
+        alertLine('temperature', 'температура'),
+        alertLine('precip', 'опади'),
+        alertLine('airQuality', 'якість повітря'),
+        alertLine('magneticStorm', 'магнітні бурі')
+    ].join(' · ');
+
+    return (
+        `👤 <b>${escapeHtml(name)}</b>\n` +
+        `${escapeHtml(uname)} · ID: <code>${tgId}</code>\n\n` +
+        `${accessIcon} Доступ: <b>${escapeHtml(access)}</b>\n` +
+        `Мова TG / бот: <code>${escapeHtml(tgLang)}</code> / <code>${escapeHtml(botLang)}</code>\n` +
+        `📍 Місто: ${escapeHtml(city)}\n` +
+        `Гео: <code>${geo}</code>\n` +
+        `TZ: <code>${escapeHtml(tz)}</code>\n` +
+        `Темп. зараз: <b>${temp}</b>\n` +
+        `Сповіщення: ${notif}\n` +
+        `Вечірній: ${evening}\n` +
+        `Магнітні бурі: ${escapeHtml(geomag)}\n` +
+        `Культури: <b>${cropsN}</b> — ${escapeHtml(cropsStr)}\n\n` +
+        `<b>⚙️ Налаштування</b>\n` +
+        `Одиниці: ${windU} · ${pressU} · ${tempU}\n` +
+        `Днів у прогнозі: <b>${daysCount}</b>\n` +
+        `Метрики: ${escapeHtml(metricsStr)}\n` +
+        `Алерти: ${escapeHtml(alertsStr)}\n\n` +
+        `<b>📬 Доставка</b>\n` +
+        `🌆 Вечірні: <b>${eveningM}</b> / <b>${eveningT}</b> (міс/всього)\n` +
+        `🚨 Алерти: <b>${alertsM}</b> / <b>${alertsT}</b>\n` +
+        `Разом: <b>${eveningM + alertsM}</b> / <b>${eveningT + alertsT}</b>\n\n` +
+        `📅 Реєстрація: ${escapeHtml(fmtUaDate(u?.createdAt))}\n` +
+        `🕐 Остання активність: ${escapeHtml(fmtUaDate(u?.lastActivityAt))}`
+    );
+}
+
+/**
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
-/** Назви метрик для людських описів у notify */
 const METRIC_NAMES_UA = {
     condition: 'стан неба',
     temp: 'температура',
@@ -461,12 +548,6 @@ const METRIC_NAMES_UA = {
  * userSnapshot — стан ДО обробки callback (notify викликається раніше toggle).
  */
 function describeUserAction(actionText, extra = {}, userSnapshot = null) {
-    const rawAct = String(actionText || '').trim();
-    if (rawAct.startsWith('меню:')) {
-        return rawAct; // already human uk label from bot.js
-    }
-    if (rawAct === 'меню') return 'натиснув пункт меню';
-
     const cb = String(extra.callbackData || '').trim();
     const parts = cb ? cb.split('|') : [];
     const head = parts[0] || '';
@@ -492,9 +573,7 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
     // Explicit known actions without callback payload
     if (!cb) {
         if (actionText === '/start') return 'натиснув /start (старт бота)';
-        if (actionText === 'текст' || actionText === 'text') {
-            return 'надіслав текст (пошук міста або повідомлення)';
-        }
+        if (actionText === 'текст') return 'надіслав текст (пошук міста або повідомлення)';
         return String(actionText || 'невідома дія');
     }
 
@@ -542,8 +621,10 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
             const key = parts[2];
             const m = METRIC_NAMES_UA[key] || key;
             let metrics = u?.forecastSettings?.enabledMetrics || [];
+            // legacy aqi
             if (metrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(key)) {
-                return `${onOff(false)} метрику «${m}» у вечірньому прогнозі`;
+                const wasOn = true; // treated as on before first split
+                return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
             }
             const wasOn = metrics.includes(key);
             if (u) return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
@@ -629,7 +710,7 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
             : 'перевірка прогнозу (Tomorrow.io)';
     }
 
-    // Fallback: human-ish without dumping only the word "callback"
+    // Fallback: still human-ish
     if (actionText === 'callback') {
         return `натиснув кнопку «${cb}»`;
     }
@@ -640,13 +721,6 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
  * Notify admin about a user action.
  * - Текст юзера (messageText / actionText === 'текст') → TOPIC_USERS
  * - Кліки / callback / /start тощо → TOPIC_ACTIONS (ACTIONS_USERS)
- * - Якщо send впав → дубль у TOPIC_ERRORS / ERROR_ID
- * Людський опис через describeUserAction (не сирий "callback").
- */
-/**
- * Notify admin about a user action.
- * - Текст юзера → TOPIC_USERS (+ Rich details з хвостом переписки)
- * - Кліки / callback / /start → TOPIC_ACTIONS
  * - Якщо send впав → дубль у TOPIC_ERRORS / ERROR_ID
  */
 async function notifyAdmin(from, actionText, extra = {}) {
@@ -660,93 +734,40 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
 
-    // Текст юзера → USERS; кліки → ACTIONS
+    // Стан ДО toggle (notify викликається раніше обробки callback у bot.js)
+    let userSnapshot = null;
+    if (extra.callbackData || actionText === 'callback') {
+        try {
+            userSnapshot = await User.findOne({ telegramId: from.id }).lean();
+        } catch (_) {
+            /* ignore */
+        }
+    }
+    const humanAction = describeUserAction(actionText, extra, userSnapshot);
+
+    // Текст, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
     const isUserText =
         Boolean(extra.messageText) ||
         actionText === 'текст' ||
         actionText === 'text';
 
-    // Snapshot: для callback (toggle state) і для хвоста переписки
-    let userSnapshot = null;
-    try {
-        userSnapshot = await User.findOne({ telegramId: from.id }).lean();
-    } catch (_) {
-        /* ignore */
-    }
-    const humanAction = describeUserAction(actionText, extra, userSnapshot);
-
-    // Хвіст переписки з supportHistory (для details)
-    const DETAILS_LIMIT = 1800;
-    let transcriptTail = '';
-    const fullTranscript =
-        (userSnapshot &&
-            userSnapshot.supportHistory &&
-            userSnapshot.supportHistory.transcript) ||
-        '';
-    // Для текстового notify — додамо поточне повідомлення, якщо його ще немає в transcript
-    // (appendSupportConversation викликається після notify)
-    let previewTranscript = fullTranscript;
-    if (extra.messageText) {
-        const curLine = formatSupportLine(
-            '👤 Юзер',
-            null,
-            String(extra.messageText).slice(0, 500)
-        );
-        previewTranscript = fullTranscript
-            ? `${fullTranscript}\n${curLine}`
-            : curLine;
-    }
-    if (previewTranscript) {
-        transcriptTail =
-            previewTranscript.length > DETAILS_LIMIT
-                ? '…\n' + previewTranscript.slice(previewTranscript.length - DETAILS_LIMIT)
-                : previewTranscript;
-    }
-
-    // --- Plain HTML (sendMessage fallback) ---
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
-        `ID: <code>${from.id}</code> · #u${from.id}\n` +
+        `ID: <code>${from.id}</code>\n` +
         `⚡ Дія: ${escapeHtml(humanAction)}`;
 
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
     }
+    // Сирий callback лишаємо дрібним сірим рядком лише якщо не впізнали
     if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
     }
-    if (transcriptTail && isUserText) {
-        // у звичайному HTML details може не розгортатись — короткий прев'ю
-        const short = transcriptTail.length > 400
-            ? '…\n' + transcriptTail.slice(transcriptTail.length - 400)
-            : transcriptTail;
-        text += `\n\n💬 <i>Остання переписка:</i>\n<code>${escapeHtml(short)}</code>`;
-    }
     text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
 
-    // --- Rich Message (details collapsible) ---
-    let richHtml =
-        `<p>👤 <b>${escapeHtml(name)}</b><br/>` +
-        `${escapeHtml(uname)} · ID: <code>${from.id}</code> · #u${from.id}</p>` +
-        `<p>⚡ <b>Дія:</b> ${escapeHtml(humanAction)}</p>`;
-    if (extra.messageText) {
-        richHtml += `<p>💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}</p>`;
-    }
-    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
-        richHtml += `<p>🔘 <code>${escapeHtml(extra.callbackData)}</code></p>`;
-    }
-    if (transcriptTail && isUserText) {
-        const lines = transcriptTail.split('\n').length;
-        richHtml +=
-            `<details>` +
-            `<summary>💬 Остання переписка (${lines} рядків — натисни)</summary>` +
-            `<pre>${escapeHtml(transcriptTail)}</pre>` +
-            `</details>`;
-    }
-    richHtml += `<p><i>↩️ Reply → надіслати юзеру</i></p>`;
-
     const destThread = isUserText ? threadOpts('USERS') : threadOpts('ACTIONS');
+    // fallback: якщо ACTIONS не налаштовано — старе поводження (USERS)
     const thread =
         !isUserText && destThread.message_thread_id == null
             ? threadOpts('USERS')
@@ -758,55 +779,30 @@ async function notifyAdmin(from, actionText, extra = {}) {
         ]
     };
 
-        let sentOk = false;
-    let sentMessageId = null;
+    const sendOpts = {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: markup,
+        ...thread
+    };
 
-    // 1) Rich Message — details розгортається тапом
+    let sentOk = false;
     try {
-        const sent = await bot.api.sendRichMessage(
-            chatId,
-            { html: richHtml, skip_entity_detection: true },
-            { reply_markup: markup, ...thread }
-        );
-        sentMessageId = sent?.message_id ?? sent?.message?.message_id ?? sent?.result?.message_id ?? null;
+        await bot.api.sendMessage(chatId, text, sendOpts);
         sentOk = true;
-    } catch (richErr) {
-        console.warn('[admin] notify sendRichMessage failed, HTML fallback:', richErr.message);
+    } catch (e) {
+        console.error('[admin] notify sendMessage failed:', e.message);
         try {
-            const sent = await bot.api.sendMessage(chatId, text, {
-                parse_mode: 'HTML',
-                disable_web_page_preview: true,
-                reply_markup: markup,
-                ...thread
-            });
-            sentMessageId = sent?.message_id;
+            await bot.api.sendMessage(
+                chatId,
+                `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
+                    (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
+                { reply_markup: markup, ...thread }
+            );
             sentOk = true;
-        } catch (e) {
-            console.error('[admin] notify sendMessage failed:', e.message);
-            try {
-                const sent = await bot.api.sendMessage(
-                    chatId,
-                    `👤 ${name}
-ID: ${from.id} · #u${from.id}
-Дія: ${humanAction}` +
-                        (extra.messageText
-                            ? `
-
-${String(extra.messageText).slice(0, 500)}`
-                            : ''),
-                    { reply_markup: markup, ...thread }
-                );
-                sentMessageId = sent?.message_id;
-                sentOk = true;
-            } catch (e2) {
-                console.error('[admin] notify fallback failed:', e2.message);
-            }
+        } catch (e2) {
+            console.error('[admin] notify fallback failed:', e2.message);
         }
-    }
-
-    // Map message_id → user for reliable Reply (esp. Rich Message)
-    if (sentOk && sentMessageId != null) {
-        await rememberNotifyMessage(from.id, sentMessageId);
     }
 
     // Помилка відправки → пінг у гілку ERROR
@@ -831,15 +827,10 @@ ${String(extra.messageText).slice(0, 500)}`
         }
     }
 
-    // Текст юзера → картка розмови в HISTORY
+    // Mirror only real user text into HISTORY conversation card (not every button tap)
     if (extra.messageText) {
         try {
-            await appendSupportConversation(
-                bot.api,
-                from.id,
-                '👤 Юзер',
-                String(extra.messageText)
-            );
+            await appendSupportConversation(bot.api, from.id, '👤 Юзер', String(extra.messageText));
         } catch (e) {
             console.warn('[admin] support log from notify failed:', e.message);
         }
@@ -847,157 +838,77 @@ ${String(extra.messageText).slice(0, 500)}`
 }
 
 /** Extract user telegram id from an admin notification / reply_to message */
-/** Own bot id from TG_TOKEN (bots cannot message bots). */
-function ownBotId() {
-    const tok = process.env.TG_TOKEN || '';
-    const m = String(tok).match(/^(\d+):/);
-    return m ? Number(m[1]) : null;
-}
-
-/**
- * Extract user telegram id from an admin notification / reply_to message.
- * Prefer explicit markers (#u123, ID: 123). Never use reply.from (that is the bot).
- */
 function extractUserIdFromNotifyText(raw) {
     if (raw == null) return null;
-
-    // Only human-readable fields — avoid JSON.stringify(from.id of the bot)
-    let s = '';
+    // Accept full reply_to_message object or plain string
+    let s;
     if (typeof raw === 'object') {
-        s = [raw.text, raw.caption, raw.quote?.text, raw.quote?.html]
-            .filter(Boolean)
-            .join('\n');
+        const parts = [
+            raw.text,
+            raw.caption,
+            raw.quote?.text,
+            // last resort: stringify (rich / partial payloads)
+            JSON.stringify(raw)
+        ].filter(Boolean);
+        s = parts.join('\n');
     } else {
         s = String(raw);
     }
-
-    const plain = String(s)
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&amp;/g, '&')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    if (!plain) return null;
-
-    const botId = ownBotId();
-    const isValidUserId = (id) => {
-        if (!Number.isFinite(id) || id < 100000 || id > 999999999999) return false;
-        if (botId && id === botId) return false;
-        return true;
-    };
-
-    // 1) Hard marker embedded in every notify: #u123456789
-    let m = plain.match(/#u(\d{5,15})\b/i);
-    if (m) {
-        const id = parseInt(m[1], 10);
-        if (isValidUserId(id)) return id;
+    const patterns = [
+        /ID:\s*(\d{5,15})/i,
+        /\bID[:\s]+(\d{5,15})\b/i,
+        /#u(\d{5,15})\b/,
+        /користувачу\s+(\d{5,15})/i,
+        /user[_\s-]?id[:\s]+(\d{5,15})/i,
+        // bare telegram id in code/tags
+        /(?:^|[^\d])(\d{8,15})(?:[^\d]|$)/
+    ];
+    for (const re of patterns) {
+        const m = s.match(re);
+        if (m) {
+            const id = parseInt(m[1], 10);
+            // skip obvious non-user ids (too short already filtered)
+            if (id > 99999) return id;
+        }
     }
-
-    // 2) "ID: 123" after HTML strip
-    m = plain.match(/\bID\s*[:：]\s*(\d{5,15})\b/i);
-    if (m) {
-        const id = parseInt(m[1], 10);
-        if (isValidUserId(id)) return id;
-    }
-
-    m = plain.match(/користувачу\s+(\d{5,15})/i);
-    if (m) {
-        const id = parseInt(m[1], 10);
-        if (isValidUserId(id)) return id;
-    }
-
     return null;
 }
 
-/**
- * Remember admin-notify message_id → user, so Reply works for Rich Messages.
- * Writes to User.supportHistory.notifyMessageIds (last 40).
- * Also mirrors into collection admin_notify_map as belt-and-suspenders (serverless).
- */
-async function rememberNotifyMessage(telegramId, messageId) {
-    if (!telegramId || messageId == null) return;
-    const tid = Number(telegramId);
-    const mid = Number(messageId);
-    if (!Number.isFinite(tid) || !Number.isFinite(mid)) return;
-
-    try {
-        await User.updateOne(
-            { telegramId: tid },
-            {
-                $push: {
-                    'supportHistory.notifyMessageIds': {
-                        $each: [mid],
-                        $slice: -40
-                    }
-                },
-                $set: { 'supportHistory.updatedAt': new Date() }
-            },
-            { upsert: false }
-        );
-    } catch (e) {
-        console.warn('[admin] rememberNotifyMessage User.updateOne:', e.message);
+/** true if reply target is «надіслати всім» instruction */
+function isBroadcastAllTarget(raw) {
+    if (raw == null) return false;
+    let s;
+    if (typeof raw === 'object') {
+        s = [raw.text, raw.caption].filter(Boolean).join('\n');
+    } else {
+        s = String(raw);
     }
-
-    // Fallback map (survives schema lag / strict paths)
-    try {
-        const col = User.db.collection('admin_notify_map');
-        await col.updateOne(
-            { messageId: mid },
-            {
-                $set: {
-                    messageId: mid,
-                    telegramId: tid,
-                    at: new Date()
-                }
-            },
-            { upsert: true }
-        );
-    } catch (e) {
-        console.warn('[admin] rememberNotifyMessage map:', e.message);
-    }
+    return /ID:\s*BROADCAST_ALL\b/i.test(s) || /#broadcast_all\b/i.test(s);
 }
 
 /**
- * Resolve target user id from a reply_to message:
- * 1) text markers #u / ID:
- * 2) User.supportHistory.notifyMessageIds
- * 3) admin_notify_map collection
+ * Broadcast admin media/text to all users with access ≠ none.
+ * Returns { ok, fail, total }.
  */
-async function resolveTargetUserId(replyTo) {
-    const fromText = extractUserIdFromNotifyText(replyTo);
-    if (fromText) return fromText;
-
-    const mid = replyTo && replyTo.message_id;
-    if (mid == null) return null;
-    const midN = Number(mid);
-
-    try {
-        const u = await User.findOne({
-            'supportHistory.notifyMessageIds': midN
-        })
-            .select('telegramId')
-            .lean();
-        if (u && u.telegramId) return Number(u.telegramId);
-    } catch (e) {
-        console.warn('[admin] resolveTargetUserId user lookup:', e.message);
+async function broadcastToAllUsers(api, msg) {
+    const users = await User.find({ accessLevel: { $ne: 'none' } })
+        .select('telegramId')
+        .lean();
+    let ok = 0;
+    let fail = 0;
+    for (const u of users) {
+        if (!u?.telegramId) continue;
+        try {
+            const kind = await sendAdminReplyToUser(api, u.telegramId, msg);
+            if (kind) ok += 1;
+            else fail += 1;
+        } catch (e) {
+            fail += 1;
+            console.warn('[admin] broadcast fail', u.telegramId, e.message);
+        }
     }
-
-    try {
-        const col = User.db.collection('admin_notify_map');
-        const row = await col.findOne({ messageId: midN });
-        if (row && row.telegramId) return Number(row.telegramId);
-    } catch (e) {
-        console.warn('[admin] resolveTargetUserId map lookup:', e.message);
-    }
-
-    return null;
+    return { ok, fail, total: users.length };
 }
-
-
-
 
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
@@ -1062,32 +973,324 @@ async function sendAdminMenu(api, chatId, messageId = null, preferredThreadId = 
     if (messageId) {
         try {
             await api.editMessageText(chatId, messageId, text, base);
-            return;
-        } catch (_) {
-            /* fall through to send */
-        }
-    }
-
-    // Try: caller's thread → TOPIC_GENERAL → no thread (Telegram General default)
-    const attempts = [];
-    if (preferredThreadId != null && preferredThreadId !== undefined) {
-        attempts.push({ message_thread_id: preferredThreadId });
-    }
-    const gen = topicId('GENERAL');
-    if (gen != null) attempts.push({ message_thread_id: gen });
-    attempts.push({});
-
-    let lastErr = null;
-    for (const thr of attempts) {
-        try {
-            await api.sendMessage(chatId, text, { ...base, ...thr });
-            return;
+            return { edited: true, messageId };
         } catch (e) {
-            lastErr = e;
-            console.warn('[admin] sendAdminMenu failed:', e.message, thr);
+            const msg = e?.message || String(e);
+            // Telegram: same text+markup → "message is not modified" — це успіх, не слати нове
+            if (/message is not modified/i.test(msg)) {
+                return { edited: true, messageId, unchanged: true };
+            }
+            console.warn('[admin] sendAdminMenu edit failed:', msg);
+            // Не шлемо дубль, якщо редагування не вдалось з іншої причини —
+            // лише коли messageId не передавали (нове меню з /admin).
+            return { edited: false, messageId, error: msg };
         }
     }
-    throw lastErr || new Error('sendAdminMenu failed');
+
+    const sent = await sendInAdminThread(api, chatId, text, base, preferredThreadId);
+    return { edited: false, messageId: sent?.message_id };
+}
+
+
+/**
+ * Edit the callback message in-place (remove buttons), or fall back to send in same thread.
+ * Used so confirm → "starting" → result all stay on one message.
+ */
+async function editCallbackMessage(api, ctx, text, extra = {}) {
+    const msg = ctx.callbackQuery?.message;
+    const chatId = msg?.chat?.id;
+    const messageId = msg?.message_id;
+    const opts = { parse_mode: 'HTML', ...extra };
+    // Clear buttons unless caller explicitly passes reply_markup
+    if (!Object.prototype.hasOwnProperty.call(extra, 'reply_markup')) {
+        opts.reply_markup = { inline_keyboard: [] };
+    }
+    if (chatId != null && messageId != null) {
+        try {
+            await api.editMessageText(chatId, messageId, text, opts);
+            return { edited: true, messageId };
+        } catch (e) {
+            console.warn('[admin] editCallbackMessage failed:', e.message);
+        }
+    }
+    const preferred =
+        msg?.message_thread_id != null ? msg.message_thread_id : topicId('GENERAL');
+    // strip any stale thread from opts — sendInAdminThread owns it
+    const { message_thread_id: _drop, ...rest } = opts;
+    const sent = await sendInAdminThread(api, chatId, text, rest, preferred);
+    return { edited: false, messageId: sent?.message_id };
+}
+
+/**
+ * Edit a specific message by id (after we already know messageId from previous step).
+ */
+async function editMessageById(api, chatId, messageId, text, extra = {}, threadId = null) {
+    const opts = { parse_mode: 'HTML', ...extra };
+    if (!Object.prototype.hasOwnProperty.call(extra, 'reply_markup')) {
+        opts.reply_markup = { inline_keyboard: [] };
+    }
+    if (messageId != null) {
+        try {
+            await api.editMessageText(chatId, messageId, text, opts);
+            return true;
+        } catch (e) {
+            console.warn('[admin] editMessageById failed:', e.message);
+        }
+    }
+    const preferred = threadId != null ? threadId : topicId('GENERAL');
+    const { message_thread_id: _drop, ...rest } = opts;
+    await sendInAdminThread(api, chatId, text, rest, preferred);
+    return false;
+}
+
+/**
+ * Start a new admin scenario as a SEPARATE message (keeps main menu intact).
+ * Same forum topic as the callback message.
+ */
+async function startScenarioMessage(api, ctx, text, extra = {}) {
+    const msg = ctx.callbackQuery?.message;
+    const chatId = msg?.chat?.id;
+    const preferred =
+        msg?.message_thread_id != null ? msg.message_thread_id : topicId('GENERAL');
+    const opts = { parse_mode: 'HTML', ...extra };
+    const { message_thread_id: _drop, ...rest } = opts;
+    const sent = await sendInAdminThread(api, chatId, text, rest, preferred);
+    return sent?.message_id;
+}
+
+/** Delete the callback message (cancel / cleanup). */
+async function deleteCallbackMessage(api, ctx) {
+    const msg = ctx.callbackQuery?.message;
+    if (!msg?.chat?.id || msg.message_id == null) return false;
+    try {
+        await api.deleteMessage(msg.chat.id, msg.message_id);
+        return true;
+    } catch (e) {
+        console.warn('[admin] deleteCallbackMessage failed:', e.message);
+        return false;
+    }
+}
+
+/**
+ * After successful outbound message: delete admin reply + bot instruction in General.
+ */
+async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg) {
+    const ids = [];
+    if (adminMsg?.message_id != null) ids.push(adminMsg.message_id);
+    if (instructionMsg?.message_id != null) ids.push(instructionMsg.message_id);
+    for (const id of ids) {
+        try {
+            await api.deleteMessage(chatId, id);
+        } catch (e) {
+            console.warn('[admin] cleanupScenarioMessages failed', id, e.message);
+        }
+    }
+}
+
+
+/**
+ * Final step of cron/scenario: show «Зроблено», then delete the scenario message.
+ */
+async function finishScenarioDone(api, ctx, summaryHtml = '') {
+    const msg = ctx.callbackQuery?.message;
+    const chatId = msg?.chat?.id;
+    const messageId = msg?.message_id;
+    const body =
+        `✅ <b>Зроблено</b>` + (summaryHtml ? `\n${summaryHtml}` : '');
+    if (chatId != null && messageId != null) {
+        try {
+            await api.editMessageText(chatId, messageId, body, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [] }
+            });
+        } catch (e) {
+            console.warn('[admin] finishScenarioDone edit failed:', e.message);
+        }
+        try {
+            await api.deleteMessage(chatId, messageId);
+        } catch (e) {
+            console.warn('[admin] finishScenarioDone delete failed:', e.message);
+        }
+    }
+}
+
+/** Paginated user picker for «Написати користувачу». */
+function buildMsgUserPage(users, page) {
+    const PAGE = ACCESS_PAGE_SIZE;
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
+
+    const rows = slice.map((u) => {
+        const label =
+            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+            (u.city ? ` · ${u.city}` : '');
+        return [
+            {
+                text: label.slice(0, 60),
+                callback_data: `adm|msg_pick|${u.telegramId}`
+            }
+        ];
+    });
+
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|msg_user|${p - 1}` });
+        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
+        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|msg_user|${p + 1}` });
+        rows.push(nav);
+    }
+    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * PAGE + 1 : 0;
+    const to = Math.min((p + 1) * PAGE, total);
+    const text =
+        `✉️ <b>Написати користувачу</b>\n` +
+        `<i>Оберіть отримувача (${from}–${to} з ${total})</i>`;
+    return { text, reply_markup: { inline_keyboard: rows } };
+}
+
+/** Paginated user picker for «Інфо про 👤». */
+function buildUserInfoPickPage(users, page) {
+    const PAGE = ACCESS_PAGE_SIZE;
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
+
+    const rows = slice.map((u) => {
+        const label =
+            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+            (u.city ? ` · ${u.city}` : '');
+        return [
+            {
+                text: label.slice(0, 60),
+                callback_data: `adm|userinfo|${u.telegramId}`
+            }
+        ];
+    });
+
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|userinfo_pick|${p - 1}` });
+        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
+        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|userinfo_pick|${p + 1}` });
+        rows.push(nav);
+    }
+    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * PAGE + 1 : 0;
+    const to = Math.min((p + 1) * PAGE, total);
+    const text =
+        `👤 <b>Інфо про 👤</b>\n` +
+        `<i>Оберіть користувача (${from}–${to} з ${total})</i>`;
+    return { text, reply_markup: { inline_keyboard: rows } };
+}
+
+/** Paginated user picker for «Очистити метрики». */
+function buildCleanMetricsPickPage(users, page) {
+    const PAGE = ACCESS_PAGE_SIZE;
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
+
+    const rows = slice.map((u) => {
+        const raw = u.forecastSettings?.enabledMetrics || [];
+        const { changed, removed } = cleanEnabledMetrics(raw);
+        const dirty = changed ? ' ⚠️' : '';
+        const label =
+            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
+            (u.city ? ` · ${u.city}` : '') +
+            dirty;
+        return [
+            {
+                text: label.slice(0, 60),
+                callback_data: `adm|clean_metrics|${u.telegramId}`
+            }
+        ];
+    });
+
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|clean_metrics_pick|${p - 1}` });
+        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
+        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|clean_metrics_pick|${p + 1}` });
+        rows.push(nav);
+    }
+    rows.push([{ text: '🧹 Очистити всім', callback_data: 'adm|clean_metrics_all' }]);
+    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * PAGE + 1 : 0;
+    const to = Math.min((p + 1) * PAGE, total);
+    const text =
+        `🧹 <b>Очистити метрики</b>\n` +
+        `<i>Прибирає pollen / solar / ozone + legacy aqi.\n` +
+        `⚠️ = є що чистити. Оберіть юзера (${from}–${to} з ${total})</i>`;
+    return { text, reply_markup: { inline_keyboard: rows } };
+}
+
+
+
+/** Users per page in «Змінити доступ» (2 buttons/row → keep under TG limits). */
+const ACCESS_PAGE_SIZE = 8;
+
+/**
+ * Build keyboard + title for access toggle list (paginated).
+ * @returns {{ text: string, reply_markup: object }}
+ */
+function buildAccessPage(users, page) {
+    const total = users.length;
+    const totalPages = Math.max(1, Math.ceil(total / ACCESS_PAGE_SIZE));
+    const p = Math.min(Math.max(0, page), totalPages - 1);
+    const slice = users.slice(p * ACCESS_PAGE_SIZE, (p + 1) * ACCESS_PAGE_SIZE);
+
+    const rows = slice.map((u) => {
+        const label = u.username || u.firstName || String(u.telegramId);
+        const cur = accessLabel(u.accessLevel || 'unlimited');
+        const next = (u.accessLevel || 'unlimited') === 'none' ? 'unlimited' : 'none';
+        const nextLabel = next === 'none' ? '🚫 Заборонити' : '✅ Дати безліміт';
+        return [
+            {
+                text: `${String(label).slice(0, 28)} · ${cur}`,
+                callback_data: `adm|noop|${u.telegramId}`
+            },
+            {
+                text: nextLabel,
+                callback_data: `adm|setaccess|${u.telegramId}|${next}|${p}`
+            }
+        ];
+    });
+
+    // Pagination row
+    if (totalPages > 1) {
+        const nav = [];
+        if (p > 0) {
+            nav.push({ text: '◀️', callback_data: `adm|access|${p - 1}` });
+        }
+        nav.push({
+            text: `${p + 1}/${totalPages}`,
+            callback_data: 'adm|noop|page'
+        });
+        if (p < totalPages - 1) {
+            nav.push({ text: '▶️', callback_data: `adm|access|${p + 1}` });
+        }
+        rows.push(nav);
+    }
+
+    rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
+
+    const from = total ? p * ACCESS_PAGE_SIZE + 1 : 0;
+    const to = Math.min((p + 1) * ACCESS_PAGE_SIZE, total);
+    const text =
+        `🔑 <b>Змінити доступ</b>\n` +
+        `<i>Показано ${from}–${to} з ${total}</i>`;
+
+    return {
+        text,
+        reply_markup: { inline_keyboard: rows }
+    };
 }
 
 async function handleAdminCallback(ctx) {
@@ -1100,18 +1303,44 @@ async function handleAdminCallback(ctx) {
         return true;
     }
 
-    await ctx.answerCallbackQuery().catch(() => {});
     const api = ctx.api;
     const sub = data[1];
 
+    // Toast on access toggle; otherwise clear loading state immediately
+    if (sub === 'setaccess') {
+        const level = data[3] === 'none' ? 'none' : 'unlimited';
+        await ctx
+            .answerCallbackQuery({
+                text: level === 'none' ? '🚫 Доступ заборонено' : '✅ Безліміт надано'
+            })
+            .catch(() => {});
+    } else {
+        await ctx.answerCallbackQuery().catch(() => {});
+    }
+
     try {
         if (sub === 'menu') {
-            await sendAdminMenu(
-                api,
-                chatId,
-                ctx.callbackQuery.message.message_id,
-                ctx.callbackQuery.message.message_thread_id
-            );
+            const curMsg = ctx.callbackQuery?.message;
+            const curText = curMsg?.text || curMsg?.caption || '';
+            const isMainMenu =
+                curText.includes('Адмін-панель Parasol Sentinel') ||
+                curText.includes('Оберіть дію кнопкою');
+            if (isMainMenu && curMsg?.message_id != null) {
+                // Єдина кнопка, що має перезаписувати повідомлення меню (edit, не send)
+                const result = await sendAdminMenu(api, chatId, curMsg.message_id);
+                if (!result.edited && result.error) {
+                    // Повідомлення зникло / недоступне — тоді вже нове
+                    await sendAdminMenu(
+                        api,
+                        chatId,
+                        null,
+                        curMsg.message_thread_id ?? topicId('GENERAL')
+                    );
+                }
+            } else {
+                // Scenario cancel — delete this message, leave main menu alone
+                await deleteCallbackMessage(api, ctx);
+            }
             return true;
         }
 
@@ -1260,6 +1489,7 @@ async function handleAdminCallback(ctx) {
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
             // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
+            // Помилки — лише кількість (без тексту «коли і що впало»)
             const html = `
 <h1>📊 Аналітика Parasol Sentinel</h1>
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
@@ -1338,82 +1568,138 @@ async function handleAdminCallback(ctx) {
 <h3>❌ Помилки (кількість)</h3>
 <table bordered striped>
   <thead>
-    <tr><th align="left">Період</th><th align="left">К-сть</th></tr>
+    <tr>
+      <th align="left">Період</th>
+      <th align="center">К-сть</th>
+    </tr>
   </thead>
   <tbody>
-    <tr><td align="left">Цього місяця</td><td align="left"><b>${errorsThisMonth}</b></td></tr>
-    <tr><td align="left">Всього</td><td align="left"><b>${errorsTotal}</b></td></tr>
+    <tr><td align="left">Цього місяця</td><td align="center"><b>${errorsThisMonth}</b></td></tr>
+    <tr><td align="left">Всього</td><td align="center"><b>${errorsTotal}</b></td></tr>
   </tbody>
 </table>
 <p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
 `.trim();
 
-                        const refreshKb = {
-                inline_keyboard: [[{ text: '🔄 Оновити', callback_data: 'adm|stats' }]]
-            };
-            await updateAdminRichMessage(api, chatId, html, ctx, refreshKb);
+            const statsRefresh = refreshMarkup('adm|stats');
+            const cbMsg = ctx.callbackQuery?.message;
+            const messageId = cbMsg?.message_id;
+            const preferredThr =
+                cbMsg?.message_thread_id != null ? cbMsg.message_thread_id : topicId('GENERAL');
+            const thr =
+                preferredThr != null && Number.isFinite(Number(preferredThr))
+                    ? { message_thread_id: Number(preferredThr) }
+                    : {};
+            const isRefresh = isRefreshClick(cbMsg);
+
+            const plain =
+                `📊 <b>Аналітика Parasol Sentinel</b>\n` +
+                `<i>${escapeHtml(monthLabel)}</i>\n\n` +
+                `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
+                `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
+                `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
+                `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
+                `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
+                `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
+                `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
+
+            try {
+                if (isRefresh && messageId != null) {
+                    // Оновлюємо ІСНУЮЧЕ rich-повідомлення (як Help у bot.js)
+                    await api.raw.editMessageText({
+                        chat_id: chatId,
+                        message_id: messageId,
+                        rich_message: { html, skip_entity_detection: true },
+                        reply_markup: statsRefresh
+                    });
+                } else {
+                    // Перше відкриття — нове повідомлення в правильній гілці
+                    await api.sendRichMessage(
+                        chatId,
+                        { html, skip_entity_detection: true },
+                        { reply_markup: statsRefresh, ...thr }
+                    );
+                }
+            } catch (richErr) {
+                console.warn('[admin] stats rich failed:', richErr.message);
+                // Якщо edit не вийшов (старе було plain / інший тип) — шлемо нове rich
+                try {
+                    await api.sendRichMessage(
+                        chatId,
+                        { html, skip_entity_detection: true },
+                        { reply_markup: statsRefresh, ...thr }
+                    );
+                } catch (e2) {
+                    console.warn('[admin] stats sendRichMessage fallback failed:', e2.message);
+                    await sendInAdminThread(
+                        api,
+                        chatId,
+                        plain,
+                        {
+                            parse_mode: 'HTML',
+                            disable_web_page_preview: true,
+                            reply_markup: statsRefresh
+                        },
+                        preferredThr
+                    );
+                }
+            }
             return true;
         }
 
         if (sub === 'access') {
-            // List first 30 users with toggle buttons
-            const users = await User.find({}).sort({ lastActivityAt: -1 }).limit(30).lean();
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
             if (!users.length) {
-                await api.sendMessage(chatId, '📭 Немає користувачів.', { parse_mode: 'HTML' });
+                const curText = ctx.callbackQuery?.message?.text || '';
+                if (curText.includes('Змінити доступ')) {
+                    await editCallbackMessage(api, ctx, '📭 Немає користувачів.');
+                } else {
+                    await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                }
                 return true;
             }
-            const rows = users.map((u) => {
-                const label = u.username || u.firstName || String(u.telegramId);
-                const cur = accessLabel(u.accessLevel || 'unlimited');
-                const next = (u.accessLevel || 'unlimited') === 'none' ? 'unlimited' : 'none';
-                const nextLabel = next === 'none' ? '🚫 Заборонити' : '✅ Дати безліміт';
-                return [
-                    {
-                        text: `${label} · ${cur}`,
-                        callback_data: `adm|noop|${u.telegramId}`
-                    },
-                    {
-                        text: nextLabel,
-                        callback_data: `adm|setaccess|${u.telegramId}|${next}`
-                    }
-                ];
-            });
-            rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
-            await api.sendMessage(chatId, '🔑 <b>Змінити доступ</b> (останні 30):', {
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: rows }
-            });
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildAccessPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            // Pagination / refresh after setaccess → edit; open from main menu → new message
+            if (curText.includes('Змінити доступ')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
             return true;
         }
 
         if (sub === 'setaccess') {
             const tgId = parseInt(data[2], 10);
             const level = data[3] === 'none' ? 'none' : 'unlimited';
+            const page = data[4] != null && data[4] !== '' ? parseInt(data[4], 10) : 0;
             const updated = await User.findOneAndUpdate(
                 { telegramId: tgId },
                 { $set: { accessLevel: level } },
                 { new: true }
             );
             if (!updated) {
-                await api.sendMessage(chatId, `❌ Користувача ${tgId} не знайдено.`);
+                await editCallbackMessage(api, ctx, `❌ Користувача ${tgId} не знайдено.`);
                 return true;
             }
-            await api.sendMessage(
-                chatId,
-                `✅ Доступ оновлено:\n${formatUserLine(updated)}`,
-                { parse_mode: 'HTML' }
-            );
+            // Refresh the same page in-place (button flips, no separate "оновлено" message)
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildAccessPage(users, safePage);
+            await editCallbackMessage(api, ctx, text, { reply_markup });
             return true;
         }
 
         if (sub === 'broadcast_evening') {
-            await api.sendMessage(
-                chatId,
+            await startScenarioMessage(
+                api,
+                ctx,
                 '🌆 <b>Розсилка вечірнього прогнозу</b>\n\n' +
                     'Щоб запустити зараз, натисніть «Підтвердити».\n' +
                     'Це викличе той самий cron, що й щовечора (лише для користувачів з увімкненим вечірнім прогнозом і access ≠ none).',
                 {
-                    parse_mode: 'HTML',
                     reply_markup: {
                         inline_keyboard: [
                             [
@@ -1430,14 +1716,17 @@ async function handleAdminCallback(ctx) {
         if (sub === 'do_broadcast') {
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast.'
                 );
                 return true;
             }
-            await api.sendMessage(chatId, '⏳ Запускаю розсилку…');
+            await editCallbackMessage(api, ctx, '⏳ Запускаю розсилку…');
             try {
                 const axios = require('axios');
                 const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-forecast`;
@@ -1446,32 +1735,33 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
-                    chatId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🌆 <b>Розсилка вечір. прогнозу</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                await finishScenarioDone(
+                    api,
+                    ctx,
+                    `🌆 Розсилка · статус <code>${res.status}</code>`
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
 
         // ─── Вечірній тест (cron-forecast-test, TEST_USER_ID) ───
         if (sub === 'evening_test') {
-            await api.sendMessage(
-                chatId,
+            await startScenarioMessage(
+                api,
+                ctx,
                 '🧪 <b>Вечірній тест</b>\n\n' +
                     'Запускає <code>cron-forecast-test</code> для користувача з <code>TEST_USER_ID</code> (env).\n' +
                     'Підтвердіть запуск:',
                 {
-                    parse_mode: 'HTML',
                     reply_markup: {
                         inline_keyboard: [
                             [
@@ -1488,14 +1778,17 @@ async function handleAdminCallback(ctx) {
         if (sub === 'do_evening_test') {
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast-test.'
                 );
                 return true;
             }
-            await api.sendMessage(chatId, '⏳ Запускаю вечірній тест…');
+            await editCallbackMessage(api, ctx, '⏳ Запускаю вечірній тест…');
             try {
                 const axios = require('axios');
                 const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-forecast-test`;
@@ -1504,19 +1797,20 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
-                    chatId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🧪 <b>Вечірній тест</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                await finishScenarioDone(
+                    api,
+                    ctx,
+                    `🧪 Вечірній тест · статус <code>${res.status}</code>`
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
@@ -1535,9 +1829,11 @@ async function handleAdminCallback(ctx) {
                 .lean();
 
             if (!users.length) {
-                await api.sendMessage(chatId, '📭 Немає підходящих користувачів для вечірнього прогнозу.', {
-                    parse_mode: 'HTML'
-                });
+                await startScenarioMessage(
+                    api,
+                    ctx,
+                    '📭 Немає підходящих користувачів для вечірнього прогнозу.'
+                );
                 return true;
             }
 
@@ -1554,37 +1850,38 @@ async function handleAdminCallback(ctx) {
             });
             rows.push([{ text: '◀️ Меню', callback_data: 'adm|menu' }]);
 
-            await api.sendMessage(
-                chatId,
+            await startScenarioMessage(
+                api,
+                ctx,
                 '🎯 <b>Вечірній крон обраним</b>\n\n' +
                     'Оберіть користувача — буде надіслано вечірній прогноз лише йому:\n',
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: rows }
-                }
+                { reply_markup: { inline_keyboard: rows } }
             );
             return true;
         }
 
         if (sub === 'do_evening_one') {
             const targetId = data[2];
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!targetId) {
-                await api.sendMessage(chatId, '❌ Не вказано ID користувача.');
+                await editCallbackMessage(api, ctx, '❌ Не вказано ID користувача.');
                 return true;
             }
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-forecast.'
                 );
                 return true;
             }
-            await api.sendMessage(
-                chatId,
-                `⏳ Запускаю вечірній прогноз для <code>${escapeHtml(targetId)}</code>…`,
-                { parse_mode: 'HTML' }
+            await editCallbackMessage(
+                api,
+                ctx,
+                `⏳ Запускаю вечірній прогноз для <code>${escapeHtml(targetId)}</code>…`
             );
             try {
                 const axios = require('axios');
@@ -1594,33 +1891,33 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
-                    chatId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🎯 <b>Вечірній крон (1 юзер)</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Користувач: <code>${escapeHtml(targetId)}</code>\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                await finishScenarioDone(
+                    api,
+                    ctx,
+                    `🎯 Юзер <code>${escapeHtml(targetId)}</code> · статус <code>${res.status}</code>`
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
             }
             return true;
         }
 
         // ─── Крон чек (light) ───
         if (sub === 'cron_check') {
-            await api.sendMessage(
-                chatId,
+            await startScenarioMessage(
+                api,
+                ctx,
                 '🔍 <b>Крон чек (light)</b>\n\n' +
                     'Запускає <code>cron-check-light</code> — легка перевірка алертів без Weatherbit.\n' +
                     'Підтвердіть запуск:',
                 {
-                    parse_mode: 'HTML',
                     reply_markup: {
                         inline_keyboard: [
                             [
@@ -1637,14 +1934,17 @@ async function handleAdminCallback(ctx) {
         if (sub === 'do_cron_check') {
             const DOMAIN = process.env.DOMAIN || '';
             const secret = process.env.CRON_SECRET || '';
+            const msgId = ctx.callbackQuery?.message?.message_id;
+            const threadId = ctx.callbackQuery?.message?.message_thread_id ?? null;
             if (!DOMAIN || !secret) {
-                await api.sendMessage(
-                    chatId,
+                await editCallbackMessage(
+                    api,
+                    ctx,
                     '❌ DOMAIN або CRON_SECRET не налаштовані — не можу викликати cron-check-light.'
                 );
                 return true;
             }
-            await api.sendMessage(chatId, '⏳ Запускаю крон чек (light)…');
+            await editCallbackMessage(api, ctx, '⏳ Запускаю крон чек (light)…');
             try {
                 const axios = require('axios');
                 const url = `https://${DOMAIN.replace(/^https?:\/\//, '')}/api/cron-check-light`;
@@ -1653,19 +1953,151 @@ async function handleAdminCallback(ctx) {
                     timeout: 55000,
                     validateStatus: () => true
                 });
-                await api.sendMessage(
-                    chatId,
-                    `┏━━━━━━━━━━━━━━━━━━━━┓\n` +
-                        `┃  🔍 <b>Крон чек (light)</b>\n` +
-                        `┗━━━━━━━━━━━━━━━━━━━━┛\n` +
-                        `Статус: <code>${res.status}</code>\n` +
-                        `<pre>${escapeHtml(String(res.data).slice(0, 800))}</pre>`,
-                    { parse_mode: 'HTML' }
+                await finishScenarioDone(
+                    api,
+                    ctx,
+                    `🔍 Крон чек · статус <code>${res.status}</code>`
                 );
             } catch (e) {
-                await api.sendMessage(chatId, `❌ Помилка виклику: ${escapeHtml(e.message)}`, {
-                    parse_mode: 'HTML'
-                });
+                await editMessageById(
+                    api,
+                    chatId,
+                    msgId,
+                    `❌ Помилка виклику: ${escapeHtml(e.message)}`,
+                    {},
+                    threadId
+                );
+            }
+            return true;
+        }
+
+        // ─── Очистити застарілі метрики (denylist) ───
+        if (sub === 'clean_metrics_pick') {
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            if (!users.length) {
+                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                return true;
+            }
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildCleanMetricsPickPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            if (curText.includes('Очистити метрики')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
+            return true;
+        }
+
+        if (sub === 'clean_metrics') {
+            const tgId = data[2] ? Number(data[2]) : null;
+            if (!tgId || Number.isNaN(tgId)) {
+                await startScenarioMessage(api, ctx, '❌ Невірний ID користувача.');
+                return true;
+            }
+            const u = await User.findOne({ telegramId: tgId });
+            if (!u) {
+                await startScenarioMessage(
+                    api,
+                    ctx,
+                    `❌ Користувача <code>${tgId}</code> немає в БД.`
+                );
+                return true;
+            }
+            const before = Array.isArray(u.forecastSettings?.enabledMetrics)
+                ? [...u.forecastSettings.enabledMetrics]
+                : [];
+            const { metrics, changed, removed } = cleanEnabledMetrics(before);
+            if (!changed) {
+                await editCallbackMessage(
+                    api,
+                    ctx,
+                    `✅ <b>ID ${tgId}</b> — метрики вже чисті.\n<code>${escapeHtml(before.join(', ') || '—')}</code>`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '◀️ Назад', callback_data: 'adm|clean_metrics_pick|0' }],
+                                [{ text: '🏠 Меню', callback_data: 'adm|menu' }]
+                            ]
+                        }
+                    }
+                );
+                return true;
+            }
+            if (!u.forecastSettings) u.forecastSettings = {};
+            u.forecastSettings.enabledMetrics = metrics;
+            u.markModified('forecastSettings');
+            await u.save();
+            await editCallbackMessage(
+                api,
+                ctx,
+                `🧹 <b>Очищено ID ${tgId}</b>\n` +
+                    `Прибрано: <code>${escapeHtml(removed.join(', ') || '—')}</code>\n` +
+                    `Було: <code>${escapeHtml(before.join(', ') || '—')}</code>\n` +
+                    `Стало: <code>${escapeHtml(metrics.join(', ') || '—')}</code>`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '◀️ Назад', callback_data: 'adm|clean_metrics_pick|0' }],
+                            [{ text: '🏠 Меню', callback_data: 'adm|menu' }]
+                        ]
+                    }
+                }
+            );
+            return true;
+        }
+
+        if (sub === 'clean_metrics_all') {
+            const users = await User.find({}).lean();
+            let cleaned = 0;
+            const details = [];
+            for (const u of users) {
+                const before = Array.isArray(u.forecastSettings?.enabledMetrics)
+                    ? u.forecastSettings.enabledMetrics
+                    : [];
+                const { metrics, changed, removed } = cleanEnabledMetrics(before);
+                if (!changed) continue;
+                await User.updateOne(
+                    { telegramId: u.telegramId },
+                    { $set: { 'forecastSettings.enabledMetrics': metrics } }
+                );
+                cleaned += 1;
+                if (details.length < 15) {
+                    details.push(
+                        `<code>${u.telegramId}</code> −${escapeHtml(removed.join(','))}`
+                    );
+                }
+            }
+            const body =
+                cleaned === 0
+                    ? '✅ У всіх користувачів метрики вже чисті.'
+                    : `🧹 <b>Очищено: ${cleaned}</b> з ${users.length}\n` +
+                      (details.length ? details.join('\n') : '') +
+                      (cleaned > details.length ? `\n… ще ${cleaned - details.length}` : '');
+            await editCallbackMessage(api, ctx, body, {
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🏠 Меню', callback_data: 'adm|menu' }]]
+                }
+            });
+            return true;
+        }
+
+        // ─── Інфо про 👤: список → вибір → замінити повідомлення на профіль ───
+        if (sub === 'userinfo_pick') {
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            if (!users.length) {
+                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                return true;
+            }
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildUserInfoPickPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            if (curText.includes('Інфо про')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
             }
             return true;
         }
@@ -1673,41 +2105,148 @@ async function handleAdminCallback(ctx) {
         if (sub === 'userinfo') {
             const tgId = data[2] ? Number(data[2]) : null;
             if (!tgId || Number.isNaN(tgId)) {
-                await api.sendMessage(chatId, '❌ Невірний ID користувача.', threadFromAdminCallback(ctx));
+                await api.sendMessage(chatId, '❌ Невірний ID користувача.');
                 return true;
             }
             const u = await User.findOne({ telegramId: tgId }).lean();
             if (!u) {
-                await api.sendMessage(
-                    chatId,
-                    `❌ Користувача <code>${tgId}</code> немає в БД.`,
-                    { parse_mode: 'HTML', ...threadFromAdminCallback(ctx) }
-                );
+                await api.sendMessage(chatId, `❌ Користувача <code>${tgId}</code> немає в БД.`, {
+                    parse_mode: 'HTML'
+                });
                 return true;
             }
             const html = buildUserInfoHtml(u);
-            const tgIdForBtn = u.telegramId || tgId;
-            const refreshKb = {
-                inline_keyboard: [[
-                    { text: '🔄 Оновити', callback_data: `adm|userinfo|${tgIdForBtn}` },
-                    { text: '◀️ Меню', callback_data: 'adm|menu' }
-                ]]
-            };
-            await updateAdminRichMessage(api, chatId, html, ctx, refreshKb);
+            const plain = buildUserInfoPlain(u);
+            const cbMsg = ctx.callbackQuery?.message;
+            const messageId = cbMsg?.message_id;
+            const fromPicker = (cbMsg?.text || '').includes('Інфо про');
+            const fromRefresh = isRefreshClick(cbMsg);
+
+            // Залишаємося в тій самій гілці, звідки натиснули.
+            // З пікера / оновлення — General (або поточний thread).
+            // З notify (кнопка «Інфо») — гілка USERS/ACTIONS повідомлення.
+            const preferredThr =
+                cbMsg?.message_thread_id != null
+                    ? cbMsg.message_thread_id
+                    : fromPicker || fromRefresh
+                      ? topicId('GENERAL')
+                      : topicId('USERS');
+            const thr =
+                preferredThr != null &&
+                Number.isFinite(Number(preferredThr)) &&
+                Number(preferredThr) > 0
+                    ? { message_thread_id: Number(preferredThr) }
+                    : {};
+
+            const infoRefresh = refreshMarkup(`adm|userinfo|${tgId}`);
+
             try {
-                await ctx.answerCallbackQuery({ text: '🔄 Оновлено' });
-            } catch (_) { /* ignore */ }
+                if (fromRefresh && messageId != null) {
+                    // Оновлюємо ІСНУЮЧЕ rich-повідомлення
+                    await api.raw.editMessageText({
+                        chat_id: chatId,
+                        message_id: messageId,
+                        rich_message: { html, skip_entity_detection: true },
+                        reply_markup: infoRefresh
+                    });
+                } else {
+                    // З пікера — прибираємо список, шлемо профіль новим
+                    if (fromPicker) {
+                        await deleteCallbackMessage(api, ctx);
+                    }
+                    await api.sendRichMessage(
+                        chatId,
+                        { html, skip_entity_detection: true },
+                        { reply_markup: infoRefresh, ...thr }
+                    );
+                }
+            } catch (richErr) {
+                const msg = richErr?.message || String(richErr);
+                console.warn('[admin] userinfo rich failed:', msg);
+
+                // thread not found → повтор без thread
+                if (/thread not found|MESSAGE_THREAD|message thread/i.test(msg) && Object.keys(thr).length) {
+                    try {
+                        await api.sendRichMessage(
+                            chatId,
+                            { html, skip_entity_detection: true },
+                            { reply_markup: infoRefresh }
+                        );
+                        return true;
+                    } catch (e2) {
+                        console.warn('[admin] userinfo rich no-thread failed:', e2.message);
+                    }
+                }
+
+                // Якщо edit не вийшов — нове rich
+                try {
+                    await api.sendRichMessage(
+                        chatId,
+                        { html, skip_entity_detection: true },
+                        { reply_markup: infoRefresh, ...thr }
+                    );
+                } catch (e3) {
+                    // Остаточний fallback — plain (безпечні теги, без h1/table)
+                    await sendInAdminThread(
+                        api,
+                        chatId,
+                        plain,
+                        {
+                            parse_mode: 'HTML',
+                            disable_web_page_preview: true,
+                            reply_markup: infoRefresh
+                        },
+                        preferredThr
+                    );
+                }
+            }
             return true;
         }
 
         if (sub === 'msg_user') {
-            await api.sendMessage(
-                chatId,
-                '✉️ <b>Написати користувачу</b>\n\n' +
-                    'Надішліть у цей канал повідомлення у форматі:\n' +
-                    '<code>/msg USER_ID текст повідомлення</code>\n\n' +
-                    'Приклад:\n<code>/msg 7574257471 Привіт! Перевірка адмінки.</code>',
-                { parse_mode: 'HTML' }
+            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
+            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
+            if (!users.length) {
+                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
+                return true;
+            }
+            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
+            const { text, reply_markup } = buildMsgUserPage(users, safePage);
+            const curText = ctx.callbackQuery?.message?.text || '';
+            if (curText.includes('Написати користувачу')) {
+                await editCallbackMessage(api, ctx, text, { reply_markup });
+            } else {
+                await startScenarioMessage(api, ctx, text, { reply_markup });
+            }
+            return true;
+        }
+
+        if (sub === 'msg_pick') {
+            const targetId = data[2];
+            if (!targetId) {
+                await startScenarioMessage(api, ctx, '❌ Невірний ID.');
+                return true;
+            }
+            await deleteCallbackMessage(api, ctx);
+            await startScenarioMessage(
+                api,
+                ctx,
+                `✉️ <b>Написати користувачу</b> <code>${escapeHtml(String(targetId))}</code>\n\n` +
+                    `Відповідай на <b>це</b> повідомлення (Reply) — текст, фото, голос, файл.\n` +
+                    `Після відправки воно піде цьому користувачу.\n\n` +
+                    `ID: <code>${escapeHtml(String(targetId))}</code>`
+            );
+            return true;
+        }
+
+        if (sub === 'msg_all') {
+            await startScenarioMessage(
+                api,
+                ctx,
+                `📣 <b>Написати всім</b>\n\n` +
+                    `Відповідай на <b>це</b> повідомлення (Reply) — текст, фото, голос, файл.\n` +
+                    `Після відправки воно піде <b>усім</b> користувачам з доступом (access ≠ none).\n\n` +
+                    `ID: <code>BROADCAST_ALL</code>`
             );
             return true;
         }
@@ -1717,102 +2256,67 @@ async function handleAdminCallback(ctx) {
         }
     } catch (e) {
         console.error('[admin] callback error:', e);
-        try {
-            await sendInAdminThread(
-                api,
-                chatId,
-                `❌ Помилка: ${escapeHtml(e.message)}`,
-                { parse_mode: 'HTML' },
-                ctx?.callbackQuery?.message?.message_thread_id
-            );
-        } catch (_) { /* ignore */ }
+        await api.sendMessage(chatId, `❌ Помилка: ${escapeHtml(e.message)}`, { parse_mode: 'HTML' }).catch(() => {});
     }
     return true;
 }
 
+/**
+ * Send media (or text) from admin reply to a user.
+ * Supports: photo, document, video, animation, voice, audio, sticker + caption.
+ */
+async function sendAdminReplyToUser(api, targetId, msg) {
+    const caption = (msg.caption || msg.text || '').trim();
+    const header = '💬 Відповідь від підтримки Parasol:';
+    const fullCaption = caption ? `${header}\n\n${caption}` : header;
 
-
-
-// ===== HISTORY SUPPORT (auto) =====
-
-async function sendInAdminThread(api, chatId, text, extra = {}, preferredThreadId = null) {
-    const attempts = [];
-    const seen = new Set();
-    const push = (thr) => {
-        const key = thr.message_thread_id != null ? String(thr.message_thread_id) : '__none__';
-        if (seen.has(key)) return;
-        seen.add(key);
-        attempts.push(thr);
-    };
-    if (preferredThreadId != null && preferredThreadId !== undefined && preferredThreadId !== '') {
-        const n = Number(preferredThreadId);
-        if (Number.isFinite(n)) push({ message_thread_id: n });
+    if (msg.photo && msg.photo.length) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        await api.sendPhoto(targetId, fileId, {
+            caption: fullCaption,
+            parse_mode: caption ? undefined : undefined
+        });
+        return 'photo';
     }
-    const gen = topicId('GENERAL');
-    if (gen != null) push({ message_thread_id: gen });
-    push({}); // root / non-forum / default General
-
-    let lastErr = null;
-    for (const thr of attempts) {
-        try {
-            return await api.sendMessage(chatId, text, { ...extra, ...thr });
-        } catch (e) {
-            lastErr = e;
-            const msg = e?.message || String(e);
-            // Only retry on thread-related errors; rethrow others
-            if (!/thread not found|MESSAGE_THREAD|message thread/i.test(msg)) {
-                throw e;
-            }
-            console.warn('[admin] sendInAdminThread retry:', msg, thr);
+    if (msg.document) {
+        await api.sendDocument(targetId, msg.document.file_id, { caption: fullCaption });
+        return 'document';
+    }
+    if (msg.video) {
+        await api.sendVideo(targetId, msg.video.file_id, { caption: fullCaption });
+        return 'video';
+    }
+    if (msg.animation) {
+        await api.sendAnimation(targetId, msg.animation.file_id, { caption: fullCaption });
+        return 'animation';
+    }
+    if (msg.voice) {
+        await api.sendVoice(targetId, msg.voice.file_id, { caption: fullCaption });
+        return 'voice';
+    }
+    if (msg.audio) {
+        await api.sendAudio(targetId, msg.audio.file_id, { caption: fullCaption });
+        return 'audio';
+    }
+    if (msg.sticker) {
+        await api.sendSticker(targetId, msg.sticker.file_id);
+        if (caption) {
+            await api.sendMessage(targetId, fullCaption);
         }
+        return 'sticker';
     }
-    throw lastErr || new Error('sendInAdminThread failed');
+    if (caption) {
+        await api.sendMessage(targetId, `💬 <b>Відповідь від підтримки Parasol:</b>\n\n${escapeHtml(caption)}`, {
+            parse_mode: 'HTML'
+        });
+        return 'text';
+    }
+    return null;
 }
 
-function isBroadcastAllTarget(raw) {
-    if (raw == null) return false;
-    let s;
-    if (typeof raw === 'object') {
-        s = [raw.text, raw.caption].filter(Boolean).join('\n');
-    } else {
-        s = String(raw);
-    }
-    return /ID:\s*BROADCAST_ALL\b/i.test(s) || /#broadcast_all\b/i.test(s);
-}
-
-async function broadcastToAllUsers(api, msg) {
-    const users = await User.find({ accessLevel: { $ne: 'none' } })
-        .select('telegramId')
-        .lean();
-    let ok = 0;
-    let fail = 0;
-    for (const u of users) {
-        if (!u?.telegramId) continue;
-        try {
-            const kind = await sendAdminReplyToUser(api, u.telegramId, msg);
-            if (kind) ok += 1;
-            else fail += 1;
-        } catch (e) {
-            fail += 1;
-            console.warn('[admin] broadcast fail', u.telegramId, e.message);
-        }
-    }
-    return { ok, fail, total: users.length };
-}
-
-async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg) {
-    const ids = [];
-    if (adminMsg?.message_id != null) ids.push(adminMsg.message_id);
-    if (instructionMsg?.message_id != null) ids.push(instructionMsg.message_id);
-    for (const id of ids) {
-        try {
-            await api.deleteMessage(chatId, id);
-        } catch (e) {
-            console.warn('[admin] cleanupScenarioMessages failed', id, e.message);
-        }
-    }
-}
-
+/**
+ * Describe media on an admin/user message for logs.
+ */
 function describeMsgContent(msg) {
     if (!msg) return { media: null, text: '', kind: null, fileId: null };
     const text = (msg.caption || msg.text || '').trim();
@@ -1872,6 +2376,9 @@ function formatSupportLine(who, media, text, assetId, ts = new Date()) {
     return parts.join(' ');
 }
 
+/**
+ * Send media asset into HISTORY topic with label + #assetId for later search.
+ */
 async function sendAssetToHistory(api, msg, assetId, mediaLabel) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !msg) return;
@@ -1912,6 +2419,9 @@ async function sendAssetToHistory(api, msg, assetId, mediaLabel) {
     if (lastErr) console.warn('[admin] sendAssetToHistory failed:', lastErr.message);
 }
 
+/**
+ * Log outbound broadcast summary into HISTORY (personal replies use conversation card only).
+ */
 async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, failCount, total }) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId) return;
@@ -1939,16 +2449,11 @@ async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, fail
 
 /**
  * Append a line to per-user support transcript and upsert one message in HISTORY topic.
- * - Full transcript always stored in DB (never truncated).
- * - Telegram card shows only the recent tail if too long.
- * - When over limit: attach/update a .txt file with the FULL conversation.
  * Media → line has type + #assetId; asset itself is sent as a separate HISTORY message.
  */
 async function appendSupportConversation(api, telegramId, who, msgOrText) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !telegramId) return;
-
-    const CARD_LIMIT = 3200; // tail visible in message (under TG 4096 with header)
 
     let media = null;
     let text = '';
@@ -1976,44 +2481,35 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
     let assetId = null;
     if (kind && rawMsg) {
         const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
-        // Унікально між юзерами: A{telegramId}-{seq}
-        assetId = `A${telegramId}-${seq}`;
+        assetId = `A${seq}`;
         if (!user.supportHistory) user.supportHistory = {};
         user.supportHistory.assetSeq = seq;
     }
 
     const line = formatSupportLine(who, media, text, assetId);
     const prev = (user.supportHistory && user.supportHistory.transcript) || '';
-    // FULL history — never truncate in DB
-    const transcript = prev ? `${prev}\n${line}` : line;
+    let transcript = prev ? `${prev}\n${line}` : line;
+    if (transcript.length > 3500) {
+        transcript = '…\n' + transcript.slice(transcript.length - 3400);
+    }
 
+    // One ID only (in the title line)
     const namePart =
         user.username
             ? `@${user.username}`
             : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
     const header =
         `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n`;
-
-    const overflow = transcript.length > CARD_LIMIT;
-    let visible = transcript;
-    if (overflow) {
-        visible = '…\n' + transcript.slice(transcript.length - CARD_LIMIT);
-    }
-    let body =
-        header +
-        escapeHtml(visible) +
-        (overflow
-            ? `\n\n<i>📎 Повна розмова у файлі <code>chat_${telegramId}.txt</code> (усі рядки збережено)</i>`
-            : '');
+    const full = header + escapeHtml(transcript);
 
     const thrId = topicId('HISTORY');
     const histMsgId = user.supportHistory && user.supportHistory.messageId;
-    let newMsgId = histMsgId;
 
+    let newMsgId = histMsgId;
     try {
         if (histMsgId) {
             try {
-                await api.editMessageText(chatId, histMsgId, body, {
+                await api.editMessageText(chatId, histMsgId, full, {
                     parse_mode: 'HTML',
                     disable_web_page_preview: true
                 });
@@ -2022,7 +2518,7 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
                 const sent = await sendInAdminThread(
                     api,
                     chatId,
-                    body,
+                    full,
                     { parse_mode: 'HTML', disable_web_page_preview: true },
                     thrId
                 );
@@ -2032,7 +2528,7 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
             const sent = await sendInAdminThread(
                 api,
                 chatId,
-                body,
+                full,
                 { parse_mode: 'HTML', disable_web_page_preview: true },
                 thrId
             );
@@ -2040,40 +2536,6 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         }
     } catch (e) {
         console.warn('[admin] appendSupportConversation send failed:', e.message);
-    }
-
-    // Over limit → .txt with FULL transcript (replace previous file msg if any)
-    let fileMessageId = (user.supportHistory && user.supportHistory.fileMessageId) || null;
-    if (overflow) {
-        try {
-            if (fileMessageId) {
-                try {
-                    await api.deleteMessage(chatId, fileMessageId);
-                } catch (_) {
-                    /* ignore — already gone */
-                }
-            }
-            const { InputFile } = require('grammy');
-            const fileName = `chat_${telegramId}.txt`;
-            const fileBody =
-                `Parasol support chat · user ${telegramId} · ${namePart}\n` +
-                `Updated: ${new Date().toISOString()}\n` +
-                `${'='.repeat(40)}\n\n` +
-                transcript;
-            const thr = thrId != null ? { message_thread_id: thrId } : {};
-            const doc = await api.sendDocument(
-                chatId,
-                new InputFile(Buffer.from(fileBody, 'utf8'), fileName),
-                {
-                    caption: `📎 Повна розмова з <code>${telegramId}</code> (${transcript.split('\n').length} рядків)`,
-                    parse_mode: 'HTML',
-                    ...thr
-                }
-            );
-            fileMessageId = doc?.message_id || null;
-        } catch (e) {
-            console.warn('[admin] support full-file failed:', e.message);
-        }
     }
 
     // Mirror media asset next to the conversation card
@@ -2085,69 +2547,14 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         }
     }
 
-    const prevNotifyIds =
-        (user.supportHistory && user.supportHistory.notifyMessageIds) || [];
     user.supportHistory = {
         messageId: newMsgId || histMsgId || null,
-        fileMessageId: fileMessageId,
-        notifyMessageIds: prevNotifyIds,
-        transcript, // full, never truncated
+        transcript,
         assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
         updatedAt: new Date()
     };
     user.markModified('supportHistory');
     await user.save().catch((e) => console.warn('[admin] supportHistory save:', e.message));
-}
-
-// ===== END HISTORY SUPPORT =====
-
-async function sendAdminReplyToUser(api, targetId, msg) {
-    const caption = (msg.caption || msg.text || '').trim();
-    const header = '💬 Відповідь від підтримки Parasol:';
-    const fullCaption = caption ? `${header}\n\n${caption}` : header;
-
-    if (msg.photo && msg.photo.length) {
-        const fileId = msg.photo[msg.photo.length - 1].file_id;
-        await api.sendPhoto(targetId, fileId, {
-            caption: fullCaption,
-            parse_mode: caption ? undefined : undefined
-        });
-        return 'photo';
-    }
-    if (msg.document) {
-        await api.sendDocument(targetId, msg.document.file_id, { caption: fullCaption });
-        return 'document';
-    }
-    if (msg.video) {
-        await api.sendVideo(targetId, msg.video.file_id, { caption: fullCaption });
-        return 'video';
-    }
-    if (msg.animation) {
-        await api.sendAnimation(targetId, msg.animation.file_id, { caption: fullCaption });
-        return 'animation';
-    }
-    if (msg.voice) {
-        await api.sendVoice(targetId, msg.voice.file_id, { caption: fullCaption });
-        return 'voice';
-    }
-    if (msg.audio) {
-        await api.sendAudio(targetId, msg.audio.file_id, { caption: fullCaption });
-        return 'audio';
-    }
-    if (msg.sticker) {
-        await api.sendSticker(targetId, msg.sticker.file_id);
-        if (caption) {
-            await api.sendMessage(targetId, fullCaption);
-        }
-        return 'sticker';
-    }
-    if (caption) {
-        await api.sendMessage(targetId, `💬 <b>Відповідь від підтримки Parasol:</b>\n\n${escapeHtml(caption)}`, {
-            parse_mode: 'HTML'
-        });
-        return 'text';
-    }
-    return null;
 }
 
 /**
@@ -2185,7 +2592,6 @@ async function handleAdminChannelText(ctx) {
                 const { ok, fail, total } = await broadcastToAllUsers(api, msg);
                 await logDeliveryToHistory(api, {
                     kind: 'all',
-                    targetLabel: 'усім',
                     msg,
                     okCount: ok,
                     failCount: fail,
@@ -2195,14 +2601,13 @@ async function handleAdminChannelText(ctx) {
             } catch (e) {
                 await api.sendMessage(
                     chatId,
-                    `❌ Broadcast failed: ${escapeHtml(e.message)}`,
+                    `❌ Помилка розсилки всім: ${escapeHtml(e.message)}`,
                     { parse_mode: 'HTML', ...sameThread }
                 );
             }
             return true;
         }
-
-        const targetId = await resolveTargetUserId(replyTo);
+        const targetId = extractUserIdFromNotifyText(replyTo);
         if (targetId) {
             try {
                 const kind = await sendAdminReplyToUser(api, targetId, msg);
@@ -2210,39 +2615,25 @@ async function handleAdminChannelText(ctx) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
-                // Картка розмови в HISTORY + asset #A1…; прибрати reply з USERS/ACTIONS
                 await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
                 await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
-                const hint = /can't send messages to the bot/i.test(e.message || '')
-                    ? 'Схоже, ID вказано бота (не користувача). Відповідь роби на нове сповіщення з маркером #u…'
-                    : 'Користувач міг не стартувати бота або заблокував його.';
                 await api.sendMessage(
                     chatId,
-                    `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}
-` +
-                        `(${hint})`,
+                    `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}\n` +
+                        `(Користувач міг не стартувати бота або заблокував його.)`,
                     { parse_mode: 'HTML', ...sameThread }
                 );
             }
             return true;
         }
-        {
-            const mid = replyTo?.message_id;
-            const preview = [replyTo?.text, replyTo?.caption].filter(Boolean).join(' ').slice(0, 120);
-            await api.sendMessage(
-                chatId,
-                'ℹ️ Не вдалося визначити користувача з цієї відповіді.\n' +
-                    (mid != null ? `message_id сповіщення: <code>${mid}</code>\n` : '') +
-                    (preview
-                        ? `текст: <code>${escapeHtml(preview)}</code>\n`
-                        : 'текст reply_to порожній (типово для Rich Message)\n') +
-                    'Відповідь спрацює на <b>нових</b> сповіщеннях після деплою.\n' +
-                    'Або: <code>/msg USER_ID текст</code>',
-                { parse_mode: 'HTML', ...sameThread }
-            );
-            return true;
-        }
+        await api.sendMessage(
+            chatId,
+            'ℹ️ Відповідь не привʼязана до користувача.\n' +
+                'Відповідай на інструкцію з <code>ID: …</code> або оберіть «Написати користувачу» в меню.',
+            { parse_mode: 'HTML', ...sameThread }
+        );
+        return true;
     }
 
     // Media without reply in admin channel — ignore (don't open menu)
@@ -2275,15 +2666,12 @@ async function handleAdminChannelText(ctx) {
         try {
             await api.sendMessage(targetId, body);
             await appendSupportConversation(api, targetId, '🛡 Адмін', body);
-            try {
-                if (msg.message_id != null) await api.deleteMessage(chatId, msg.message_id);
-            } catch (_) { /* ignore */ }
         } catch (e) {
             await api.sendMessage(
                 chatId,
                 `❌ Не вдалося надіслати: ${escapeHtml(e.message)}\n` +
                     `(Користувач міг не стартувати бота або заблокував його.)`,
-                { parse_mode: 'HTML', ...sameThread }
+                { parse_mode: 'HTML' }
             );
         }
         return true;
@@ -2355,19 +2743,22 @@ async function incrementUsage(telegramId, type) {
     }
 }
 
-
 /**
  * Ping ERROR topic when a user hits a handler error (button / text / etc.).
  * Also persists a short row in ErrorLog (source: user).
+ * Never sends to ACTIONS/USERS — only ERRORS.
+ * Debounced 8s so the same error is not duplicated.
  */
-const _recentUserErrors = new Map(); // key -> ts, debounce 8s
+const _recentUserErrors = new Map(); // key -> ts
 
 async function notifyUserError(from, err, extra = {}) {
     const _msgKey = [
         from && from.id,
         extra && extra.where,
         (err && err.message) || String(err || '')
-    ].join('|').slice(0, 240);
+    ]
+        .join('|')
+        .slice(0, 240);
     const _now = Date.now();
     const _prev = _recentUserErrors.get(_msgKey);
     if (_prev && _now - _prev < 8000) return;
@@ -2380,7 +2771,6 @@ async function notifyUserError(from, err, extra = {}) {
 
     const chatId = ADMIN_CHAT_ID();
     let msg = (err && err.message) || String(err || 'unknown error');
-    // strip duplicated "Error: " prefix from Error objects built from user text
     msg = String(msg).replace(/^Error:\s*/i, '').trim();
     const stack = err && err.stack ? String(err.stack).slice(0, 900) : '';
     const name = from ? displayName(from) : 'невідомий';
@@ -2389,14 +2779,12 @@ async function notifyUserError(from, err, extra = {}) {
     const cb = extra.callbackData ? String(extra.callbackData) : '';
     const where = extra.where ? String(extra.where) : '';
 
-    // Soft UX warning (⚠️ / short missing-data) — no stack trace
     const isSoft =
         /^⚠️/.test(msg) ||
         /недоступн|не готов|немає даних|not (yet )?available|not ready|try again later|спробуйте пізніше/i.test(
             msg
         );
 
-    // Human action description (same as ACTIONS)
     let actionHuman = '';
     try {
         actionHuman = describeUserAction(cb ? 'callback' : where || 'error', extra, null);
@@ -2433,9 +2821,11 @@ async function notifyUserError(from, err, extra = {}) {
 
     lines.push(`📝 ${escapeHtml(msg.slice(0, 500))}`);
 
-    // Stack only for real exceptions, not soft "data not ready" messages
     if (!isSoft && stack) {
-        const frames = stack.split('\n').filter((l) => /^\s*at /.test(l)).slice(0, 4);
+        const frames = stack
+            .split('\n')
+            .filter((l) => /^\s*at /.test(l))
+            .slice(0, 4);
         if (frames.length) {
             lines.push(`<pre>${escapeHtml(frames.join('\n'))}</pre>`);
         }
