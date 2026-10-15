@@ -564,7 +564,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
-        `ID: <code>${from.id}</code>\n` +
+        `ID: <code>${from.id}</code> · #u${from.id}\n` +
         `⚡ Дія: ${escapeHtml(humanAction)}`;
 
     if (extra.messageText) {
@@ -585,7 +585,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
     // --- Rich Message (details collapsible) ---
     let richHtml =
         `<p>👤 <b>${escapeHtml(name)}</b><br/>` +
-        `${escapeHtml(uname)} · ID: <code>${from.id}</code></p>` +
+        `${escapeHtml(uname)} · ID: <code>${from.id}</code> · #u${from.id}</p>` +
         `<p>⚡ <b>Дія:</b> ${escapeHtml(humanAction)}</p>`;
     if (extra.messageText) {
         richHtml += `<p>💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}</p>`;
@@ -640,7 +640,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
             try {
                 await bot.api.sendMessage(
                     chatId,
-                    `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
+                    `👤 ${name}\nID: ${from.id} · #u${from.id}\nДія: ${humanAction}` +
                         (extra.messageText
                             ? `\n\n${String(extra.messageText).slice(0, 500)}`
                             : ''),
@@ -691,41 +691,71 @@ async function notifyAdmin(from, actionText, extra = {}) {
 }
 
 /** Extract user telegram id from an admin notification / reply_to message */
+/** Own bot id from TG_TOKEN (bots cannot message bots). */
+function ownBotId() {
+    const tok = process.env.TG_TOKEN || '';
+    const m = String(tok).match(/^(\d+):/);
+    return m ? Number(m[1]) : null;
+}
+
+/**
+ * Extract user telegram id from an admin notification / reply_to message.
+ * Prefer explicit markers (#u123, ID: 123). Never use reply.from (that is the bot).
+ */
 function extractUserIdFromNotifyText(raw) {
     if (raw == null) return null;
-    // Accept full reply_to_message object or plain string
-    let s;
+
+    // Only human-readable fields — avoid JSON.stringify(from.id of the bot)
+    let s = '';
     if (typeof raw === 'object') {
-        const parts = [
-            raw.text,
-            raw.caption,
-            raw.quote?.text,
-            // last resort: stringify (rich / partial payloads)
-            JSON.stringify(raw)
-        ].filter(Boolean);
-        s = parts.join('\n');
+        s = [raw.text, raw.caption, raw.quote?.text, raw.quote?.html]
+            .filter(Boolean)
+            .join('\n');
     } else {
         s = String(raw);
     }
-    const patterns = [
-        /ID:\s*(\d{5,15})/i,
-        /\bID[:\s]+(\d{5,15})\b/i,
-        /#u(\d{5,15})\b/,
-        /користувачу\s+(\d{5,15})/i,
-        /user[_\s-]?id[:\s]+(\d{5,15})/i,
-        // bare telegram id in code/tags
-        /(?:^|[^\d])(\d{8,15})(?:[^\d]|$)/
-    ];
-    for (const re of patterns) {
-        const m = s.match(re);
-        if (m) {
-            const id = parseInt(m[1], 10);
-            // skip obvious non-user ids (too short already filtered)
-            if (id > 99999) return id;
-        }
+
+    const plain = String(s)
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!plain) return null;
+
+    const botId = ownBotId();
+    const isValidUserId = (id) => {
+        if (!Number.isFinite(id) || id < 100000 || id > 999999999999) return false;
+        if (botId && id === botId) return false;
+        return true;
+    };
+
+    // 1) Hard marker embedded in every notify: #u123456789
+    let m = plain.match(/#u(\d{5,15})\b/i);
+    if (m) {
+        const id = parseInt(m[1], 10);
+        if (isValidUserId(id)) return id;
     }
+
+    // 2) "ID: 123" after HTML strip
+    m = plain.match(/\bID\s*[:：]\s*(\d{5,15})\b/i);
+    if (m) {
+        const id = parseInt(m[1], 10);
+        if (isValidUserId(id)) return id;
+    }
+
+    m = plain.match(/користувачу\s+(\d{5,15})/i);
+    if (m) {
+        const id = parseInt(m[1], 10);
+        if (isValidUserId(id)) return id;
+    }
+
     return null;
 }
+
 
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
@@ -1973,10 +2003,14 @@ async function handleAdminChannelText(ctx) {
                 await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
                 await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
+                const hint = /can't send messages to the bot/i.test(e.message || '')
+                    ? 'Схоже, ID вказано бота (не користувача). Відповідь роби на нове сповіщення з маркером #u…'
+                    : 'Користувач міг не стартувати бота або заблокував його.';
                 await api.sendMessage(
                     chatId,
-                    `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}\n` +
-                        `(Користувач міг не стартувати бота або заблокував його.)`,
+                    `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}
+` +
+                        `(${hint})`,
                     { parse_mode: 'HTML', ...sameThread }
                 );
             }
