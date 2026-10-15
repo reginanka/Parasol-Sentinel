@@ -59,6 +59,24 @@ function threadOpts(topicName) {
     return id != null ? { message_thread_id: id } : {};
 }
 
+/**
+ * Thread for admin UI replies: stay in the topic where the button was pressed.
+ * General often omits message_thread_id — fall back to TOPIC_GENERAL, never USERS.
+ */
+function adminThreadFromCtx(ctx) {
+    const mid =
+        ctx?.callbackQuery?.message?.message_thread_id ??
+        ctx?.message?.message_thread_id ??
+        null;
+    if (mid != null && mid !== undefined) {
+        return { message_thread_id: Number(mid) };
+    }
+    const gen = topicId('GENERAL');
+    if (gen != null) return { message_thread_id: gen };
+    return {};
+}
+
+
 function displayName(from) {
     if (!from) return 'unknown';
     const parts = [from.first_name, from.last_name].filter(Boolean).join(' ');
@@ -1030,7 +1048,12 @@ async function handleAdminCallback(ctx) {
 
     try {
         if (sub === 'menu') {
-            await sendAdminMenu(api, chatId, ctx.callbackQuery.message.message_id);
+            await sendAdminMenu(
+                api,
+                chatId,
+                ctx.callbackQuery.message.message_id,
+                ctx.callbackQuery.message.message_thread_id
+            );
             return true;
         }
 
@@ -1638,31 +1661,58 @@ async function handleAdminCallback(ctx) {
         if (sub === 'userinfo') {
             const tgId = data[2] ? Number(data[2]) : null;
             if (!tgId || Number.isNaN(tgId)) {
-                await api.sendMessage(chatId, '❌ Невірний ID користувача.');
+                await api.sendMessage(chatId, '❌ Невірний ID користувача.', adminThreadFromCtx(ctx));
                 return true;
             }
             const u = await User.findOne({ telegramId: tgId }).lean();
             if (!u) {
-                await api.sendMessage(chatId, `❌ Користувача <code>${tgId}</code> немає в БД.`, {
-                    parse_mode: 'HTML'
-                });
+                await api.sendMessage(
+                    chatId,
+                    `❌ Користувача <code>${tgId}</code> немає в БД.`,
+                    { parse_mode: 'HTML', ...adminThreadFromCtx(ctx) }
+                );
                 return true;
             }
             const html = buildUserInfoHtml(u);
-            const thr =
-                ctx.callbackQuery?.message?.message_thread_id != null
-                    ? { message_thread_id: ctx.callbackQuery.message.message_thread_id }
-                    : threadOpts('USERS');
-            try {
-                await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
-            } catch (richErr) {
-                console.warn('[admin] userinfo rich failed:', richErr.message);
-                await api.sendMessage(chatId, html, {
-                    parse_mode: 'HTML',
-                    disable_web_page_preview: true,
-                    ...thr
-                });
+            const thr = adminThreadFromCtx(ctx);
+            const originMsg = ctx.callbackQuery?.message;
+            const originId = originMsg?.message_id;
+            // Try in-place update first (same topic / same message)
+            let updated = false;
+            if (originId != null) {
+                try {
+                    await api.editMessageText(chatId, originId, html, {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true
+                    });
+                    updated = true;
+                } catch (editErr) {
+                    // Rich / different content type — delete old card if it was already userinfo
+                    console.warn('[admin] userinfo edit failed, resend in-thread:', editErr.message);
+                    try {
+                        await api.deleteMessage(chatId, originId);
+                    } catch (_) { /* ignore */ }
+                }
             }
+            if (!updated) {
+                try {
+                    await api.sendRichMessage(
+                        chatId,
+                        { html, skip_entity_detection: true },
+                        thr
+                    );
+                } catch (richErr) {
+                    console.warn('[admin] userinfo rich failed:', richErr.message);
+                    await api.sendMessage(chatId, html, {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true,
+                        ...thr
+                    });
+                }
+            }
+            try {
+                await ctx.answerCallbackQuery({ text: '🔄 Оновлено' });
+            } catch (_) { /* ignore */ }
             return true;
         }
 
@@ -2337,27 +2387,68 @@ async function notifyUserError(from, err, extra = {}) {
     }
 
     const chatId = ADMIN_CHAT_ID();
-    const msg = (err && err.message) || String(err || 'unknown error');
+    let msg = (err && err.message) || String(err || 'unknown error');
+    // strip duplicated "Error: " prefix from Error objects built from user text
+    msg = String(msg).replace(/^Error:\s*/i, '').trim();
     const stack = err && err.stack ? String(err.stack).slice(0, 900) : '';
-    const name = from ? displayName(from) : 'unknown';
+    const name = from ? displayName(from) : 'невідомий';
+    const uname = from && from.username ? `@${from.username}` : '';
     const uid = from && from.id != null ? from.id : null;
     const cb = extra.callbackData ? String(extra.callbackData) : '';
     const where = extra.where ? String(extra.where) : '';
 
-    const lines = [
-        `🚨 <b>User error</b>` + (where ? ` · <code>${escapeHtml(where)}</code>` : ''),
-        uid != null
-            ? `👤 ${escapeHtml(name)} · <code>${uid}</code> · #u${uid}`
-            : `👤 ${escapeHtml(name)}`,
-    ];
-    if (cb) lines.push(`🔘 <code>${escapeHtml(cb.slice(0, 200))}</code>`);
+    // Soft UX warning (⚠️ / short missing-data) — no stack trace
+    const isSoft =
+        /^⚠️/.test(msg) ||
+        /недоступн|не готов|немає даних|not (yet )?available|not ready|try again later|спробуйте пізніше/i.test(
+            msg
+        );
+
+    // Human action description (same as ACTIONS)
+    let actionHuman = '';
+    try {
+        actionHuman = describeUserAction(cb ? 'callback' : where || 'error', extra, null);
+    } catch (_) {
+        actionHuman = cb || where || '';
+    }
+
+    const lines = [];
+    if (isSoft) {
+        lines.push(`⚠️ <b>Попередження</b>`);
+    } else {
+        lines.push(`🚨 <b>Помилка в боті</b>`);
+    }
+
+    if (uid != null) {
+        lines.push(
+            `👤 <b>${escapeHtml(name)}</b>` +
+                (uname ? ` · ${escapeHtml(uname)}` : '') +
+                ` · <code>${uid}</code> · #u${uid}`
+        );
+    } else {
+        lines.push(`👤 ${escapeHtml(name)}`);
+    }
+
+    if (actionHuman && actionHuman !== 'натиснув кнопку') {
+        lines.push(`⚡ Дія: ${escapeHtml(actionHuman)}`);
+    } else if (cb) {
+        lines.push(`⚡ Дія: натиснув <code>${escapeHtml(cb.slice(0, 120))}</code>`);
+    }
+
     if (extra.messageText) {
         lines.push(`💬 ${escapeHtml(String(extra.messageText).slice(0, 300))}`);
     }
-    lines.push(`❌ ${escapeHtml(msg.slice(0, 500))}`);
-    if (stack) {
-        lines.push(`<pre>${escapeHtml(stack)}</pre>`);
+
+    lines.push(`📝 ${escapeHtml(msg.slice(0, 500))}`);
+
+    // Stack only for real exceptions, not soft "data not ready" messages
+    if (!isSoft && stack) {
+        const frames = stack.split('\n').filter((l) => /^\s*at /.test(l)).slice(0, 4);
+        if (frames.length) {
+            lines.push(`<pre>${escapeHtml(frames.join('\n'))}</pre>`);
+        }
     }
+
     const text = lines.join('\n');
 
     if (chatId) {
