@@ -71,6 +71,17 @@ const UserSchema = new mongoose.Schema({
         alertsTotal: { type: Number, default: 0 }
     },
 
+
+    /**
+     * Support chat mirror in TOPIC_HISTORY / HISTORY_MSG_ID:
+     * one editable Telegram message per user with running transcript.
+     */
+    supportHistory: {
+        messageId: { type: Number, default: null },
+        transcript: { type: String, default: '' },
+        updatedAt: { type: Date, default: null }
+    },
+
     lastActivityAt: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }
 });
