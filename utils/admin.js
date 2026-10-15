@@ -279,9 +279,40 @@ function buildUserInfoHtml(u, from = null) {
     const alertsT = usage.alertsTotal || 0;
     const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
     const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
-    const geomag = u?.geomagMode || 'quiet';
-    const cropsN = Array.isArray(u?.crops) ? u.crops.length : 0;
+    const geomagModes = {
+        active: 'активний (усі зміни)',
+        quiet: 'тихий',
+        off: 'вимкнено'
+    };
+    const geomag = geomagModes[u?.geomagMode] || u?.geomagMode || 'тихий';
+    const cropsList = Array.isArray(u?.crops) ? u.crops : [];
+    const cropsN = cropsList.length;
+    const cropsStr = cropsN ? cropsList.join(', ') : '—';
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
+
+    const units = u?.units || {};
+    const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
+    const pressU = units.pressure === 'hpa' ? 'гПа' : 'мм рт. ст.';
+    const tempU = units.temp === 'f' ? '°F' : '°C';
+
+    const daysCount = u?.forecastSettings?.daysCount ?? 3;
+    let metrics = u?.forecastSettings?.enabledMetrics || [];
+    if (metrics.includes('aqi')) {
+        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
+    }
+    const metricsStr = metrics.length
+        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
+        : 'немає';
+
+    const triggers = u?.alertTriggers || {};
+    const alertLine = (key, label) =>
+        `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
+    const alertsStr = [
+        alertLine('temperature', 'температура'),
+        alertLine('precip', 'опади'),
+        alertLine('airQuality', 'якість повітря'),
+        alertLine('magneticStorm', 'магнітні бурі')
+    ].join(' · ');
 
     return `
 <h1>👤 ${escapeHtml(name)}</h1>
@@ -299,10 +330,24 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
     <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
     <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
-    <tr><td align="left">Geomag</td><td align="left"><code>${escapeHtml(geomag)}</code></td></tr>
-    <tr><td align="left">Культур</td><td align="left"><b>${cropsN}</b></td></tr>
+    <tr><td align="left">Магнітні бурі</td><td align="left">${escapeHtml(geomag)}</td></tr>
+    <tr><td align="left">Культури</td><td align="left"><b>${cropsN}</b> — ${escapeHtml(cropsStr)}</td></tr>
   </tbody>
 </table>
+
+<h3>⚙️ Налаштування</h3>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Параметр</th><th align="left">Значення</th></tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">Одиниці</td><td align="left">${windU} · ${pressU} · ${tempU}</td></tr>
+    <tr><td align="left">Днів у прогнозі</td><td align="left"><b>${daysCount}</b></td></tr>
+    <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsStr)}</td></tr>
+    <tr><td align="left">Алерти</td><td align="left">${escapeHtml(alertsStr)}</td></tr>
+  </tbody>
+</table>
+
 <h3>📬 Доставка</h3>
 <table bordered striped>
   <thead>
@@ -330,34 +375,35 @@ function buildUserInfoHtml(u, from = null) {
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
+const METRIC_NAMES_UA = {
+    condition: 'стан неба',
+    temp: 'температура',
+    precip: 'опади',
+    wind: 'вітер',
+    pressure: 'тиск',
+    dew: 'точка роси',
+    uv: 'УФ-індекс',
+    visibility: 'видимість',
+    soil0: 'ґрунт 0 см',
+    soil6: 'ґрунт 6 см',
+    moon: 'місяць',
+    sun: 'сонце',
+    aqi_now: 'AQI зараз',
+    aqi_main: 'AQI основний',
+    aqi_ext: 'AQI розширений',
+    aqi: 'якість повітря',
+    geomag: 'магнітні бурі'
+};
+
 /**
  * Людський опис дії користувача для адмін-нотифікацій.
- * raw actionText + optional callbackData → зрозумілий рядок українською.
+ * userSnapshot — стан ДО обробки callback (notify викликається раніше toggle).
  */
-function describeUserAction(actionText, extra = {}) {
+function describeUserAction(actionText, extra = {}, userSnapshot = null) {
     const cb = String(extra.callbackData || '').trim();
     const parts = cb ? cb.split('|') : [];
     const head = parts[0] || '';
-
-    const metricNames = {
-        condition: 'стан неба',
-        temp: 'температура',
-        precip: 'опади',
-        wind: 'вітер',
-        pressure: 'тиск',
-        dew: 'точка роси',
-        uv: 'УФ-індекс',
-        visibility: 'видимість',
-        soil0: 'ґрунт 0 см',
-        soil6: 'ґрунт 6 см',
-        moon: 'місяць',
-        sun: 'сонце',
-        aqi_now: 'AQI зараз',
-        aqi_main: 'AQI основний',
-        aqi_ext: 'AQI розширений',
-        aqi: 'якість повітря',
-        geomag: 'магнітні бурі'
-    };
+    const u = userSnapshot;
 
     const helpTopics = {
         uv: 'УФ-індекс',
@@ -374,6 +420,8 @@ function describeUserAction(actionText, extra = {}) {
         how: 'як це працює'
     };
 
+    const onOff = (willBeOn) => (willBeOn ? 'увімкнув' : 'вимкнув');
+
     // Explicit known actions without callback payload
     if (!cb) {
         if (actionText === '/start') return 'натиснув /start (старт бота)';
@@ -386,6 +434,18 @@ function describeUserAction(actionText, extra = {}) {
         return `обрав місто на карті (${parts[1]}, ${parts[2]})`;
     }
 
+    // Toggles that need user state (notify is BEFORE DB update → invert current)
+    if (cb === 'toggle_notifications') {
+        const wasOn = u ? u.notificationsEnabled !== false : null;
+        if (wasOn == null) return 'перемкнув усі сповіщення';
+        return `${onOff(!wasOn)} усі сповіщення`;
+    }
+    if (cb === 'toggle_evening_forecast') {
+        const wasOn = u ? u.eveningForecastEnabled !== false : null;
+        if (wasOn == null) return 'перемкнув вечірній прогноз';
+        return `${onOff(!wasOn)} вечірній прогноз`;
+    }
+
     const map = {
         open_settings: 'відкрив загальні налаштування',
         open_help: 'відкрив допомогу',
@@ -393,8 +453,6 @@ function describeUserAction(actionText, extra = {}) {
         alert_settings: 'відкрив налаштування сповіщень',
         change_city: 'хоче змінити місто',
         delete_city: 'видалив місто',
-        toggle_notifications: 'перемкнув усі сповіщення',
-        toggle_evening_forecast: 'перемкнув вечірній прогноз',
         crops_main: 'відкрив меню культур',
         agro_forecast_menu: 'відкрив агро-прогноз',
         agro_archive_menu: 'відкрив агро-архів',
@@ -404,18 +462,24 @@ function describeUserAction(actionText, extra = {}) {
         geomag_fc: 'відкрив прогноз магнітних бур',
         noop: 'натиснув службову кнопку (без дії)'
     };
-    if (map[cb] || map[head]) {
-        // Prefer full key match, then head-only simple keys
-        if (map[cb]) return map[cb];
-        if (parts.length === 1 && map[head]) return map[head];
-    }
+    if (map[cb]) return map[cb];
+    if (parts.length === 1 && map[head]) return map[head];
 
     if (head === 'forecast') {
         if (parts[1] === 'days' && parts[2]) {
             return `обрав ${parts[2]} дн. у вечірньому прогнозі`;
         }
         if (parts[1] === 'toggle' && parts[2]) {
-            const m = metricNames[parts[2]] || parts[2];
+            const key = parts[2];
+            const m = METRIC_NAMES_UA[key] || key;
+            let metrics = u?.forecastSettings?.enabledMetrics || [];
+            // legacy aqi
+            if (metrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(key)) {
+                const wasOn = true; // treated as on before first split
+                return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
+            }
+            const wasOn = metrics.includes(key);
+            if (u) return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
             return `перемкнув метрику «${m}» у вечірньому прогнозі`;
         }
     }
@@ -427,9 +491,16 @@ function describeUserAction(actionText, extra = {}) {
             const names = {
                 temperature: 'температура',
                 precip: 'опади',
-                airQuality: 'якість повітря'
+                airQuality: 'якість повітря',
+                magneticStorm: 'магнітні бурі'
             };
-            return `перемкнув алерт «${names[parts[2]] || parts[2]}»`;
+            const key = parts[2];
+            const label = names[key] || key;
+            if (u?.alertTriggers && Object.prototype.hasOwnProperty.call(u.alertTriggers, key)) {
+                const wasOn = u.alertTriggers[key] !== false;
+                return `${onOff(!wasOn)} алерт «${label}»`;
+            }
+            return `перемкнув алерт «${label}»`;
         }
     }
 
@@ -439,7 +510,7 @@ function describeUserAction(actionText, extra = {}) {
             quiet: 'тихий (лише сильніші за план)',
             off: 'вимкнено'
         };
-        return `режим магнітних бур: ${modes[parts[1]] || parts[1]}`;
+        return `встановив режим магнітних бур: ${modes[parts[1]] || parts[1]}`;
     }
 
     if (head === 'unit') {
@@ -461,7 +532,11 @@ function describeUserAction(actionText, extra = {}) {
 
     if (head === 'crops_cat') return `обрав категорію культур: ${parts[1] || '—'}`;
     if (head === 'crops_toggle') {
-        return `перемкнув культуру (${parts[1] || '?'}/${parts[2] || '?'})`;
+        const cropId = parts[2] || '?';
+        const crops = Array.isArray(u?.crops) ? u.crops : [];
+        const wasOn = crops.includes(cropId) || crops.includes(`${parts[1]}|${cropId}`);
+        if (u) return `${onOff(!wasOn)} культуру «${cropId}»`;
+        return `перемкнув культуру (${parts[1] || '?'}/${cropId})`;
     }
 
     if (head === 'archive') {
@@ -504,7 +579,17 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const bot = getBot();
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
-    const humanAction = describeUserAction(actionText, extra);
+
+    // Стан ДО toggle (notify викликається раніше обробки callback у bot.js)
+    let userSnapshot = null;
+    if (extra.callbackData || actionText === 'callback') {
+        try {
+            userSnapshot = await User.findOne({ telegramId: from.id }).lean();
+        } catch (_) {
+            /* ignore */
+        }
+    }
+    const humanAction = describeUserAction(actionText, extra, userSnapshot);
 
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
