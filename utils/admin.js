@@ -8,6 +8,7 @@
  *    TOPIC_GENERAL = 1     → меню / кнопки
  *    TOPIC_LOGS    = 123   → cron-логи (logger.js)
  *    TOPIC_USERS   = 456   → notify про юзерів + reply → юзеру
+ *    TOPIC_HISTORY / HISTORY_MSG_ID → журнал вихідних і розмов
  */
 
 const User = require('../models/User');
@@ -23,13 +24,22 @@ function isAdminChat(chatId) {
     return String(chatId).trim() === String(id).trim();
 }
 
-/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS */
+/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS / TOPIC_HISTORY
+ *  HISTORY also accepts HISTORY_MSG_ID (Vercel secret alias).
+ */
 function topicId(name) {
-    const key = `TOPIC_${String(name).toUpperCase()}`;
-    const raw = process.env[key];
-    if (raw == null || raw === '') return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
+    const upper = String(name).toUpperCase();
+    const keys = [`TOPIC_${upper}`];
+    if (upper === 'HISTORY') {
+        keys.push('HISTORY_MSG_ID', 'History_msg_ID', 'HISTORY_TOPIC_ID');
+    }
+    for (const key of keys) {
+        const raw = process.env[key];
+        if (raw == null || raw === '') continue;
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+    }
+    return null;
 }
 
 /** Options with message_thread_id when topic is configured */
@@ -369,6 +379,15 @@ async function notifyAdmin(from, actionText, extra = {}) {
             );
         } catch (e2) {
             console.error('[admin] notify fallback failed:', e2.message);
+        }
+    }
+
+    // Mirror only real user text into HISTORY conversation card (not every button tap)
+    if (extra.messageText) {
+        try {
+            await appendSupportConversation(bot.api, from.id, '👤 Юзер', String(extra.messageText));
+        } catch (e) {
+            console.warn('[admin] support log from notify failed:', e.message);
         }
     }
 }
@@ -1517,6 +1536,159 @@ async function sendAdminReplyToUser(api, targetId, msg) {
 }
 
 /**
+ * Describe media on an admin/user message for logs.
+ */
+function describeMsgContent(msg) {
+    if (!msg) return { media: null, text: '' };
+    const text = (msg.caption || msg.text || '').trim();
+    let media = null;
+    if (msg.photo && msg.photo.length) media = '📷 фото';
+    else if (msg.document) media = `📎 ${msg.document.file_name || 'документ'}`;
+    else if (msg.video) media = '🎬 відео';
+    else if (msg.animation) media = '🎞 gif';
+    else if (msg.voice) media = '🎤 голосове';
+    else if (msg.audio) media = '🎵 аудіо';
+    else if (msg.sticker) media = '😊 sticker';
+    return { media, text };
+}
+
+function historyThreadOpts() {
+    return threadOpts('HISTORY');
+}
+
+function formatSupportLine(who, media, text, ts = new Date()) {
+    const time = ts.toLocaleString('uk-UA', {
+        timeZone: 'Europe/Kyiv',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+    const parts = [`[${time}] ${who}:`];
+    if (media) parts.push(media);
+    if (text) parts.push(text.slice(0, 1500));
+    if (!media && !text) parts.push('(порожньо)');
+    return parts.join(' ');
+}
+
+/**
+ * Log outbound admin delivery into HISTORY topic (not USERS).
+ * kind: 'all' | 'one'
+ */
+async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, failCount, total }) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId) return;
+    const { media, text } = describeMsgContent(msg);
+    let head;
+    if (kind === 'all') {
+        head = `📣 <b>Відправлено всім</b>`;
+        if (okCount != null) {
+            head += `\n✅ ${okCount}` + (failCount != null ? ` · ❌ ${failCount}` : '') +
+                (total != null ? ` · з ${total}` : '');
+        }
+    } else {
+        head = `✉️ <b>Відправлено</b> ${targetLabel || ''}`;
+    }
+    const bodyParts = [head];
+    if (media) bodyParts.push(escapeHtml(media));
+    if (text) bodyParts.push(escapeHtml(text.slice(0, 1000)));
+    const body = bodyParts.join('\n');
+    try {
+        await sendInAdminThread(api, chatId, body, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        }, topicId('HISTORY'));
+    } catch (e) {
+        console.warn('[admin] logDeliveryToHistory failed:', e.message);
+    }
+}
+
+/**
+ * Append a line to per-user support transcript and upsert one message in HISTORY topic.
+ * Stores supportHistory.messageId on User for later edits.
+ */
+async function appendSupportConversation(api, telegramId, who, msgOrText) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId || !telegramId) return;
+
+    let media = null;
+    let text = '';
+    if (typeof msgOrText === 'string') {
+        text = msgOrText;
+    } else {
+        const d = describeMsgContent(msgOrText);
+        media = d.media;
+        text = d.text;
+    }
+
+    const line = formatSupportLine(who, media, text);
+    let user = await User.findOne({ telegramId: Number(telegramId) });
+    if (!user) {
+        user = await User.findOneAndUpdate(
+            { telegramId: Number(telegramId) },
+            { $setOnInsert: { telegramId: Number(telegramId), accessLevel: 'unlimited' } },
+            { upsert: true, new: true }
+        );
+    }
+
+    const prev = (user.supportHistory && user.supportHistory.transcript) || '';
+    let transcript = prev ? `${prev}\n${line}` : line;
+    if (transcript.length > 3500) {
+        transcript = '…\n' + transcript.slice(transcript.length - 3400);
+    }
+
+    const label =
+        (user.username ? `@${user.username}` : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user') +
+        ` · <code>${telegramId}</code>`;
+    const header = `💬 <b>Розмова з</b> ${label}\n<code>ID: ${telegramId}</code>\n\n`;
+    const full = header + escapeHtml(transcript);
+
+    const thrId = topicId('HISTORY');
+    const histMsgId = user.supportHistory && user.supportHistory.messageId;
+
+    let newMsgId = histMsgId;
+    try {
+        if (histMsgId) {
+            try {
+                await api.editMessageText(chatId, histMsgId, full, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true
+                });
+            } catch (editErr) {
+                console.warn('[admin] support edit failed, resend:', editErr.message);
+                const sent = await sendInAdminThread(
+                    api,
+                    chatId,
+                    full,
+                    { parse_mode: 'HTML', disable_web_page_preview: true },
+                    thrId
+                );
+                newMsgId = sent?.message_id;
+            }
+        } else {
+            const sent = await sendInAdminThread(
+                api,
+                chatId,
+                full,
+                { parse_mode: 'HTML', disable_web_page_preview: true },
+                thrId
+            );
+            newMsgId = sent?.message_id;
+        }
+    } catch (e) {
+        console.warn('[admin] appendSupportConversation send failed:', e.message);
+    }
+
+    user.supportHistory = {
+        messageId: newMsgId || histMsgId || null,
+        transcript,
+        updatedAt: new Date()
+    };
+    user.markModified('supportHistory');
+    await user.save().catch((e) => console.warn('[admin] supportHistory save:', e.message));
+}
+
+/**
  * Handle posts in admin channel: reply to user (text/photo/media), /msg, /setaccess, or show menu.
  * Works for both message and channel_post (text + media).
  */
@@ -1549,12 +1721,13 @@ async function handleAdminChannelText(ctx) {
         if (isBroadcastAllTarget(replyTo)) {
             try {
                 const { ok, fail, total } = await broadcastToAllUsers(api, msg);
-                await api.sendMessage(
-                    chatId,
-                    `📣 <b>Розсилка всім завершена</b>\n` +
-                        `✅ Доставлено: <b>${ok}</b> · ❌ Помилок: <b>${fail}</b> · Всього: <b>${total}</b>`,
-                    { parse_mode: 'HTML', ...sameThread }
-                );
+                await logDeliveryToHistory(api, {
+                    kind: 'all',
+                    msg,
+                    okCount: ok,
+                    failCount: fail,
+                    total
+                });
             } catch (e) {
                 await api.sendMessage(
                     chatId,
@@ -1572,11 +1745,16 @@ async function handleAdminChannelText(ctx) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
-                await api.sendMessage(
-                    chatId,
-                    `✅ Відповідь (${kind}) надіслано користувачу <code>${targetId}</code>`,
-                    { parse_mode: 'HTML', ...sameThread }
-                );
+                const uDoc = await User.findOne({ telegramId: targetId }).lean();
+                const whoLabel =
+                    (uDoc?.username ? `@${uDoc.username}` : uDoc?.firstName || '') +
+                    ` <code>${targetId}</code>`;
+                await logDeliveryToHistory(api, {
+                    kind: 'one',
+                    targetLabel: whoLabel,
+                    msg
+                });
+                await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
             } catch (e) {
                 await api.sendMessage(
                     chatId,
@@ -1625,9 +1803,13 @@ async function handleAdminChannelText(ctx) {
         const body = msgMatch[2].trim();
         try {
             await api.sendMessage(targetId, body);
-            await api.sendMessage(chatId, `✅ Надіслано користувачу <code>${targetId}</code>`, {
-                parse_mode: 'HTML'
-            });
+            const fakeMsg = { text: body };
+            const uDoc = await User.findOne({ telegramId: targetId }).lean();
+            const whoLabel =
+                (uDoc?.username ? `@${uDoc.username}` : uDoc?.firstName || '') +
+                ` <code>${targetId}</code>`;
+            await logDeliveryToHistory(api, { kind: 'one', targetLabel: whoLabel, msg: fakeMsg });
+            await appendSupportConversation(api, targetId, '🛡 Адмін', body);
         } catch (e) {
             await api.sendMessage(
                 chatId,
@@ -1716,6 +1898,8 @@ module.exports = {
     sendAdminMenu,
     handleAdminCallback,
     handleAdminChannelText,
+    appendSupportConversation,
+    logDeliveryToHistory,
     accessLabel,
     ADMIN_CHAT_ID
 };
