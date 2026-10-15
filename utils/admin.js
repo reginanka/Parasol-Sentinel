@@ -1126,8 +1126,7 @@ async function handleAdminCallback(ctx) {
                 langAgg,
                 cityAgg,
                 errorsThisMonth,
-                errorsTotal,
-                recentErrors
+                errorsTotal
             ] = await Promise.all([
                 User.countDocuments(),
                 User.countDocuments({ city: { $ne: null, $exists: true } }),
@@ -1178,8 +1177,7 @@ async function handleAdminCallback(ctx) {
                     { $limit: 8 }
                 ]),
                 ErrorLog.countDocuments({ createdAt: { $gte: monthStart } }).catch(() => 0),
-                ErrorLog.countDocuments().catch(() => 0),
-                ErrorLog.find({}).sort({ createdAt: -1 }).limit(5).lean().catch(() => [])
+                ErrorLog.countDocuments().catch(() => 0)
             ]);
 
             const u = usageAgg[0] || {};
@@ -1202,32 +1200,6 @@ async function handleAdminCallback(ctx) {
             const cityRows = (cityAgg || [])
                 .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
-
-            // Strip HTML / box-drawing junk from old ErrorLog entries so "Останні" stays clean
-            const cleanErrMsg = (raw) => {
-                let s = String(raw || '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/[┏┓┗┛┃│┌└─━═]+/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                if (s.length > 70) s = s.slice(0, 67) + '…';
-                return escapeHtml(s) || '—';
-            };
-
-            const errRows = (recentErrors || []).length
-                ? recentErrors
-                    .map((e) => {
-                        const t = new Date(e.createdAt).toLocaleString('uk-UA', {
-                            timeZone: 'Europe/Kyiv',
-                            day: '2-digit',
-                            month: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                        });
-                        return `<tr><td align="left">${t}</td><td align="left">${cleanErrMsg(e.message)}</td></tr>`;
-                    })
-                    .join('')
-                : '<tr><td colspan="2" align="center">Помилок ще не зафіксовано</td></tr>';
 
             // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
             const html = `
@@ -1305,23 +1277,29 @@ async function handleAdminCallback(ctx) {
   </tbody>
 </table>
 
-<h3>❌ Помилки</h3>
-<p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>
+<h3>❌ Помилки (кількість)</h3>
 <table bordered striped>
   <thead>
-    <tr><th align="left">Час</th><th align="left">Повідомлення</th></tr>
+    <tr><th align="left">Період</th><th align="left">К-сть</th></tr>
   </thead>
   <tbody>
-    ${errRows}
+    <tr><td align="left">Цього місяця</td><td align="left"><b>${errorsThisMonth}</b></td></tr>
+    <tr><td align="left">Всього</td><td align="left"><b>${errorsTotal}</b></td></tr>
   </tbody>
 </table>
+<p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
 `.trim();
 
+            const thr = adminThreadFromCtx(ctx);
+            const originId = ctx.callbackQuery?.message?.message_id;
+            if (originId != null) {
+                try { await api.deleteMessage(chatId, originId); } catch (_) {}
+            }
             try {
                 await api.sendRichMessage(chatId, {
                     html,
                     skip_entity_detection: true
-                });
+                }, thr);
             } catch (richErr) {
                 console.warn('[admin] stats sendRichMessage failed, fallback:', richErr.message);
                 // Plain fallback without tables
@@ -1677,38 +1655,35 @@ async function handleAdminCallback(ctx) {
             const thr = adminThreadFromCtx(ctx);
             const originMsg = ctx.callbackQuery?.message;
             const originId = originMsg?.message_id;
-            // Try in-place update first (same topic / same message)
-            let updated = false;
+            // Rich HTML (<h1>…) cannot use editMessageText / parse_mode HTML —
+            // delete old card (if any) and send Rich Message in the SAME topic.
             if (originId != null) {
                 try {
-                    await api.editMessageText(chatId, originId, html, {
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true
-                    });
-                    updated = true;
-                } catch (editErr) {
-                    // Rich / different content type — delete old card if it was already userinfo
-                    console.warn('[admin] userinfo edit failed, resend in-thread:', editErr.message);
-                    try {
-                        await api.deleteMessage(chatId, originId);
-                    } catch (_) { /* ignore */ }
-                }
+                    await api.deleteMessage(chatId, originId);
+                } catch (_) { /* ignore */ }
             }
-            if (!updated) {
-                try {
-                    await api.sendRichMessage(
-                        chatId,
-                        { html, skip_entity_detection: true },
-                        thr
-                    );
-                } catch (richErr) {
-                    console.warn('[admin] userinfo rich failed:', richErr.message);
-                    await api.sendMessage(chatId, html, {
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true,
-                        ...thr
-                    });
-                }
+            try {
+                await api.sendRichMessage(
+                    chatId,
+                    { html, skip_entity_detection: true },
+                    thr
+                );
+            } catch (richErr) {
+                console.warn('[admin] userinfo rich failed:', richErr.message);
+                const plain = String(html)
+                    .replace(/<h1[^>]*>/gi, '👤 ')
+                    .replace(/<\/h1>/gi, '\n')
+                    .replace(/<h3[^>]*>/gi, '\n')
+                    .replace(/<\/h3>/gi, '\n')
+                    .replace(/<br\s*\/?\s*>/gi, '\n')
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/[ \t]+/g, ' ')
+                    .replace(/\n{3,}/g, '\n\n')
+                    .trim();
+                await api.sendMessage(chatId, plain.slice(0, 4000), {
+                    disable_web_page_preview: true,
+                    ...thr
+                });
             }
             try {
                 await ctx.answerCallbackQuery({ text: '🔄 Оновлено' });
