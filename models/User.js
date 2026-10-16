@@ -5,30 +5,7 @@ const UserSchema = new mongoose.Schema({
     username: String,
     firstName: String,
     lastName: String,
-    languageCode: String, // raw Telegram language_code (mirror of tg.languageCode)
-
-    /**
-     * Snapshot of Telegram User fields from the last interaction (Bot API User).
-     * Updated on every touchUserProfile / registration path that receives `from`.
-     * @see https://core.telegram.org/bots/api#user
-     */
-    tg: {
-        isBot: { type: Boolean, default: null },
-        isPremium: { type: Boolean, default: null },
-        addedToAttachmentMenu: { type: Boolean, default: null },
-        languageCode: { type: String, default: null },
-        /** Bot-only flags — still stored if Telegram ever sends them */
-        canJoinGroups: { type: Boolean, default: null },
-        canReadAllGroupMessages: { type: Boolean, default: null },
-        supportsInlineQueries: { type: Boolean, default: null },
-        canConnectToBusiness: { type: Boolean, default: null },
-        hasMainWebApp: { type: Boolean, default: null },
-        supportsJoinRequestQueries: { type: Boolean, default: null },
-        supportsGuestQueries: { type: Boolean, default: null },
-        /** ISO time of last successful TG field write */
-        updatedAt: { type: Date, default: null }
-    },
-
+    languageCode: String, // raw Telegram language_code
     city: { type: String, default: null },
     lat: Number,
     lon: Number,
@@ -88,11 +65,8 @@ const UserSchema = new mongoose.Schema({
     /** Usage counters for admin analytics */
     usage: {
         monthKey: { type: String, default: null }, // 'YYYY-MM'
-        dayKey: { type: String, default: null }, // 'YYYY-MM-DD' (Europe/Kyiv)
         eveningThisMonth: { type: Number, default: 0 },
         alertsThisMonth: { type: Number, default: 0 },
-        eveningToday: { type: Number, default: 0 },
-        alertsToday: { type: Number, default: 0 },
         eveningTotal: { type: Number, default: 0 },
         alertsTotal: { type: Number, default: 0 }
     },
@@ -104,24 +78,8 @@ const UserSchema = new mongoose.Schema({
      */
     supportHistory: {
         messageId: { type: Number, default: null },
-        fileMessageId: { type: Number, default: null },
-        /** Recent admin-notify Telegram message_ids → for Reply resolution */
-        notifyMessageIds: { type: [Number], default: [] },
         transcript: { type: String, default: '' },
-        assetSeq: { type: Number, default: 0 },
         updatedAt: { type: Date, default: null }
-    },
-
-    /**
-     * Text input mode for free-form messages:
-     *  - idle          — ignore free text (admin still notified)
-     *  - awaiting_city — Nominatim city search
-     *  - support       — accept as support ticket (after Help)
-     */
-    botMode: {
-        type: String,
-        enum: ['idle', 'awaiting_city', 'support'],
-        default: 'idle'
     },
 
     lastActivityAt: { type: Date, default: Date.now },

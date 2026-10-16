@@ -7,23 +7,13 @@
  *    ADMIN_CHAT_ID = -100…
  *    TOPIC_GENERAL = 1     → меню / кнопки
  *    TOPIC_LOGS    = 123   → cron-логи (logger.js)
- *    TOPIC_USERS   = 456   → лише текст юзера (повідомлення → відповідь бота)
- *    TOPIC_ACTIONS = 789   → кліки / вибір / callback юзера (ACTIONS_USERS)
- *    ERROR_ID / TOPIC_ERRORS → лише помилки (окрема гілка)
+ *    TOPIC_USERS   = 456   → notify про юзерів + reply → юзеру
  *    TOPIC_HISTORY / HISTORY_MSG_ID → журнал вихідних і розмов
  */
 
 const User = require('../models/User');
 const ErrorLog = require('../models/ErrorLog');
 const getBot = require('./bot');
-const { CROPS_DATA } = require('./crops');
-const {
-    kyivDayKey,
-    kyivDayKeyDaysAgo,
-    incDailyStat,
-    sumDailyStatsSince,
-    getTodayStats
-} = require('./stats');
 
 const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
 
@@ -34,22 +24,14 @@ function isAdminChat(chatId) {
     return String(chatId).trim() === String(id).trim();
 }
 
-/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS / TOPIC_ACTIONS / TOPIC_HISTORY
+/** Forum topic id from env: TOPIC_GENERAL / TOPIC_LOGS / TOPIC_USERS / TOPIC_HISTORY
  *  HISTORY also accepts HISTORY_MSG_ID (Vercel secret alias).
- *  ERRORS also accepts ERROR_ID / TOPIC_ERRORS.
- *  ACTIONS also accepts TOPIC_ACTIONS_USERS / ACTIONS_USERS.
  */
 function topicId(name) {
     const upper = String(name).toUpperCase();
     const keys = [`TOPIC_${upper}`];
     if (upper === 'HISTORY') {
         keys.push('HISTORY_MSG_ID', 'History_msg_ID', 'HISTORY_TOPIC_ID');
-    }
-    if (upper === 'ERRORS' || upper === 'ERROR') {
-        keys.push('ERROR_ID', 'TOPIC_ERRORS', 'ERRORS_ID');
-    }
-    if (upper === 'ACTIONS') {
-        keys.push('TOPIC_ACTIONS_USERS', 'ACTIONS_USERS');
     }
     for (const key of keys) {
         const raw = process.env[key];
@@ -244,63 +226,10 @@ function adminKeyboard() {
                 { text: '📣 Написати всім', callback_data: 'adm|msg_all' }
             ],
             [
-                { text: '👤 Інфо про 👤', callback_data: 'adm|userinfo_pick|0' },
-                { text: '🧹 Очистити метрики', callback_data: 'adm|clean_metrics_pick|0' }
-            ],
-            [
                 { text: '🔄 Оновити меню', callback_data: 'adm|menu' }
             ]
         ]
     };
-}
-
-/** Застарілі ключі метрик (вже не в меню). Denylist — майбутні ключі не чіпаємо. */
-const DEPRECATED_METRICS = new Set(['pollen', 'solar', 'ozone']);
-
-/**
- * Прибрати deprecated + міграція legacy 'aqi' → aqi_now/main/ext.
- * @returns {{ metrics: string[], changed: boolean, removed: string[] }}
- */
-function cleanEnabledMetrics(raw) {
-    const original = Array.isArray(raw) ? [...raw] : [];
-    let metrics = original.filter((m) => !DEPRECATED_METRICS.has(m));
-    const removed = original.filter((m) => DEPRECATED_METRICS.has(m));
-    if (metrics.includes('aqi')) {
-        metrics = metrics.filter((m) => m !== 'aqi');
-        removed.push('aqi');
-        for (const k of ['aqi_now', 'aqi_main', 'aqi_ext']) {
-            if (!metrics.includes(k)) metrics.push(k);
-        }
-    }
-    const changed =
-        removed.length > 0 ||
-        metrics.length !== original.length ||
-        metrics.some((m, i) => m !== original[i]);
-    return { metrics, changed, removed: [...new Set(removed)] };
-}
-
-/** Inline «🔄 Оновити» для аналітики / інфо. */
-function refreshMarkup(callbackData) {
-    return {
-        inline_keyboard: [[{ text: '🔄 Оновити', callback_data: callbackData }]]
-    };
-}
-
-/**
- * Клік «🔄 Оновити» саме на картці аналітики / інфо.
- * НЕ спрацьовує на головному меню («🔄 Оновити меню»).
- * Ознака: одна кнопка в розмітці, текст рівно «🔄 Оновити» (без «меню»),
- * callback_data = adm|stats або adm|userinfo|…
- */
-function isRefreshClick(msg) {
-    const rows = msg?.reply_markup?.inline_keyboard || [];
-    if (rows.length !== 1 || (rows[0] || []).length !== 1) return false;
-    const b = rows[0][0] || {};
-    const t = String(b.text || '').trim();
-    const cb = String(b.callback_data || '');
-    if (t.includes('меню') || t.includes('Меню')) return false;
-    if (t !== '🔄 Оновити' && !/^🔄\s*Оновити$/.test(t)) return false;
-    return cb === 'adm|stats' || /^adm\|userinfo\|\d+$/.test(cb);
 }
 
 function fmtUaDate(d) {
@@ -317,28 +246,6 @@ function fmtUaDate(d) {
     } catch {
         return '—';
     }
-}
-
-/** Map crop keys (tomato, lawn_grass…) to Ukrainian labels from CROPS_DATA. */
-function cropLabelUk(key) {
-    for (const cat of Object.values(CROPS_DATA || {})) {
-        if (cat?.items?.[key]?.uk) return cat.items[key].uk;
-    }
-    return key;
-}
-
-function formatCropsList(crops) {
-    const list = Array.isArray(crops) ? crops : [];
-    if (!list.length) return '—';
-    return list.map(cropLabelUk).join(', ');
-}
-
-/** Resolve geomag mode with legacy fallback (same logic as bot.js). */
-function resolveGeomagModeAdmin(u) {
-    if (u?.geomagMode === 'active' || u?.geomagMode === 'quiet' || u?.geomagMode === 'off') {
-        return u.geomagMode;
-    }
-    return (u?.alertTriggers?.magneticStorm === false) ? 'off' : 'quiet';
 }
 
 /** Full user profile as Rich Message HTML (tables). */
@@ -371,49 +278,9 @@ function buildUserInfoHtml(u, from = null) {
     const alertsT = usage.alertsTotal || 0;
     const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
     const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
-    const geomagModes = {
-        active: 'активний (усі зміни)',
-        quiet: 'тихий',
-        off: 'вимкнено'
-    };
-    const geomagMode = resolveGeomagModeAdmin(u);
-    const geomag = geomagModes[geomagMode] || geomagMode || 'тихий';
-    const cropsList = Array.isArray(u?.crops) ? u.crops : [];
-    const cropsN = cropsList.length;
-    const cropsStr = formatCropsList(cropsList);
+    const geomag = u?.geomagMode || 'quiet';
+    const cropsN = Array.isArray(u?.crops) ? u.crops.length : 0;
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
-
-    const units = u?.units || {};
-    const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
-    const pressU = units.pressure === 'hpa' ? 'гПа' : 'мм рт. ст.';
-    const tempU = units.temp === 'f' ? '°F' : '°C';
-
-    const daysCount = u?.forecastSettings?.daysCount ?? 3;
-    let metrics = u?.forecastSettings?.enabledMetrics || [];
-    if (metrics.includes('aqi')) {
-        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
-    }
-    const metricsStr = metrics.length
-        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
-        : 'немає';
-
-    const triggers = u?.alertTriggers || {};
-    const alertLine = (key, label) =>
-        `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
-    // Магнітні бурі — окремі режими (active / quiet / off), назви як у налаштуваннях
-    const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
-    const alertsStr =
-        [
-            alertLine('temperature', 'температура'),
-            alertLine('precip', 'опади'),
-            alertLine('airQuality', 'якість повітря')
-        ].join('<br>') +
-        '<br>' +
-        [
-            `${geomagMark('active')} всі сповіщ. магн.бур`,
-            `${geomagMark('quiet')} тихий`,
-            `${geomagMark('off')} без сповіщ. магн.бур`
-        ].join('<br>');
 
     return `
 <h1>👤 ${escapeHtml(name)}</h1>
@@ -431,33 +298,11 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
     <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
     <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
+    <tr><td align="left">Geomag</td><td align="left"><code>${escapeHtml(geomag)}</code></td></tr>
+    <tr><td align="left">Культур</td><td align="left"><b>${cropsN}</b></td></tr>
   </tbody>
 </table>
-
-<details>
-<summary>🌱 Культури${cropsN ? ` (${cropsN})` : ''}</summary>
-${cropsN
-    ? `<p>${cropsList.map((k) => escapeHtml(cropLabelUk(k))).join('<br>')}</p>`
-    : '<p>—</p>'}
-</details>
-
-<details>
-<summary>⚙️ Налаштування</summary>
-<table bordered striped>
-  <thead>
-    <tr><th align="left">Параметр</th><th align="left">Значення</th></tr>
-  </thead>
-  <tbody>
-    <tr><td align="left">Одиниці</td><td align="left">${windU}<br>${pressU}<br>${tempU}</td></tr>
-    <tr><td align="left">Днів у прогнозі</td><td align="left"><b>${daysCount}</b></td></tr>
-    <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsStr)}</td></tr>
-    <tr><td align="left">Алерти</td><td align="left">${alertsStr}</td></tr>
-  </tbody>
-</table>
-</details>
-
-<details>
-<summary>📬 Доставка</summary>
+<h3>📬 Доставка</h3>
 <table bordered striped>
   <thead>
     <tr><th align="left">Показник</th><th align="center">Місяць</th><th align="center">Всього</th></tr>
@@ -468,10 +313,6 @@ ${cropsN
     <tr><td align="left">Разом</td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
   </tbody>
 </table>
-</details>
-
-<details>
-<summary>📅 Активність</summary>
 <table bordered striped>
   <thead>
     <tr><th align="left">Дата</th><th align="left">Значення</th></tr>
@@ -481,322 +322,28 @@ ${cropsN
     <tr><td align="left">🕐 Остання активність</td><td align="left">${escapeHtml(fmtUaDate(u?.lastActivityAt))}</td></tr>
   </tbody>
 </table>
-</details>
-
-${buildTgSystemDetailsHtml(u, from)}
 `.trim();
-}
-
-/**
- * Same profile as buildUserInfoHtml, but only Telegram-safe HTML tags
- * (b, i, code — no h1/table). For sendMessage / editMessageText fallback.
- */
-function buildUserInfoPlain(u, from = null) {
-    const tgId = u?.telegramId || from?.id || '—';
-    const name =
-        (from && displayName(from)) ||
-        (u?.username ? u.username : null) ||
-        [u?.firstName, u?.lastName].filter(Boolean).join(' ') ||
-        `user_${tgId}`;
-    const uname = u?.username
-        ? `@${u.username}`
-        : from?.username
-          ? `@${from.username}`
-          : 'без @username';
-    const tgLang = from?.language_code || u?.languageCode || '—';
-    const access = accessLabel(u?.accessLevel || 'unlimited');
-    const accessIcon = (u?.accessLevel || 'unlimited') === 'none' ? '🚫' : '✅';
-    const botLang = u?.language || tgLang || '—';
-    const city = u?.city || 'не обрано';
-    const geo =
-        u?.lat != null && u?.lon != null
-            ? `${Number(u.lat).toFixed(5)}, ${Number(u.lon).toFixed(5)}`
-            : '—';
-    const tz = u?.timezone || '—';
-    const usage = u?.usage || {};
-    const eveningM = usage.eveningThisMonth || 0;
-    const alertsM = usage.alertsThisMonth || 0;
-    const eveningT = usage.eveningTotal || 0;
-    const alertsT = usage.alertsTotal || 0;
-    const notif = u?.notificationsEnabled === false ? '🔕 вимк' : '🔔 увімк';
-    const evening = u?.eveningForecastEnabled === false ? '🌆 вимк' : '🌆 увімк';
-    const geomagModes = {
-        active: 'активний (усі зміни)',
-        quiet: 'тихий',
-        off: 'вимкнено'
-    };
-    const geomagMode = resolveGeomagModeAdmin(u);
-    const geomag = geomagModes[geomagMode] || geomagMode || 'тихий';
-    const cropsList = Array.isArray(u?.crops) ? u.crops : [];
-    const cropsN = cropsList.length;
-    const cropsStr = formatCropsList(cropsList);
-    const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
-
-    const units = u?.units || {};
-    const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
-    const pressU = units.pressure === 'hpa' ? 'гПа' : 'мм рт. ст.';
-    const tempU = units.temp === 'f' ? '°F' : '°C';
-
-    const daysCount = u?.forecastSettings?.daysCount ?? 3;
-    let metrics = u?.forecastSettings?.enabledMetrics || [];
-    if (metrics.includes('aqi')) {
-        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
-    }
-    const metricsStr = metrics.length
-        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
-        : 'немає';
-
-    const triggers = u?.alertTriggers || {};
-    const alertLine = (key, label) =>
-        `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
-    // Магнітні бурі — окремі режими (active / quiet / off), назви як у налаштуваннях
-    const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
-    const alertsStr =
-        [
-            alertLine('temperature', 'температура'),
-            alertLine('precip', 'опади'),
-            alertLine('airQuality', 'якість повітря')
-        ].join('\n') +
-        '\n' +
-        [
-            `${geomagMark('active')} всі сповіщ. магн.бур`,
-            `${geomagMark('quiet')} тихий`,
-            `${geomagMark('off')} без сповіщ. магн.бур`
-        ].join('\n');
-
-    return (
-        `👤 <b>${escapeHtml(name)}</b>\n` +
-        `${escapeHtml(uname)} · ID: <code>${tgId}</code>\n\n` +
-        `${accessIcon} Доступ: <b>${escapeHtml(access)}</b>\n` +
-        `Мова TG / бот: <code>${escapeHtml(tgLang)}</code> / <code>${escapeHtml(botLang)}</code>\n` +
-        `📍 Місто: ${escapeHtml(city)}\n` +
-        `Гео: <code>${geo}</code>\n` +
-        `TZ: <code>${escapeHtml(tz)}</code>\n` +
-        `Темп. зараз: <b>${temp}</b>\n` +
-        `Сповіщення: ${notif}\n` +
-        `Вечірній: ${evening}\n\n` +
-        `<b>🌱 Культури${cropsN ? ` (${cropsN})` : ''}</b>\n` +
-        `${cropsN ? escapeHtml(cropsStr) : '—'}\n\n` +
-        `<b>⚙️ Налаштування</b>\n` +
-        `Одиниці: ${windU}\n${pressU}\n${tempU}\n` +
-        `Днів у прогнозі: <b>${daysCount}</b>\n` +
-        `Метрики: ${escapeHtml(metricsStr)}\n` +
-        `Алерти: ${escapeHtml(alertsStr)}\n\n` +
-        `<b>📬 Доставка</b>\n` +
-        `🌆 Вечірні: <b>${eveningM}</b> / <b>${eveningT}</b> (міс/всього)\n` +
-        `🚨 Алерти: <b>${alertsM}</b> / <b>${alertsT}</b>\n` +
-        `Разом: <b>${eveningM + alertsM}</b> / <b>${eveningT + alertsT}</b>\n\n` +
-        `<b>📅 Активність</b>\n` +
-        `📅 Реєстрація: ${escapeHtml(fmtUaDate(u?.createdAt))}\n` +
-        `🕐 Остання активність: ${escapeHtml(fmtUaDate(u?.lastActivityAt))}\n\n` +
-        buildTgSystemPlain(u, from)
-    );
 }
 
 /**
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
-const METRIC_NAMES_UA = {
-    condition: 'стан неба',
-    temp: 'температура',
-    precip: 'опади',
-    wind: 'вітер',
-    pressure: 'тиск',
-    dew: 'точка роси',
-    uv: 'УФ-індекс',
-    visibility: 'видимість',
-    soil0: 'ґрунт 0 см',
-    soil6: 'ґрунт 6 см',
-    moon: 'місяць',
-    sun: 'сонце',
-    aqi_now: 'AQI зараз',
-    aqi_main: 'AQI основний',
-    aqi_ext: 'AQI розширений',
-    aqi: 'якість повітря',
-    geomag: 'магнітні бурі'
-};
-
 /**
- * Людський опис дії користувача для адмін-нотифікацій.
- * userSnapshot — стан ДО обробки callback (notify викликається раніше toggle).
+ * Last N lines from support transcript for the USERS notify card.
+ * Only used when the user actually wrote text — never on clicks / broadcasts.
  */
-function describeUserAction(actionText, extra = {}, userSnapshot = null) {
-    const cb = String(extra.callbackData || '').trim();
-    const parts = cb ? cb.split('|') : [];
-    const head = parts[0] || '';
-    const u = userSnapshot;
-
-    const helpTopics = {
-        uv: 'УФ-індекс',
-        wind: 'вітер',
-        press: 'тиск',
-        hum: 'вологість',
-        precip: 'опади',
-        dew: 'точка роси',
-        feels: 'відчувається як',
-        cloud: 'хмарність',
-        soil0: 'ґрунт 0 см',
-        soil6: 'ґрунт 6 см',
-        geomag: 'магнітні бурі',
-        how: 'як це працює'
-    };
-
-    const onOff = (willBeOn) => (willBeOn ? 'увімкнув' : 'вимкнув');
-
-    // Explicit known actions without callback payload
-    if (!cb) {
-        if (actionText === '/start') return 'натиснув /start (старт бота)';
-        if (actionText === 'текст') return 'надіслав текст (пошук міста або повідомлення)';
-        return String(actionText || 'невідома дія');
+function snippetFromTranscript(transcript, maxLines = 6, maxChars = 900) {
+    if (!transcript || typeof transcript !== 'string') return '';
+    const lines = transcript.split('\n').filter(Boolean);
+    if (!lines.length) return '';
+    let snippet = lines.slice(-maxLines).join('\n');
+    if (snippet.length > maxChars) {
+        snippet = '…\n' + snippet.slice(snippet.length - maxChars);
     }
-
-    // City pick: set|lat|lon
-    if (head === 'set' && parts.length >= 3) {
-        return `обрав місто на карті (${parts[1]}, ${parts[2]})`;
-    }
-
-    // Toggles that need user state (notify is BEFORE DB update → invert current)
-    if (cb === 'toggle_notifications') {
-        const wasOn = u ? u.notificationsEnabled !== false : null;
-        if (wasOn == null) return 'перемкнув усі сповіщення';
-        return `${onOff(!wasOn)} усі сповіщення`;
-    }
-    if (cb === 'toggle_evening_forecast') {
-        const wasOn = u ? u.eveningForecastEnabled !== false : null;
-        if (wasOn == null) return 'перемкнув вечірній прогноз';
-        return `${onOff(!wasOn)} вечірній прогноз`;
-    }
-
-    const map = {
-        open_settings: 'відкрив загальні налаштування',
-        open_help: 'відкрив допомогу',
-        forecast_menu: 'відкрив налаштування вечірнього прогнозу',
-        alert_settings: 'відкрив налаштування сповіщень',
-        change_city: 'хоче змінити місто',
-        delete_city: 'видалив місто',
-        crops_main: 'відкрив меню культур',
-        agro_forecast_menu: 'відкрив агро-прогноз',
-        agro_archive_menu: 'відкрив агро-архів',
-        agro_tomorrow: 'запросив агро-рекомендації на завтра',
-        agro_schedule_only: 'запросив графік обробок',
-        agro_5day: 'запросив 5-денний агро-прогноз',
-        geomag_fc: 'відкрив прогноз магнітних бур',
-        noop: 'натиснув службову кнопку (без дії)'
-    };
-    if (map[cb]) return map[cb];
-    if (parts.length === 1 && map[head]) return map[head];
-
-    if (head === 'forecast') {
-        if (parts[1] === 'days' && parts[2]) {
-            return `обрав ${parts[2]} дн. у вечірньому прогнозі`;
-        }
-        if (parts[1] === 'toggle' && parts[2]) {
-            const key = parts[2];
-            const m = METRIC_NAMES_UA[key] || key;
-            let metrics = u?.forecastSettings?.enabledMetrics || [];
-            // legacy aqi
-            if (metrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(key)) {
-                const wasOn = true; // treated as on before first split
-                return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
-            }
-            const wasOn = metrics.includes(key);
-            if (u) return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
-            return `перемкнув метрику «${m}» у вечірньому прогнозі`;
-        }
-    }
-
-    if (head === 'alert') {
-        if (parts[1] === 'toggle_all' && parts[2] === 'on') return 'увімкнув усі алерти';
-        if (parts[1] === 'toggle_all' && parts[2] === 'off') return 'вимкнув усі алерти';
-        if (parts[1] === 'toggle' && parts[2]) {
-            const names = {
-                temperature: 'температура',
-                precip: 'опади',
-                airQuality: 'якість повітря',
-                magneticStorm: 'магнітні бурі'
-            };
-            const key = parts[2];
-            const label = names[key] || key;
-            if (u?.alertTriggers && Object.prototype.hasOwnProperty.call(u.alertTriggers, key)) {
-                const wasOn = u.alertTriggers[key] !== false;
-                return `${onOff(!wasOn)} алерт «${label}»`;
-            }
-            return `перемкнув алерт «${label}»`;
-        }
-    }
-
-    if (head === 'geomag_mode') {
-        const modes = {
-            active: 'активний (усі зміни)',
-            quiet: 'тихий (лише сильніші за план)',
-            off: 'вимкнено'
-        };
-        return `встановив режим магнітних бур: ${modes[parts[1]] || parts[1]}`;
-    }
-
-    if (head === 'unit') {
-        if (parts[1] === 'wind') {
-            return parts[2] === 'kmh' ? 'одиниці вітру: км/год' : 'одиниці вітру: м/с';
-        }
-        if (parts[1] === 'pressure') {
-            return parts[2] === 'hpa' ? 'одиниці тиску: гПа' : 'одиниці тиску: мм рт. ст.';
-        }
-        if (parts[1] === 'temp') {
-            return parts[2] === 'f' ? 'температура: °F' : 'температура: °C';
-        }
-    }
-
-    if (head === 'help') {
-        const t = helpTopics[parts[1]] || parts[1];
-        return `читає довідку: ${t}`;
-    }
-
-    if (head === 'crops_cat') return `обрав категорію культур: ${parts[1] || '—'}`;
-    if (head === 'crops_toggle') {
-        const cropId = parts[2] || '?';
-        const crops = Array.isArray(u?.crops) ? u.crops : [];
-        const wasOn = crops.includes(cropId) || crops.includes(`${parts[1]}|${cropId}`);
-        if (u) return `${onOff(!wasOn)} культуру «${cropId}»`;
-        return `перемкнув культуру (${parts[1] || '?'}/${cropId})`;
-    }
-
-    if (head === 'archive') {
-        const periods = {
-            '7': '7 днів',
-            '30': '30 днів',
-            '180': '6 місяців',
-            '365': 'рік',
-            custom: 'своя дата',
-            last_year: 'минулий рік'
-        };
-        return `агро-архів: ${periods[parts[1]] || parts[1]}`;
-    }
-
-    if (head === 'forecast_hourly') {
-        return parts[1]
-            ? `погодинний прогноз (Open-Meteo) на ${parts[1]}`
-            : 'погодинний прогноз (Open-Meteo)';
-    }
-    if (head === 'forecast_verify') {
-        return parts[1]
-            ? `перевірка прогнозу (Tomorrow.io) на ${parts[1]}`
-            : 'перевірка прогнозу (Tomorrow.io)';
-    }
-
-    // Fallback: still human-ish
-    if (actionText === 'callback') {
-        return `натиснув кнопку «${cb}»`;
-    }
-    return `${actionText}${cb ? ` (${cb})` : ''}`;
+    return snippet;
 }
 
-/**
- * Notify admin about a user action.
- * - Текст юзера (messageText / actionText === 'текст') → TOPIC_USERS
- * - Кліки / callback / /start тощо → TOPIC_ACTIONS (ACTIONS_USERS)
- * - Якщо send впав → дубль у TOPIC_ERRORS / ERROR_ID
- */
 async function notifyAdmin(from, actionText, extra = {}) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !from) return;
@@ -808,101 +355,65 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
 
-    // Стан ДО toggle (notify викликається раніше обробки callback у bot.js)
-    let userSnapshot = null;
-    if (extra.callbackData || actionText === 'callback') {
-        try {
-            userSnapshot = await User.findOne({ telegramId: from.id }).lean();
-        } catch (_) {
-            /* ignore */
-        }
-    }
-    const humanAction = describeUserAction(actionText, extra, userSnapshot);
-
-    // Текст, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
-    const isUserText =
-        Boolean(extra.messageText) ||
-        actionText === 'текст' ||
-        actionText === 'text';
-
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
         `ID: <code>${from.id}</code>\n` +
-        `⚡ Дія: ${escapeHtml(humanAction)}`;
+        `⚡ Дія: ${escapeHtml(actionText)}`;
 
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
+
+        // Підтягнути останні повідомлення гілки (лише для реального тексту юзера)
+        try {
+            const u = await User.findOne({ telegramId: from.id })
+                .select('supportHistory.transcript')
+                .lean();
+            const histSnippet = snippetFromTranscript(u?.supportHistory?.transcript);
+            if (histSnippet) {
+                text +=
+                    `\n\n📜 <b>Останні повідомлення:</b>\n` +
+                    `<blockquote expandable>${escapeHtml(histSnippet)}</blockquote>`;
+            }
+        } catch (e) {
+            console.warn('[admin] history snippet failed:', e.message);
+        }
     }
-    // Сирий callback лишаємо дрібним сірим рядком лише якщо не впізнали
-    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
+    if (extra.callbackData) {
         text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
     }
     text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
 
-    const destThread = isUserText ? threadOpts('USERS') : threadOpts('ACTIONS');
-    // fallback: якщо ACTIONS не налаштовано — старе поводження (USERS)
-    const thread =
-        !isUserText && destThread.message_thread_id == null
-            ? threadOpts('USERS')
-            : destThread;
+    // Telegram hard limit ~4096; keep a safety margin
+    if (text.length > 4000) {
+        text = text.slice(0, 3990) + '…';
+    }
 
+    const usersThread = threadOpts('USERS');
     const markup = {
         inline_keyboard: [
             [{ text: '👤 Інфо про користувача', callback_data: `adm|userinfo|${from.id}` }]
         ]
     };
 
-    const sendOpts = {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        reply_markup: markup,
-        ...thread
-    };
-
-    let sentOk = false;
     try {
-        await bot.api.sendMessage(chatId, text, sendOpts);
-        sentOk = true;
+        await bot.api.sendMessage(chatId, text, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+            reply_markup: markup,
+            ...usersThread
+        });
     } catch (e) {
         console.error('[admin] notify sendMessage failed:', e.message);
         try {
             await bot.api.sendMessage(
                 chatId,
-                `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
+                `👤 ${name}\nID: ${from.id}\nДія: ${actionText}` +
                     (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                { reply_markup: markup, ...thread }
+                { reply_markup: markup, ...usersThread }
             );
-            sentOk = true;
         } catch (e2) {
             console.error('[admin] notify fallback failed:', e2.message);
-        }
-    }
-
-    // Успішна фіксація дії юзера → денний лічильник actions
-    if (sentOk) {
-        incDailyStat('actions').catch(() => {});
-    }
-
-    // Помилка відправки → пінг у гілку ERROR
-    if (!sentOk) {
-        const errThread = threadOpts('ERRORS');
-        const errText =
-            `🚨 <b>Notify failed</b>\n` +
-            `👤 ${escapeHtml(name)} · <code>${from.id}</code>\n` +
-            `Дія: ${escapeHtml(humanAction)}\n` +
-            (extra.messageText
-                ? `💬 ${escapeHtml(String(extra.messageText).slice(0, 300))}\n`
-                : '') +
-            `Гілка: ${isUserText ? 'USERS' : 'ACTIONS'}`;
-        try {
-            await bot.api.sendMessage(chatId, errText, {
-                parse_mode: 'HTML',
-                disable_web_page_preview: true,
-                ...errThread
-            });
-        } catch (e3) {
-            console.error('[admin] error-topic notify failed:', e3.message);
         }
     }
 
@@ -989,115 +500,6 @@ async function broadcastToAllUsers(api, msg) {
     return { ok, fail, total: users.length };
 }
 
-/**
- * Map Telegram Bot API User → flat $set fields for Mongo `tg.*` + top-level mirrors.
- * @see https://core.telegram.org/bots/api#user
- */
-function extractTgUserFields(from) {
-    if (!from || from.id == null) return {};
-    const set = {
-        'tg.updatedAt': new Date()
-    };
-
-    if (typeof from.is_bot === 'boolean') set['tg.isBot'] = from.is_bot;
-    // is_premium / added_to_attachment_menu often omitted when false — write explicit bool
-    set['tg.isPremium'] = from.is_premium === true;
-    set['tg.addedToAttachmentMenu'] = from.added_to_attachment_menu === true;
-
-    if (from.language_code) {
-        set['tg.languageCode'] = from.language_code;
-        set.languageCode = from.language_code;
-    }
-
-    if (typeof from.can_join_groups === 'boolean') set['tg.canJoinGroups'] = from.can_join_groups;
-    if (typeof from.can_read_all_group_messages === 'boolean') {
-        set['tg.canReadAllGroupMessages'] = from.can_read_all_group_messages;
-    }
-    if (typeof from.supports_inline_queries === 'boolean') {
-        set['tg.supportsInlineQueries'] = from.supports_inline_queries;
-    }
-    if (typeof from.can_connect_to_business === 'boolean') {
-        set['tg.canConnectToBusiness'] = from.can_connect_to_business;
-    }
-    if (typeof from.has_main_web_app === 'boolean') set['tg.hasMainWebApp'] = from.has_main_web_app;
-    if (typeof from.supports_join_request_queries === 'boolean') {
-        set['tg.supportsJoinRequestQueries'] = from.supports_join_request_queries;
-    }
-    if (typeof from.supports_guest_queries === 'boolean') {
-        set['tg.supportsGuestQueries'] = from.supports_guest_queries;
-    }
-
-    return set;
-}
-
-/** Human-readable rows for admin «Системні» (live `from` overrides stored `u.tg`). */
-function resolveTgSystemRows(u, from = null) {
-    const tg = u?.tg || {};
-    const boolLabel = (v) => {
-        if (v === true) return '✅ так';
-        if (v === false) return '❌ ні';
-        return '—';
-    };
-    const pick = (liveKey, stored) => {
-        if (from && Object.prototype.hasOwnProperty.call(from, liveKey)) {
-            const v = from[liveKey];
-            if (typeof v === 'boolean') return boolLabel(v);
-            if (v == null || v === '') return '—';
-            return String(v);
-        }
-        if (typeof stored === 'boolean') return boolLabel(stored);
-        if (stored == null || stored === '') return '—';
-        return String(stored);
-    };
-
-    return [
-        ['Telegram ID', String(from?.id || u?.telegramId || '—')],
-        ['Це бот', pick('is_bot', tg.isBot)],
-        ["Ім'я", from?.first_name || u?.firstName || '—'],
-        ['Прізвище', from?.last_name || u?.lastName || '—'],
-        ['Username', from?.username ? `@${from.username}` : u?.username ? `@${u.username}` : '—'],
-        ['Мова клієнта TG', pick('language_code', tg.languageCode || u?.languageCode)],
-        ['Telegram Premium', pick('is_premium', tg.isPremium)],
-        ['У меню вкладень', pick('added_to_attachment_menu', tg.addedToAttachmentMenu)],
-        ['Може вступати в групи', pick('can_join_groups', tg.canJoinGroups)],
-        ['Читає всі повідомлення в групах', pick('can_read_all_group_messages', tg.canReadAllGroupMessages)],
-        ['Підтримує inline-запити', pick('supports_inline_queries', tg.supportsInlineQueries)],
-        ['Підключення до Business', pick('can_connect_to_business', tg.canConnectToBusiness)],
-        ['Є головний Web App', pick('has_main_web_app', tg.hasMainWebApp)],
-        ['Join request queries', pick('supports_join_request_queries', tg.supportsJoinRequestQueries)],
-        ['Guest queries', pick('supports_guest_queries', tg.supportsGuestQueries)],
-        ['Оновлено з TG', tg.updatedAt ? fmtUaDate(tg.updatedAt) : '—']
-    ];
-}
-
-function buildTgSystemDetailsHtml(u, from = null) {
-    const rows = resolveTgSystemRows(u, from)
-        .map(
-            ([k, v]) =>
-                `<tr><td align="left">${escapeHtml(k)}</td><td align="left">${escapeHtml(v)}</td></tr>`
-        )
-        .join('\n');
-    return `
-<details>
-<summary>Системні</summary>
-<table bordered striped>
-  <thead>
-    <tr><th align="left">Поле</th><th align="left">Значення</th></tr>
-  </thead>
-  <tbody>
-    ${rows}
-  </tbody>
-</table>
-</details>`.trim();
-}
-
-function buildTgSystemPlain(u, from = null) {
-    const lines = resolveTgSystemRows(u, from)
-        .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`)
-        .join('\n');
-    return `<b>Системні</b>\n${lines}`;
-}
-
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
     const now = new Date();
@@ -1109,31 +511,24 @@ async function touchUserProfile(from, lang = 'uk') {
             firstName: from.first_name || undefined,
             lastName: from.last_name || undefined,
             languageCode: from.language_code || undefined,
-            lastActivityAt: now,
-            ...extractTgUserFields(from)
+            lastActivityAt: now
         },
         $setOnInsert: {
             language: lang,
             accessLevel: 'unlimited',
             createdAt: now,
             'usage.monthKey': monthKey,
-            'usage.dayKey': kyivDayKey(now),
             'usage.eveningThisMonth': 0,
             'usage.alertsThisMonth': 0,
-            'usage.eveningToday': 0,
-            'usage.alertsToday': 0,
             'usage.eveningTotal': 0,
             'usage.alertsTotal': 0
         }
     };
 
-    // Avoid overwriting username / empty mirrors with undefined
+    // Avoid overwriting username with undefined
     Object.keys(update.$set).forEach((k) => {
         if (update.$set[k] === undefined) delete update.$set[k];
     });
-
-    // Кожна взаємодія юзера → денний лічильник activity
-    incDailyStat('activity').catch(() => {});
 
     return User.findOneAndUpdate(
         { telegramId: from.id },
@@ -1143,23 +538,17 @@ async function touchUserProfile(from, lang = 'uk') {
 }
 
 /**
- * Reset monthly / daily counters if period changed (Kyiv calendar for day).
+ * Reset monthly counters if month changed.
  */
 function ensureMonthCounters(user) {
     if (!user) return user;
     const now = new Date();
     const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-    const dayKey = kyivDayKey(now);
     if (!user.usage) user.usage = {};
     if (user.usage.monthKey !== monthKey) {
         user.usage.monthKey = monthKey;
         user.usage.eveningThisMonth = 0;
         user.usage.alertsThisMonth = 0;
-    }
-    if (user.usage.dayKey !== dayKey) {
-        user.usage.dayKey = dayKey;
-        user.usage.eveningToday = 0;
-        user.usage.alertsToday = 0;
     }
     return user;
 }
@@ -1174,22 +563,13 @@ async function sendAdminMenu(api, chatId, messageId = null, preferredThreadId = 
     if (messageId) {
         try {
             await api.editMessageText(chatId, messageId, text, base);
-            return { edited: true, messageId };
-        } catch (e) {
-            const msg = e?.message || String(e);
-            // Telegram: same text+markup → "message is not modified" — це успіх, не слати нове
-            if (/message is not modified/i.test(msg)) {
-                return { edited: true, messageId, unchanged: true };
-            }
-            console.warn('[admin] sendAdminMenu edit failed:', msg);
-            // Не шлемо дубль, якщо редагування не вдалось з іншої причини —
-            // лише коли messageId не передавали (нове меню з /admin).
-            return { edited: false, messageId, error: msg };
+            return;
+        } catch (_) {
+            /* fall through to send */
         }
     }
 
-    const sent = await sendInAdminThread(api, chatId, text, base, preferredThreadId);
-    return { edited: false, messageId: sent?.message_id };
+    await sendInAdminThread(api, chatId, text, base, preferredThreadId);
 }
 
 
@@ -1273,23 +653,6 @@ async function deleteCallbackMessage(api, ctx) {
 }
 
 /**
- * After successful outbound message: delete admin reply + bot instruction in General.
- */
-async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg) {
-    const ids = [];
-    if (adminMsg?.message_id != null) ids.push(adminMsg.message_id);
-    if (instructionMsg?.message_id != null) ids.push(instructionMsg.message_id);
-    for (const id of ids) {
-        try {
-            await api.deleteMessage(chatId, id);
-        } catch (e) {
-            console.warn('[admin] cleanupScenarioMessages failed', id, e.message);
-        }
-    }
-}
-
-
-/**
  * Final step of cron/scenario: show «Зроблено», then delete the scenario message.
  */
 async function finishScenarioDone(api, ctx, summaryHtml = '') {
@@ -1349,86 +712,6 @@ function buildMsgUserPage(users, page) {
     const text =
         `✉️ <b>Написати користувачу</b>\n` +
         `<i>Оберіть отримувача (${from}–${to} з ${total})</i>`;
-    return { text, reply_markup: { inline_keyboard: rows } };
-}
-
-/** Paginated user picker for «Інфо про 👤». */
-function buildUserInfoPickPage(users, page) {
-    const PAGE = ACCESS_PAGE_SIZE;
-    const total = users.length;
-    const totalPages = Math.max(1, Math.ceil(total / PAGE));
-    const p = Math.min(Math.max(0, page), totalPages - 1);
-    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
-
-    const rows = slice.map((u) => {
-        const label =
-            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
-            (u.city ? ` · ${u.city}` : '');
-        return [
-            {
-                text: label.slice(0, 60),
-                callback_data: `adm|userinfo|${u.telegramId}`
-            }
-        ];
-    });
-
-    if (totalPages > 1) {
-        const nav = [];
-        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|userinfo_pick|${p - 1}` });
-        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
-        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|userinfo_pick|${p + 1}` });
-        rows.push(nav);
-    }
-    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
-
-    const from = total ? p * PAGE + 1 : 0;
-    const to = Math.min((p + 1) * PAGE, total);
-    const text =
-        `👤 <b>Інфо про 👤</b>\n` +
-        `<i>Оберіть користувача (${from}–${to} з ${total})</i>`;
-    return { text, reply_markup: { inline_keyboard: rows } };
-}
-
-/** Paginated user picker for «Очистити метрики». */
-function buildCleanMetricsPickPage(users, page) {
-    const PAGE = ACCESS_PAGE_SIZE;
-    const total = users.length;
-    const totalPages = Math.max(1, Math.ceil(total / PAGE));
-    const p = Math.min(Math.max(0, page), totalPages - 1);
-    const slice = users.slice(p * PAGE, (p + 1) * PAGE);
-
-    const rows = slice.map((u) => {
-        const raw = u.forecastSettings?.enabledMetrics || [];
-        const { changed, removed } = cleanEnabledMetrics(raw);
-        const dirty = changed ? ' ⚠️' : '';
-        const label =
-            (u.username ? `@${u.username}` : u.firstName || String(u.telegramId)) +
-            (u.city ? ` · ${u.city}` : '') +
-            dirty;
-        return [
-            {
-                text: label.slice(0, 60),
-                callback_data: `adm|clean_metrics|${u.telegramId}`
-            }
-        ];
-    });
-
-    if (totalPages > 1) {
-        const nav = [];
-        if (p > 0) nav.push({ text: '◀️', callback_data: `adm|clean_metrics_pick|${p - 1}` });
-        nav.push({ text: `${p + 1}/${totalPages}`, callback_data: 'adm|noop|page' });
-        if (p < totalPages - 1) nav.push({ text: '▶️', callback_data: `adm|clean_metrics_pick|${p + 1}` });
-        rows.push(nav);
-    }
-    rows.push([{ text: '🧹 Очистити всім', callback_data: 'adm|clean_metrics_all' }]);
-    rows.push([{ text: '❌ Скасувати', callback_data: 'adm|menu' }]);
-
-    const from = total ? p * PAGE + 1 : 0;
-    const to = Math.min((p + 1) * PAGE, total);
-    const text =
-        `🧹 <b>Очистити метрики</b>\n` +
-        `<i>Прибирає pollen / solar / ozone + legacy aqi.\n` +
-        `⚠️ = є що чистити. Оберіть юзера (${from}–${to} з ${total})</i>`;
     return { text, reply_markup: { inline_keyboard: rows } };
 }
 
@@ -1521,23 +804,13 @@ async function handleAdminCallback(ctx) {
 
     try {
         if (sub === 'menu') {
-            const curMsg = ctx.callbackQuery?.message;
-            const curText = curMsg?.text || curMsg?.caption || '';
+            const curText = ctx.callbackQuery?.message?.text || '';
             const isMainMenu =
                 curText.includes('Адмін-панель Parasol Sentinel') ||
                 curText.includes('Оберіть дію кнопкою');
-            if (isMainMenu && curMsg?.message_id != null) {
-                // Єдина кнопка, що має перезаписувати повідомлення меню (edit, не send)
-                const result = await sendAdminMenu(api, chatId, curMsg.message_id);
-                if (!result.edited && result.error) {
-                    // Повідомлення зникло / недоступне — тоді вже нове
-                    await sendAdminMenu(
-                        api,
-                        chatId,
-                        null,
-                        curMsg.message_thread_id ?? topicId('GENERAL')
-                    );
-                }
+            if (isMainMenu) {
+                // Refresh main menu in place
+                await sendAdminMenu(api, chatId, ctx.callbackQuery.message.message_id);
             } else {
                 // Scenario cancel — delete this message, leave main menu alone
                 await deleteCallbackMessage(api, ctx);
@@ -1613,11 +886,9 @@ async function handleAdminCallback(ctx) {
                 usageAgg,
                 langAgg,
                 cityAgg,
-                statsToday,
-                stats7d,
-                stats30d,
-                statsMonth,
-                statsAll
+                errorsThisMonth,
+                errorsTotal,
+                recentErrors
             ] = await Promise.all([
                 User.countDocuments(),
                 User.countDocuments({ city: { $ne: null, $exists: true } }),
@@ -1651,24 +922,6 @@ async function handleAdminCallback(ctx) {
                                     ]
                                 }
                             },
-                            eveningToday: {
-                                $sum: {
-                                    $cond: [
-                                        { $eq: ['$usage.dayKey', kyivDayKey()] },
-                                        { $ifNull: ['$usage.eveningToday', 0] },
-                                        0
-                                    ]
-                                }
-                            },
-                            alertsToday: {
-                                $sum: {
-                                    $cond: [
-                                        { $eq: ['$usage.dayKey', kyivDayKey()] },
-                                        { $ifNull: ['$usage.alertsToday', 0] },
-                                        0
-                                    ]
-                                }
-                            },
                             eveningTotal: { $sum: { $ifNull: ['$usage.eveningTotal', 0] } },
                             alertsTotal: { $sum: { $ifNull: ['$usage.alertsTotal', 0] } }
                         }
@@ -1685,11 +938,9 @@ async function handleAdminCallback(ctx) {
                     { $sort: { n: -1 } },
                     { $limit: 8 }
                 ]),
-                getTodayStats(),
-                sumDailyStatsSince(kyivDayKeyDaysAgo(6)),
-                sumDailyStatsSince(kyivDayKeyDaysAgo(29)),
-                sumDailyStatsSince(kyivDayKey().slice(0, 8) + '01'),
-                sumDailyStatsSince('2000-01-01')
+                ErrorLog.countDocuments({ createdAt: { $gte: monthStart } }).catch(() => 0),
+                ErrorLog.countDocuments().catch(() => 0),
+                ErrorLog.find({}).sort({ createdAt: -1 }).limit(5).lean().catch(() => [])
             ]);
 
             const u = usageAgg[0] || {};
@@ -1697,35 +948,6 @@ async function handleAdminCallback(ctx) {
             const alertsM = u.alertsMonth || 0;
             const eveningT = u.eveningTotal || 0;
             const alertsT = u.alertsTotal || 0;
-            const eveningToday = u.eveningToday || 0;
-            const alertsToday = u.alertsToday || 0;
-
-            const actToday = (statsToday && statsToday.activity) || 0;
-            const act7 = (stats7d && stats7d.activity) || 0;
-            const act30 = (stats30d && stats30d.activity) || 0;
-            const actionsToday = (statsToday && statsToday.actions) || 0;
-            const actionsMonth = (statsMonth && statsMonth.actions) || 0;
-            const actionsTotal = (statsAll && statsAll.actions) || 0;
-            const cronOkToday = (statsToday && statsToday.cronOk) || 0;
-            const cronOkMonth = (statsMonth && statsMonth.cronOk) || 0;
-            const cronOkTotal = (statsAll && statsAll.cronOk) || 0;
-            const cronFailToday = (statsToday && statsToday.cronFail) || 0;
-            const cronFailMonth = (statsMonth && statsMonth.cronFail) || 0;
-            const cronFailTotal = (statsAll && statsAll.cronFail) || 0;
-            const userFailToday = (statsToday && statsToday.userFail) || 0;
-            const userFailMonth = (statsMonth && statsMonth.userFail) || 0;
-            const userFailTotal = (statsAll && statsAll.userFail) || 0;
-
-            // % помилок: невдалі / (успішні + невдалі); 0 якщо ще не було спроб
-            const pct = (fail, ok) => {
-                const t = (Number(fail) || 0) + (Number(ok) || 0);
-                if (!t) return 0;
-                return Math.round(((Number(fail) || 0) / t) * 100);
-            };
-            const cronFailPctToday = pct(cronFailToday, cronOkToday);
-            const userFailPctToday = pct(userFailToday, actionsToday);
-            const cronAttemptsToday = cronOkToday + cronFailToday;
-            const actionAttemptsToday = actionsToday + userFailToday;
 
             const bar = (n, max, width = 8) => {
                 if (!max || max <= 0) return '░'.repeat(width);
@@ -1742,14 +964,38 @@ async function handleAdminCallback(ctx) {
                 .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
+            // Strip HTML / box-drawing junk from old ErrorLog entries so "Останні" stays clean
+            const cleanErrMsg = (raw) => {
+                let s = String(raw || '')
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/[┏┓┗┛┃│┌└─━═]+/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                if (s.length > 70) s = s.slice(0, 67) + '…';
+                return escapeHtml(s) || '—';
+            };
+
+            const errRows = (recentErrors || []).length
+                ? recentErrors
+                    .map((e) => {
+                        const t = new Date(e.createdAt).toLocaleString('uk-UA', {
+                            timeZone: 'Europe/Kyiv',
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+                        return `<tr><td align="left">${t}</td><td align="left">${cleanErrMsg(e.message)}</td></tr>`;
+                    })
+                    .join('')
+                : '<tr><td colspan="2" align="center">Помилок ще не зафіксовано</td></tr>';
+
             // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
-            // Крони + дії юзерів: лише лічильники DailyStat (без тексту «коли і що впало»)
             const html = `
 <h1>📊 Аналітика Parasol Sentinel</h1>
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
 
-<details>
-<summary>👥 Користувачі (${total})</summary>
+<h3>👥 Користувачі</h3>
 <table bordered striped>
   <thead>
     <tr>
@@ -1767,49 +1013,40 @@ async function handleAdminCallback(ctx) {
     <tr><td align="left">🌆 Вечірній</td><td align="center"><b>${eveningOn}</b></td></tr>
   </tbody>
 </table>
-</details>
 
-<details>
-<summary>🟢 Активність (${active1} / ${actToday})</summary>
+<h3>🟢 Активність</h3>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Період</th>
-      <th align="center">Юзерів</th>
-      <th align="center">Дій</th>
+      <th align="center">К-сть</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">Сьогодні / 24г</td><td align="center"><b>${active1}</b></td><td align="center"><b>${actToday}</b></td></tr>
-    <tr><td align="left">7 днів</td><td align="center"><b>${active7}</b></td><td align="center"><b>${act7}</b></td></tr>
-    <tr><td align="left">30 днів</td><td align="center"><b>${active30}</b></td><td align="center"><b>${act30}</b></td></tr>
+    <tr><td align="left">24 години</td><td align="center"><b>${active1}</b></td></tr>
+    <tr><td align="left">7 днів</td><td align="center"><b>${active7}</b></td></tr>
+    <tr><td align="left">30 днів</td><td align="center"><b>${active30}</b></td></tr>
   </tbody>
 </table>
-<p><i>Юзерів — унікальні з lastActivityAt. Дій — кожна взаємодія (touch). У дужках: юзери 24г / дій сьогодні.</i></p>
-</details>
 
-<details>
-<summary>📬 Доставка (${eveningToday + alertsToday})</summary>
+<h3>📬 Доставка</h3>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Показник</th>
-      <th align="center">Сьогодні</th>
       <th align="center">Місяць</th>
       <th align="center">Всього</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">🌆 Вечірні</td><td align="center"><b>${eveningToday}</b></td><td align="center"><b>${eveningM}</b></td><td align="center"><b>${eveningT}</b></td></tr>
-    <tr><td align="left">🚨 Алерти</td><td align="center"><b>${alertsToday}</b></td><td align="center"><b>${alertsM}</b></td><td align="center"><b>${alertsT}</b></td></tr>
-    <tr><td align="left">Разом</td><td align="center"><b>${eveningToday + alertsToday}</b></td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
+    <tr><td align="left">🌆 Вечірні</td><td align="center"><b>${eveningM}</b></td><td align="center"><b>${eveningT}</b></td></tr>
+    <tr><td align="left">🚨 Алерти</td><td align="center"><b>${alertsM}</b></td><td align="center"><b>${alertsT}</b></td></tr>
+    <tr><td align="left">Разом</td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
   </tbody>
 </table>
-<p><i>У дужках — доставлено сьогодні (вечірні + алерти). День за календарем Києва.</i></p>
-</details>
+<p><i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i></p>
 
-<details>
-<summary>🌐 Мови</summary>
+<h3>🌐 Мови</h3>
 <table bordered striped>
   <thead>
     <tr><th align="left">Мова</th><th align="center">К-сть</th></tr>
@@ -1818,10 +1055,8 @@ async function handleAdminCallback(ctx) {
     ${langRows}
   </tbody>
 </table>
-</details>
 
-<details>
-<summary>📍 Топ міст</summary>
+<h3>📍 Топ міст</h3>
 <table bordered striped>
   <thead>
     <tr><th align="left">Місто</th><th align="center">К-сть</th></tr>
@@ -1830,93 +1065,41 @@ async function handleAdminCallback(ctx) {
     ${cityRows}
   </tbody>
 </table>
-</details>
 
-<details>
-<summary>❌ Помилки кронів (${cronFailToday} / ${cronAttemptsToday}) = ${cronFailPctToday}% · ❌ Помилки в діях (${userFailToday} / ${actionAttemptsToday}) = ${userFailPctToday}%</summary>
+<h3>❌ Помилки</h3>
+<p>Цього місяця: <b>${errorsThisMonth}</b> · всього: <b>${errorsTotal}</b></p>
 <table bordered striped>
   <thead>
-    <tr>
-      <th align="left">Показник</th>
-      <th align="center">Сьогодні</th>
-      <th align="center">Місяць</th>
-      <th align="center">Всього</th>
-    </tr>
+    <tr><th align="left">Час</th><th align="left">Повідомлення</th></tr>
   </thead>
   <tbody>
-    <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkMonth}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
-    <tr><td align="left">❌ Невдалі крони</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailMonth}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
-    <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsMonth}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
-    <tr><td align="left">❌ Помилки в діях</td><td align="center"><b>${userFailToday}</b></td><td align="center"><b>${userFailMonth}</b></td><td align="center"><b>${userFailTotal}</b></td></tr>
+    ${errRows}
   </tbody>
 </table>
-<p><i>У дужках: помилки / усі спроби за сьогодні, далі — частка помилок %. Лічильники з моменту деплою.</i></p>
-</details>
 `.trim();
 
-            const statsRefresh = refreshMarkup('adm|stats');
-            const cbMsg = ctx.callbackQuery?.message;
-            const messageId = cbMsg?.message_id;
-            const preferredThr =
-                cbMsg?.message_thread_id != null ? cbMsg.message_thread_id : topicId('GENERAL');
-            const thr =
-                preferredThr != null && Number.isFinite(Number(preferredThr))
-                    ? { message_thread_id: Number(preferredThr) }
-                    : {};
-            const isRefresh = isRefreshClick(cbMsg);
-
-            const plain =
-                `📊 <b>Аналітика Parasol Sentinel</b>\n` +
-                `<i>${escapeHtml(monthLabel)}</i>\n\n` +
-                `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
-                `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
-                `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
-                `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
-                `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
-                `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
-                `❌ Помилки кронів: <b>${cronFailToday}</b>/<b>${cronAttemptsToday}</b> = <b>${cronFailPctToday}%</b>\n` +
-                `❌ Помилки в діях: <b>${userFailToday}</b>/<b>${actionAttemptsToday}</b> = <b>${userFailPctToday}%</b>`;
-
-            // Оновити: edit rich нестабільний (2-й клік → plain).
-            // Надійно: прибрати старе повідомлення картки і надіслати нове rich.
-            // Головне меню НЕ чіпаємо — isRefreshClick вже відсікає «Оновити меню».
-            if (isRefresh && messageId != null) {
-                try {
-                    await api.deleteMessage(chatId, messageId);
-                } catch (_) {
-                    /* ignore */
-                }
-            }
-
             try {
-                await api.sendRichMessage(
-                    chatId,
-                    { html, skip_entity_detection: true },
-                    { reply_markup: statsRefresh, ...thr }
-                );
+                await api.sendRichMessage(chatId, {
+                    html,
+                    skip_entity_detection: true
+                });
             } catch (richErr) {
-                console.warn('[admin] stats sendRichMessage failed:', richErr.message);
-                // Без thread
-                try {
-                    await api.sendRichMessage(
-                        chatId,
-                        { html, skip_entity_detection: true },
-                        { reply_markup: statsRefresh }
-                    );
-                } catch (e2) {
-                    console.warn('[admin] stats rich no-thread failed:', e2.message);
-                    await sendInAdminThread(
-                        api,
-                        chatId,
-                        plain,
-                        {
-                            parse_mode: 'HTML',
-                            disable_web_page_preview: true,
-                            reply_markup: statsRefresh
-                        },
-                        preferredThr
-                    );
-                }
+                console.warn('[admin] stats sendRichMessage failed, fallback:', richErr.message);
+                // Plain fallback without tables
+                const plain =
+                    `📊 <b>Аналітика Parasol Sentinel</b>\n` +
+                    `<i>${escapeHtml(monthLabel)}</i>\n\n` +
+                    `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
+                    `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
+                    `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
+                    `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
+                    `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
+                    `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
+                    `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
+                await api.sendMessage(chatId, plain, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true
+                });
             }
             return true;
         }
@@ -2245,137 +1428,6 @@ async function handleAdminCallback(ctx) {
             return true;
         }
 
-        // ─── Очистити застарілі метрики (denylist) ───
-        if (sub === 'clean_metrics_pick') {
-            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
-            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
-            if (!users.length) {
-                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
-                return true;
-            }
-            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
-            const { text, reply_markup } = buildCleanMetricsPickPage(users, safePage);
-            const curText = ctx.callbackQuery?.message?.text || '';
-            if (curText.includes('Очистити метрики')) {
-                await editCallbackMessage(api, ctx, text, { reply_markup });
-            } else {
-                await startScenarioMessage(api, ctx, text, { reply_markup });
-            }
-            return true;
-        }
-
-        if (sub === 'clean_metrics') {
-            const tgId = data[2] ? Number(data[2]) : null;
-            if (!tgId || Number.isNaN(tgId)) {
-                await startScenarioMessage(api, ctx, '❌ Невірний ID користувача.');
-                return true;
-            }
-            const u = await User.findOne({ telegramId: tgId });
-            if (!u) {
-                await startScenarioMessage(
-                    api,
-                    ctx,
-                    `❌ Користувача <code>${tgId}</code> немає в БД.`
-                );
-                return true;
-            }
-            const before = Array.isArray(u.forecastSettings?.enabledMetrics)
-                ? [...u.forecastSettings.enabledMetrics]
-                : [];
-            const { metrics, changed, removed } = cleanEnabledMetrics(before);
-            if (!changed) {
-                await editCallbackMessage(
-                    api,
-                    ctx,
-                    `✅ <b>ID ${tgId}</b> — метрики вже чисті.\n<code>${escapeHtml(before.join(', ') || '—')}</code>`,
-                    {
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: '◀️ Назад', callback_data: 'adm|clean_metrics_pick|0' }],
-                                [{ text: '🏠 Меню', callback_data: 'adm|menu' }]
-                            ]
-                        }
-                    }
-                );
-                return true;
-            }
-            if (!u.forecastSettings) u.forecastSettings = {};
-            u.forecastSettings.enabledMetrics = metrics;
-            u.markModified('forecastSettings');
-            await u.save();
-            await editCallbackMessage(
-                api,
-                ctx,
-                `🧹 <b>Очищено ID ${tgId}</b>\n` +
-                    `Прибрано: <code>${escapeHtml(removed.join(', ') || '—')}</code>\n` +
-                    `Було: <code>${escapeHtml(before.join(', ') || '—')}</code>\n` +
-                    `Стало: <code>${escapeHtml(metrics.join(', ') || '—')}</code>`,
-                {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '◀️ Назад', callback_data: 'adm|clean_metrics_pick|0' }],
-                            [{ text: '🏠 Меню', callback_data: 'adm|menu' }]
-                        ]
-                    }
-                }
-            );
-            return true;
-        }
-
-        if (sub === 'clean_metrics_all') {
-            const users = await User.find({}).lean();
-            let cleaned = 0;
-            const details = [];
-            for (const u of users) {
-                const before = Array.isArray(u.forecastSettings?.enabledMetrics)
-                    ? u.forecastSettings.enabledMetrics
-                    : [];
-                const { metrics, changed, removed } = cleanEnabledMetrics(before);
-                if (!changed) continue;
-                await User.updateOne(
-                    { telegramId: u.telegramId },
-                    { $set: { 'forecastSettings.enabledMetrics': metrics } }
-                );
-                cleaned += 1;
-                if (details.length < 15) {
-                    details.push(
-                        `<code>${u.telegramId}</code> −${escapeHtml(removed.join(','))}`
-                    );
-                }
-            }
-            const body =
-                cleaned === 0
-                    ? '✅ У всіх користувачів метрики вже чисті.'
-                    : `🧹 <b>Очищено: ${cleaned}</b> з ${users.length}\n` +
-                      (details.length ? details.join('\n') : '') +
-                      (cleaned > details.length ? `\n… ще ${cleaned - details.length}` : '');
-            await editCallbackMessage(api, ctx, body, {
-                reply_markup: {
-                    inline_keyboard: [[{ text: '🏠 Меню', callback_data: 'adm|menu' }]]
-                }
-            });
-            return true;
-        }
-
-        // ─── Інфо про 👤: список → вибір → замінити повідомлення на профіль ───
-        if (sub === 'userinfo_pick') {
-            const page = data[2] != null && data[2] !== '' ? parseInt(data[2], 10) : 0;
-            const users = await User.find({}).sort({ lastActivityAt: -1 }).lean();
-            if (!users.length) {
-                await startScenarioMessage(api, ctx, '📭 Немає користувачів.');
-                return true;
-            }
-            const safePage = Number.isFinite(page) && page >= 0 ? page : 0;
-            const { text, reply_markup } = buildUserInfoPickPage(users, safePage);
-            const curText = ctx.callbackQuery?.message?.text || '';
-            if (curText.includes('Інфо про')) {
-                await editCallbackMessage(api, ctx, text, { reply_markup });
-            } else {
-                await startScenarioMessage(api, ctx, text, { reply_markup });
-            }
-            return true;
-        }
-
         if (sub === 'userinfo') {
             const tgId = data[2] ? Number(data[2]) : null;
             if (!tgId || Number.isNaN(tgId)) {
@@ -2390,81 +1442,19 @@ async function handleAdminCallback(ctx) {
                 return true;
             }
             const html = buildUserInfoHtml(u);
-            const plain = buildUserInfoPlain(u);
-            const cbMsg = ctx.callbackQuery?.message;
-            const messageId = cbMsg?.message_id;
-            const fromPicker = (cbMsg?.text || '').includes('Інфо про');
-            const fromRefresh = isRefreshClick(cbMsg);
-
-            // Залишаємося в тій самій гілці, звідки натиснули.
-            // З пікера / оновлення — General (або поточний thread).
-            // З notify (кнопка «Інфо») — гілка USERS/ACTIONS повідомлення.
-            const preferredThr =
-                cbMsg?.message_thread_id != null
-                    ? cbMsg.message_thread_id
-                    : fromPicker || fromRefresh
-                      ? topicId('GENERAL')
-                      : topicId('USERS');
             const thr =
-                preferredThr != null &&
-                Number.isFinite(Number(preferredThr)) &&
-                Number(preferredThr) > 0
-                    ? { message_thread_id: Number(preferredThr) }
-                    : {};
-
-            const infoRefresh = refreshMarkup(`adm|userinfo|${tgId}`);
-
-            // Оновити / пікер: delete + нове rich (edit rich ламається з 2-го кліку)
-            if ((fromRefresh || fromPicker) && messageId != null) {
-                try {
-                    await api.deleteMessage(chatId, messageId);
-                } catch (_) {
-                    /* ignore */
-                }
-            }
-
+                ctx.callbackQuery?.message?.message_thread_id != null
+                    ? { message_thread_id: ctx.callbackQuery.message.message_thread_id }
+                    : threadOpts('USERS');
             try {
-                await api.sendRichMessage(
-                    chatId,
-                    { html, skip_entity_detection: true },
-                    { reply_markup: infoRefresh, ...thr }
-                );
+                await api.sendRichMessage(chatId, { html, skip_entity_detection: true }, thr);
             } catch (richErr) {
-                const msg = richErr?.message || String(richErr);
-                console.warn('[admin] userinfo rich failed:', msg);
-
-                if (/thread not found|MESSAGE_THREAD|message thread/i.test(msg) && Object.keys(thr).length) {
-                    try {
-                        await api.sendRichMessage(
-                            chatId,
-                            { html, skip_entity_detection: true },
-                            { reply_markup: infoRefresh }
-                        );
-                        return true;
-                    } catch (e2) {
-                        console.warn('[admin] userinfo rich no-thread failed:', e2.message);
-                    }
-                }
-
-                try {
-                    await api.sendRichMessage(
-                        chatId,
-                        { html, skip_entity_detection: true },
-                        { reply_markup: infoRefresh }
-                    );
-                } catch (e3) {
-                    await sendInAdminThread(
-                        api,
-                        chatId,
-                        plain,
-                        {
-                            parse_mode: 'HTML',
-                            disable_web_page_preview: true,
-                            reply_markup: infoRefresh
-                        },
-                        preferredThr
-                    );
-                }
+                console.warn('[admin] userinfo rich failed:', richErr.message);
+                await api.sendMessage(chatId, html, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true,
+                    ...thr
+                });
             }
             return true;
         }
@@ -2584,48 +1574,24 @@ async function sendAdminReplyToUser(api, targetId, msg) {
  * Describe media on an admin/user message for logs.
  */
 function describeMsgContent(msg) {
-    if (!msg) return { media: null, text: '', kind: null, fileId: null };
+    if (!msg) return { media: null, text: '' };
     const text = (msg.caption || msg.text || '').trim();
     let media = null;
-    let kind = null;
-    let fileId = null;
-    if (msg.photo && msg.photo.length) {
-        media = '📷 фото';
-        kind = 'photo';
-        fileId = msg.photo[msg.photo.length - 1].file_id;
-    } else if (msg.document) {
-        media = `📎 ${msg.document.file_name || 'документ'}`;
-        kind = 'document';
-        fileId = msg.document.file_id;
-    } else if (msg.video) {
-        media = '🎬 відео';
-        kind = 'video';
-        fileId = msg.video.file_id;
-    } else if (msg.animation) {
-        media = '🎞 gif';
-        kind = 'animation';
-        fileId = msg.animation.file_id;
-    } else if (msg.voice) {
-        media = '🎤 голосове';
-        kind = 'voice';
-        fileId = msg.voice.file_id;
-    } else if (msg.audio) {
-        media = '🎵 аудіо';
-        kind = 'audio';
-        fileId = msg.audio.file_id;
-    } else if (msg.sticker) {
-        media = '😊 sticker';
-        kind = 'sticker';
-        fileId = msg.sticker.file_id;
-    }
-    return { media, text, kind, fileId };
+    if (msg.photo && msg.photo.length) media = '📷 фото';
+    else if (msg.document) media = `📎 ${msg.document.file_name || 'документ'}`;
+    else if (msg.video) media = '🎬 відео';
+    else if (msg.animation) media = '🎞 gif';
+    else if (msg.voice) media = '🎤 голосове';
+    else if (msg.audio) media = '🎵 аудіо';
+    else if (msg.sticker) media = '😊 sticker';
+    return { media, text };
 }
 
 function historyThreadOpts() {
     return threadOpts('HISTORY');
 }
 
-function formatSupportLine(who, media, text, assetId, ts = new Date()) {
+function formatSupportLine(who, media, text, ts = new Date()) {
     const time = ts.toLocaleString('uk-UA', {
         timeZone: 'Europe/Kyiv',
         day: '2-digit',
@@ -2634,77 +1600,36 @@ function formatSupportLine(who, media, text, assetId, ts = new Date()) {
         minute: '2-digit'
     });
     const parts = [`[${time}] ${who}:`];
-    if (media) {
-        parts.push(assetId ? `${media} #${assetId}` : media);
-    }
+    if (media) parts.push(media);
     if (text) parts.push(text.slice(0, 1500));
     if (!media && !text) parts.push('(порожньо)');
     return parts.join(' ');
 }
 
 /**
- * Send media asset into HISTORY topic with label + #assetId for later search.
- */
-async function sendAssetToHistory(api, msg, assetId, mediaLabel) {
-    const chatId = ADMIN_CHAT_ID();
-    if (!chatId || !msg) return;
-    const thrId = topicId('HISTORY');
-    const { kind, fileId } = describeMsgContent(msg);
-    if (!kind || !fileId) return;
-
-    const caption = `${mediaLabel} <code>#${assetId}</code>`;
-    const attempts = [];
-    if (thrId != null) attempts.push({ message_thread_id: thrId });
-    attempts.push({});
-
-    const sendOnce = async (thr) => {
-        const opts = { caption, parse_mode: 'HTML', ...thr };
-        if (kind === 'photo') return api.sendPhoto(chatId, fileId, opts);
-        if (kind === 'document') return api.sendDocument(chatId, fileId, opts);
-        if (kind === 'video') return api.sendVideo(chatId, fileId, opts);
-        if (kind === 'animation') return api.sendAnimation(chatId, fileId, opts);
-        if (kind === 'voice') return api.sendVoice(chatId, fileId, opts);
-        if (kind === 'audio') return api.sendAudio(chatId, fileId, opts);
-        if (kind === 'sticker') {
-            await api.sendSticker(chatId, fileId, thr);
-            return api.sendMessage(chatId, caption, { parse_mode: 'HTML', ...thr });
-        }
-        return null;
-    };
-
-    let lastErr = null;
-    for (const thr of attempts) {
-        try {
-            await sendOnce(thr);
-            return;
-        } catch (e) {
-            lastErr = e;
-            if (!/thread not found|MESSAGE_THREAD/i.test(e.message || '')) throw e;
-        }
-    }
-    if (lastErr) console.warn('[admin] sendAssetToHistory failed:', lastErr.message);
-}
-
-/**
- * Log outbound broadcast summary into HISTORY (personal replies use conversation card only).
+ * Log outbound admin delivery into HISTORY topic (not USERS).
+ * kind: 'all' | 'one'
  */
 async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, failCount, total }) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId) return;
-    // Personal one-to-one: no separate «Відправлено» card (already in «Розмова з…»)
-    if (kind === 'one') return;
-
     const { media, text } = describeMsgContent(msg);
-    let head = `📣 <b>Відправлено всім</b>`;
-    if (okCount != null) {
-        head += `\n✅ ${okCount}` + (failCount != null ? ` · ❌ ${failCount}` : '') +
-            (total != null ? ` · з ${total}` : '');
+    let head;
+    if (kind === 'all') {
+        head = `📣 <b>Відправлено всім</b>`;
+        if (okCount != null) {
+            head += `\n✅ ${okCount}` + (failCount != null ? ` · ❌ ${failCount}` : '') +
+                (total != null ? ` · з ${total}` : '');
+        }
+    } else {
+        head = `✉️ <b>Відправлено</b> ${targetLabel || ''}`;
     }
     const bodyParts = [head];
     if (media) bodyParts.push(escapeHtml(media));
     if (text) bodyParts.push(escapeHtml(text.slice(0, 1000)));
+    const body = bodyParts.join('\n');
     try {
-        await sendInAdminThread(api, chatId, bodyParts.join('\n'), {
+        await sendInAdminThread(api, chatId, body, {
             parse_mode: 'HTML',
             disable_web_page_preview: true
         }, topicId('HISTORY'));
@@ -2714,27 +1639,79 @@ async function logDeliveryToHistory(api, { kind, targetLabel, msg, okCount, fail
 }
 
 /**
+ * Archive full support transcript as a .txt file into HISTORY topic.
+ * Called when the in-message transcript would exceed Telegram-safe length.
+ * Does NOT truncate/erase — old content goes into the file.
+ */
+async function archiveTranscriptToFile(api, chatId, telegramId, namePart, fullTranscript) {
+    const { InputFile } = require('grammy');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `support_${telegramId}_${stamp}.txt`;
+    const header =
+        `Parasol Sentinel — архів розмови\n` +
+        `User: ${namePart}\n` +
+        `Telegram ID: ${telegramId}\n` +
+        `Archived at: ${new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}\n` +
+        `${'='.repeat(48)}\n\n`;
+    const body = header + String(fullTranscript || '');
+    const caption =
+        `📎 Архів розмови з <b>${escapeHtml(namePart)}</b>\n` +
+        `<code>ID: ${telegramId}</code>\n` +
+        `<i>Попередній транскрипт (ліміт повідомлення перевищено)</i>`;
+
+    const thrId = topicId('HISTORY');
+    const file = new InputFile(Buffer.from(body, 'utf8'), filename);
+    const attempts = [];
+    if (thrId != null) attempts.push({ message_thread_id: thrId });
+    attempts.push({});
+
+    let lastErr = null;
+    for (const thr of attempts) {
+        try {
+            await api.sendDocument(chatId, file, {
+                caption,
+                parse_mode: 'HTML',
+                ...thr
+            });
+            return true;
+        } catch (e) {
+            lastErr = e;
+            if (!/thread not found|MESSAGE_THREAD/i.test(e.message || '')) {
+                console.warn('[admin] archiveTranscriptToFile failed:', e.message);
+                return false;
+            }
+        }
+    }
+    if (lastErr) console.warn('[admin] archiveTranscriptToFile failed:', lastErr.message);
+    return false;
+}
+
+/**
  * Append a line to per-user support transcript and upsert one message in HISTORY topic.
- * Media → line has type + #assetId; asset itself is sent as a separate HISTORY message.
+ * Stores supportHistory.messageId on User for later edits.
+ *
+ * When transcript exceeds MAX_TRANSCRIPT chars:
+ *   — full previous content is sent as .txt into TOPIC_HISTORY (no data loss)
+ *   — in-message card keeps only the newest tail (incl. current line)
  */
 async function appendSupportConversation(api, telegramId, who, msgOrText) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !telegramId) return;
 
+    const MAX_TRANSCRIPT = 3500;
+    const KEEP_TAIL = 2800;
+
     let media = null;
     let text = '';
-    let kind = null;
-    let rawMsg = null;
     if (typeof msgOrText === 'string') {
         text = msgOrText;
     } else if (msgOrText) {
-        rawMsg = msgOrText;
         const d = describeMsgContent(msgOrText);
         media = d.media;
         text = d.text;
-        kind = d.kind;
     }
 
+    const line = formatSupportLine(who, media, text);
     let user = await User.findOne({ telegramId: Number(telegramId) });
     if (!user) {
         user = await User.findOneAndUpdate(
@@ -2744,123 +1721,74 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         );
     }
 
-    let assetId = null;
-    if (kind && rawMsg) {
-        const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
-        assetId = `A${seq}`;
-        if (!user.supportHistory) user.supportHistory = {};
-        user.supportHistory.assetSeq = seq;
-    }
-
-    const line = formatSupportLine(who, media, text, assetId);
-    const prev = (user.supportHistory && user.supportHistory.transcript) || '';
-    let transcript = prev ? `${prev}\n${line}` : line;
-    if (transcript.length > 3500) {
-        transcript = '…\n' + transcript.slice(transcript.length - 3400);
-    }
-
-    // One ID only (in the title line)
     const namePart =
         user.username
             ? `@${user.username}`
             : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
 
-    // Rich card with expandable transcript (accordion in Telegram clients)
-    const richHtml = `
-<h2>💬 Розмова з ${escapeHtml(namePart)}</h2>
-<p><code>${telegramId}</code></p>
-<blockquote expandable>${escapeHtml(transcript)}</blockquote>
-`.trim();
+    const prev = (user.supportHistory && user.supportHistory.transcript) || '';
+    let transcript = prev ? `${prev}\n${line}` : line;
 
-    // Plain fallback (HTML parse_mode) — expandable blockquote works here too
-    const plainFull =
-        `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
-        `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
+    // Over limit → archive full previous+new content to file, keep only fresh tail in card
+    if (transcript.length > MAX_TRANSCRIPT) {
+        try {
+            await archiveTranscriptToFile(api, chatId, telegramId, namePart, transcript);
+        } catch (e) {
+            console.warn('[admin] archive on overflow failed:', e.message);
+        }
+        // Keep current line + as much recent context as fits
+        if (line.length >= KEEP_TAIL) {
+            transcript = line.slice(0, KEEP_TAIL);
+        } else {
+            const budget = KEEP_TAIL - line.length - 1;
+            const tailPrev = prev.length > budget ? prev.slice(prev.length - budget) : prev;
+            transcript = (tailPrev ? `…\n${tailPrev}\n` : '') + line;
+        }
+    }
+
+    const label = `${escapeHtml(namePart)} · <code>${telegramId}</code>`;
+    const header = `💬 <b>Розмова з</b> ${label}\n<code>ID: ${telegramId}</code>\n\n`;
+    const full = header + `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
 
     const thrId = topicId('HISTORY');
-    const thr =
-        thrId != null && Number.isFinite(Number(thrId)) && Number(thrId) > 0
-            ? { message_thread_id: Number(thrId) }
-            : {};
     const histMsgId = user.supportHistory && user.supportHistory.messageId;
 
     let newMsgId = histMsgId;
     try {
         if (histMsgId) {
-            // Prefer edit as rich; if fails — plain edit; if fails — resend rich
             try {
-                await api.raw.editMessageText({
-                    chat_id: chatId,
-                    message_id: histMsgId,
-                    rich_message: { html: richHtml, skip_entity_detection: true }
+                await api.editMessageText(chatId, histMsgId, full, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true
                 });
-            } catch (editRichErr) {
-                try {
-                    await api.editMessageText(chatId, histMsgId, plainFull, {
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true
-                    });
-                } catch (editPlainErr) {
-                    console.warn(
-                        '[admin] support edit failed, resend:',
-                        editPlainErr.message || editRichErr.message
-                    );
-                    try {
-                        const sent = await api.sendRichMessage(
-                            chatId,
-                            { html: richHtml, skip_entity_detection: true },
-                            thr
-                        );
-                        newMsgId = sent?.message_id;
-                    } catch (sendRichErr) {
-                        const sent = await sendInAdminThread(
-                            api,
-                            chatId,
-                            plainFull,
-                            { parse_mode: 'HTML', disable_web_page_preview: true },
-                            thrId
-                        );
-                        newMsgId = sent?.message_id;
-                    }
-                }
-            }
-        } else {
-            try {
-                const sent = await api.sendRichMessage(
-                    chatId,
-                    { html: richHtml, skip_entity_detection: true },
-                    thr
-                );
-                newMsgId = sent?.message_id;
-            } catch (sendRichErr) {
-                console.warn('[admin] support rich failed, plain:', sendRichErr.message);
+            } catch (editErr) {
+                console.warn('[admin] support edit failed, resend:', editErr.message);
                 const sent = await sendInAdminThread(
                     api,
                     chatId,
-                    plainFull,
+                    full,
                     { parse_mode: 'HTML', disable_web_page_preview: true },
                     thrId
                 );
                 newMsgId = sent?.message_id;
             }
+        } else {
+            const sent = await sendInAdminThread(
+                api,
+                chatId,
+                full,
+                { parse_mode: 'HTML', disable_web_page_preview: true },
+                thrId
+            );
+            newMsgId = sent?.message_id;
         }
     } catch (e) {
         console.warn('[admin] appendSupportConversation send failed:', e.message);
     }
 
-    // Mirror media asset next to the conversation card
-    if (assetId && rawMsg) {
-        try {
-            await sendAssetToHistory(api, rawMsg, assetId, media || '📎');
-        } catch (e) {
-            console.warn('[admin] mirror asset failed:', e.message);
-        }
-    }
-
     user.supportHistory = {
         messageId: newMsgId || histMsgId || null,
         transcript,
-        assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
         updatedAt: new Date()
     };
     user.markModified('supportHistory');
@@ -2907,7 +1835,6 @@ async function handleAdminChannelText(ctx) {
                     failCount: fail,
                     total
                 });
-                await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
                 await api.sendMessage(
                     chatId,
@@ -2925,8 +1852,16 @@ async function handleAdminChannelText(ctx) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
+                const uDoc = await User.findOne({ telegramId: targetId }).lean();
+                const whoLabel =
+                    (uDoc?.username ? `@${uDoc.username}` : uDoc?.firstName || '') +
+                    ` <code>${targetId}</code>`;
+                await logDeliveryToHistory(api, {
+                    kind: 'one',
+                    targetLabel: whoLabel,
+                    msg
+                });
                 await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
-                await cleanupScenarioMessages(api, chatId, msg, replyTo);
             } catch (e) {
                 await api.sendMessage(
                     chatId,
@@ -2975,6 +1910,12 @@ async function handleAdminChannelText(ctx) {
         const body = msgMatch[2].trim();
         try {
             await api.sendMessage(targetId, body);
+            const fakeMsg = { text: body };
+            const uDoc = await User.findOne({ telegramId: targetId }).lean();
+            const whoLabel =
+                (uDoc?.username ? `@${uDoc.username}` : uDoc?.firstName || '') +
+                ` <code>${targetId}</code>`;
+            await logDeliveryToHistory(api, { kind: 'one', targetLabel: whoLabel, msg: fakeMsg });
             await appendSupportConversation(api, targetId, '🛡 Адмін', body);
         } catch (e) {
             await api.sendMessage(
@@ -3028,26 +1969,21 @@ async function handleAdminChannelText(ctx) {
 /**
  * Increment usage counters after successful delivery.
  * type: 'evening' | 'alert'
- * Also bumps today (Kyiv dayKey) + month + total.
  */
 async function incrementUsage(telegramId, type) {
     if (!telegramId) return;
     const now = new Date();
     const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-    const dayKey = kyivDayKey(now);
     try {
         const user = await User.findOne({ telegramId });
         if (!user) return;
         ensureMonthCounters(user);
         if (!user.usage) user.usage = {};
         user.usage.monthKey = monthKey;
-        user.usage.dayKey = dayKey;
         if (type === 'evening') {
-            user.usage.eveningToday = (user.usage.eveningToday || 0) + 1;
             user.usage.eveningThisMonth = (user.usage.eveningThisMonth || 0) + 1;
             user.usage.eveningTotal = (user.usage.eveningTotal || 0) + 1;
         } else {
-            user.usage.alertsToday = (user.usage.alertsToday || 0) + 1;
             user.usage.alertsThisMonth = (user.usage.alertsThisMonth || 0) + 1;
             user.usage.alertsTotal = (user.usage.alertsTotal || 0) + 1;
         }
@@ -3058,141 +1994,10 @@ async function incrementUsage(telegramId, type) {
     }
 }
 
-/**
- * Ping ERROR topic when a user hits a handler error (button / text / etc.).
- * Also persists a short row in ErrorLog (source: user).
- * Never sends to ACTIONS/USERS — only ERRORS.
- * Debounce: uid + текст (без where) — один клік часто дає 2 виклики
- * (reply-hook + catch у handler) з різним where.
- */
-const _recentUserErrors = new Map(); // key -> ts
-
-async function notifyUserError(from, err, extra = {}) {
-    const _plainMsg = String((err && err.message) || err || '')
-        .replace(/^Error:\s*/i, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 200);
-    const _msgKey = `${from && from.id}|${_plainMsg}`;
-    const _now = Date.now();
-    const _prev = _recentUserErrors.get(_msgKey);
-    if (_prev && _now - _prev < 15000) return; // 15 с: один клік = одне в ERROR
-    _recentUserErrors.set(_msgKey, _now);
-    if (_recentUserErrors.size > 200) {
-        for (const [k, ts] of _recentUserErrors) {
-            if (_now - ts > 60000) _recentUserErrors.delete(k);
-        }
-    }
-
-    const chatId = ADMIN_CHAT_ID();
-    let msg = (err && err.message) || String(err || 'unknown error');
-    msg = String(msg).replace(/^Error:\s*/i, '').trim();
-    const stack = err && err.stack ? String(err.stack).slice(0, 900) : '';
-    const name = from ? displayName(from) : 'невідомий';
-    const uname = from && from.username ? `@${from.username}` : '';
-    const uid = from && from.id != null ? from.id : null;
-    const cb = extra.callbackData ? String(extra.callbackData) : '';
-    const where = extra.where ? String(extra.where) : '';
-
-    const isSoft =
-        /^⚠️/.test(msg) ||
-        /недоступн|не готов|немає даних|not (yet )?available|not ready|try again later|спробуйте пізніше/i.test(
-            msg
-        );
-
-    let actionHuman = '';
-    try {
-        actionHuman = describeUserAction(cb ? 'callback' : where || 'error', extra, null);
-    } catch (_) {
-        actionHuman = cb || where || '';
-    }
-
-    const lines = [];
-    if (isSoft) {
-        lines.push(`⚠️ <b>Попередження</b>`);
-    } else {
-        lines.push(`🚨 <b>Помилка в боті</b>`);
-    }
-
-    if (uid != null) {
-        lines.push(
-            `👤 <b>${escapeHtml(name)}</b>` +
-                (uname ? ` · ${escapeHtml(uname)}` : '') +
-                ` · <code>${uid}</code> · #u${uid}`
-        );
-    } else {
-        lines.push(`👤 ${escapeHtml(name)}`);
-    }
-
-    if (actionHuman && actionHuman !== 'натиснув кнопку') {
-        lines.push(`⚡ Дія: ${escapeHtml(actionHuman)}`);
-    } else if (cb) {
-        lines.push(`⚡ Дія: натиснув <code>${escapeHtml(cb.slice(0, 120))}</code>`);
-    }
-
-    if (extra.messageText) {
-        lines.push(`💬 ${escapeHtml(String(extra.messageText).slice(0, 300))}`);
-    }
-
-    lines.push(`📝 ${escapeHtml(msg.slice(0, 500))}`);
-
-    if (!isSoft && stack) {
-        const frames = stack
-            .split('\n')
-            .filter((l) => /^\s*at /.test(l))
-            .slice(0, 4);
-        if (frames.length) {
-            lines.push(`<pre>${escapeHtml(frames.join('\n'))}</pre>`);
-        }
-    }
-
-    const text = lines.join('\n');
-
-    if (chatId) {
-        const bot = getBot();
-        try {
-            await bot.api.sendMessage(chatId, text, {
-                parse_mode: 'HTML',
-                disable_web_page_preview: true,
-                ...threadOpts('ERRORS')
-            });
-        } catch (e) {
-            console.error('[admin] notifyUserError send failed:', e.message);
-        }
-    }
-
-    try {
-        await ErrorLog.create({
-            source: 'user',
-            message: [
-                uid != null ? `uid=${uid}` : '',
-                cb ? `cb=${cb.slice(0, 120)}` : '',
-                where ? `where=${where}` : '',
-                msg
-            ]
-                .filter(Boolean)
-                .join(' | ')
-                .slice(0, 1500)
-        });
-    } catch (e) {
-        console.error('[admin] notifyUserError ErrorLog failed:', e.message);
-    }
-
-    // Денний лічильник помилок на дії юзера (аналітика)
-    try {
-        await incDailyStat('userFail');
-    } catch (e) {
-        console.error('[admin] notifyUserError userFail stat failed:', e.message);
-    }
-}
-
 module.exports = {
     isAdminChat,
     notifyAdmin,
-    notifyUserError,
     touchUserProfile,
-    extractTgUserFields,
     ensureMonthCounters,
     incrementUsage,
     formatUserLine,
