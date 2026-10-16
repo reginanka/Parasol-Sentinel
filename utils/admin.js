@@ -434,7 +434,7 @@ function buildUserInfoHtml(u, from = null) {
     <tr><th align="left">Параметр</th><th align="left">Значення</th></tr>
   </thead>
   <tbody>
-    <tr><td align="left">Одиниці</td><td align="left">${windU} · ${pressU} · ${tempU}</td></tr>
+    <tr><td align="left">Одиниці</td><td align="left">${windU}<br>${pressU}<br>${tempU}</td></tr>
     <tr><td align="left">Днів у прогнозі</td><td align="left"><b>${daysCount}</b></td></tr>
     <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsStr)}</td></tr>
     <tr><td align="left">Алерти</td><td align="left">${alertsStr}</td></tr>
@@ -554,7 +554,7 @@ function buildUserInfoPlain(u, from = null) {
         `Вечірній: ${evening}\n` +
         `Культури: <b>${cropsN}</b> — ${escapeHtml(cropsStr)}\n\n` +
         `<b>⚙️ Налаштування</b>\n` +
-        `Одиниці: ${windU} · ${pressU} · ${tempU}\n` +
+        `Одиниці: ${windU}\n${pressU}\n${tempU}\n` +
         `Днів у прогнозі: <b>${daysCount}</b>\n` +
         `Метрики: ${escapeHtml(metricsStr)}\n` +
         `Алерти: ${escapeHtml(alertsStr)}\n\n` +
