@@ -1503,6 +1503,7 @@ async function handleAdminCallback(ctx) {
                 statsToday,
                 stats7d,
                 stats30d,
+                statsMonth,
                 statsAll
             ] = await Promise.all([
                 User.countDocuments(),
@@ -1574,6 +1575,7 @@ async function handleAdminCallback(ctx) {
                 getTodayStats(),
                 sumDailyStatsSince(kyivDayKeyDaysAgo(6)),
                 sumDailyStatsSince(kyivDayKeyDaysAgo(29)),
+                sumDailyStatsSince(kyivDayKey().slice(0, 8) + '01'),
                 sumDailyStatsSince('2000-01-01')
             ]);
 
@@ -1589,13 +1591,28 @@ async function handleAdminCallback(ctx) {
             const act7 = (stats7d && stats7d.activity) || 0;
             const act30 = (stats30d && stats30d.activity) || 0;
             const actionsToday = (statsToday && statsToday.actions) || 0;
+            const actionsMonth = (statsMonth && statsMonth.actions) || 0;
             const actionsTotal = (statsAll && statsAll.actions) || 0;
             const cronOkToday = (statsToday && statsToday.cronOk) || 0;
+            const cronOkMonth = (statsMonth && statsMonth.cronOk) || 0;
             const cronOkTotal = (statsAll && statsAll.cronOk) || 0;
             const cronFailToday = (statsToday && statsToday.cronFail) || 0;
+            const cronFailMonth = (statsMonth && statsMonth.cronFail) || 0;
             const cronFailTotal = (statsAll && statsAll.cronFail) || 0;
             const userFailToday = (statsToday && statsToday.userFail) || 0;
+            const userFailMonth = (statsMonth && statsMonth.userFail) || 0;
             const userFailTotal = (statsAll && statsAll.userFail) || 0;
+
+            // % помилок: невдалі / (успішні + невдалі); 0 якщо ще не було спроб
+            const pct = (fail, ok) => {
+                const t = (Number(fail) || 0) + (Number(ok) || 0);
+                if (!t) return 0;
+                return Math.round(((Number(fail) || 0) / t) * 100);
+            };
+            const cronFailPctToday = pct(cronFailToday, cronOkToday);
+            const userFailPctToday = pct(userFailToday, actionsToday);
+            const cronAttemptsToday = cronOkToday + cronFailToday;
+            const actionAttemptsToday = actionsToday + userFailToday;
 
             const bar = (n, max, width = 8) => {
                 if (!max || max <= 0) return '░'.repeat(width);
@@ -1703,23 +1720,24 @@ async function handleAdminCallback(ctx) {
 </details>
 
 <details>
-<summary>⚙️ Крони (${cronOkToday} / ${cronFailToday}) · ❌ дії юзерів: ${userFailToday}</summary>
+<summary>❌ Помилки кронів (${cronFailToday} / ${cronAttemptsToday}) = ${cronFailPctToday}% · ❌ Помилки в діях (${userFailToday} / ${actionAttemptsToday}) = ${userFailPctToday}%</summary>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Показник</th>
       <th align="center">Сьогодні</th>
+      <th align="center">Місяць</th>
       <th align="center">Всього</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
-    <tr><td align="left">❌ Невдалі крони</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
-    <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
-    <tr><td align="left">❌ Помилки дій юзерів</td><td align="center"><b>${userFailToday}</b></td><td align="center"><b>${userFailTotal}</b></td></tr>
+    <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkMonth}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
+    <tr><td align="left">❌ Невдалі крони</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailMonth}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
+    <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsMonth}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
+    <tr><td align="left">❌ Помилки в діях</td><td align="center"><b>${userFailToday}</b></td><td align="center"><b>${userFailMonth}</b></td><td align="center"><b>${userFailTotal}</b></td></tr>
   </tbody>
 </table>
-<p><i>У дужках: успішні / невдалі крони за сьогодні; поруч — помилки відповідей бота на дії юзерів сьогодні. Лічильники з моменту деплою.</i></p>
+<p><i>У дужках: помилки / усі спроби за сьогодні, далі — частка помилок %. Лічильники з моменту деплою.</i></p>
 </details>
 `.trim();
 
@@ -1743,8 +1761,8 @@ async function handleAdminCallback(ctx) {
                 `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
                 `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
                 `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
-                `⚙️ Крони сьогодні: ✅ <b>${cronOkToday}</b> / ❌ <b>${cronFailToday}</b>\n` +
-                `❌ Помилки дій юзерів: <b>${userFailToday}</b> (всього <b>${userFailTotal}</b>)`;
+                `❌ Помилки кронів: <b>${cronFailToday}</b>/<b>${cronAttemptsToday}</b> = <b>${cronFailPctToday}%</b>\n` +
+                `❌ Помилки в діях: <b>${userFailToday}</b>/<b>${actionAttemptsToday}</b> = <b>${userFailPctToday}%</b>`;
 
             // Оновити: edit rich нестабільний (2-й клік → plain).
             // Надійно: прибрати старе повідомлення картки і надіслати нове rich.
