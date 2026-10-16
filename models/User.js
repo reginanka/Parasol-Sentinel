@@ -90,6 +90,24 @@ const UserSchema = new mongoose.Schema({
     },
 
     /**
+     * Snapshot of Telegram User flags for admin «Системні».
+     * Filled from message.from on each touch; refreshed via getChat on userinfo.
+     */
+    tgMeta: {
+        isBot: { type: Boolean, default: null },
+        isPremium: { type: Boolean, default: null },
+        addedToAttachmentMenu: { type: Boolean, default: null },
+        canJoinGroups: { type: Boolean, default: null },
+        canReadAllGroupMessages: { type: Boolean, default: null },
+        supportsInlineQueries: { type: Boolean, default: null },
+        canConnectToBusiness: { type: Boolean, default: null },
+        hasMainWebApp: { type: Boolean, default: null },
+        joinToSendMessages: { type: Boolean, default: null },
+        hasGuestQueries: { type: Boolean, default: null },
+        updatedAt: { type: Date, default: null }
+    },
+
+    /**
      * Text input mode for free-form messages:
      *  - idle          — ignore free text (admin still notified)
      *  - awaiting_city — Nominatim city search

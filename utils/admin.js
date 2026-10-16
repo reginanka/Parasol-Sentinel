@@ -382,6 +382,7 @@ function buildUserInfoHtml(u, from = null) {
     const cropsN = cropsList.length;
     const cropsStr = formatCropsList(cropsList);
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
+    const m = u?.tgMeta || {};
 
     const units = u?.units || {};
     const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
@@ -391,17 +392,17 @@ function buildUserInfoHtml(u, from = null) {
     const daysCount = u?.forecastSettings?.daysCount ?? 3;
     let metrics = u?.forecastSettings?.enabledMetrics || [];
     if (metrics.includes('aqi')) {
-        metrics = metrics.filter((m) => m !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
+        metrics = metrics.filter((x) => x !== 'aqi').concat(['aqi_now', 'aqi_main', 'aqi_ext']);
     }
     const metricsStr = metrics.length
-        ? metrics.map((m) => METRIC_NAMES_UA[m] || m).join(', ')
+        ? metrics.map((x) => METRIC_NAMES_UA[x] || x).join(', ')
         : 'немає';
 
     const triggers = u?.alertTriggers || {};
     const alertLine = (key, label) =>
         `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
     // Магнітні бурі — окремі режими (active / quiet / off), назви як у налаштуваннях
-    const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
+    const geomagMark = (mode) => (geomagMode === mode ? '✅' : '⬜️');
     const alertsStr =
         [
             alertLine('temperature', 'температура'),
@@ -490,21 +491,33 @@ ${cropsN
     <tr><th align="left">Поле</th><th align="left">Значення</th></tr>
   </thead>
   <tbody>
-    <tr><td align="left">telegramId</td><td align="left"><code>${tgId}</code></td></tr>
-    <tr><td align="left">botMode</td><td align="left"><code>${escapeHtml(u?.botMode || 'idle')}</code></td></tr>
-    <tr><td align="left">accessLevel</td><td align="left"><code>${escapeHtml(u?.accessLevel || 'unlimited')}</code></td></tr>
-    <tr><td align="left">geomagMode</td><td align="left"><code>${escapeHtml(geomagMode)}</code></td></tr>
-    <tr><td align="left">languageCode</td><td align="left"><code>${escapeHtml(tgLang)}</code></td></tr>
-    <tr><td align="left">supportHistory.msgId</td><td align="left"><code>${u?.supportHistory?.messageId ?? '—'}</code></td></tr>
-    <tr><td align="left">supportHistory.assetSeq</td><td align="left"><code>${u?.supportHistory?.assetSeq ?? 0}</code></td></tr>
-    <tr><td align="left">supportHistory.updatedAt</td><td align="left">${escapeHtml(fmtUaDate(u?.supportHistory?.updatedAt))}</td></tr>
-    <tr><td align="left">lastState.updatedAt</td><td align="left">${escapeHtml(fmtUaDate(u?.lastState?.updatedAt))}</td></tr>
-    <tr><td align="left">usage.monthKey</td><td align="left"><code>${escapeHtml(usage.monthKey || '—')}</code></td></tr>
-    <tr><td align="left">usage.dayKey</td><td align="left"><code>${escapeHtml(usage.dayKey || '—')}</code></td></tr>
+    <tr><td align="left">Telegram ID</td><td align="left"><code>${tgId}</code></td></tr>
+    <tr><td align="left">Це бот</td><td align="left">${ynTg(m.isBot)}</td></tr>
+    <tr><td align="left">Ім'я</td><td align="left">${escapeHtml(u?.firstName || from?.first_name || '—')}</td></tr>
+    <tr><td align="left">Прізвище</td><td align="left">${escapeHtml(u?.lastName || from?.last_name || '—')}</td></tr>
+    <tr><td align="left">Username</td><td align="left">${escapeHtml(uname)}</td></tr>
+    <tr><td align="left">Мова клієнта TG</td><td align="left"><code>${escapeHtml(tgLang)}</code></td></tr>
+    <tr><td align="left">Telegram Premium</td><td align="left">${ynTg(m.isPremium)}</td></tr>
+    <tr><td align="left">У меню вкладень</td><td align="left">${ynTg(m.addedToAttachmentMenu)}</td></tr>
+    <tr><td align="left">Може вступати в групи</td><td align="left">${ynTg(m.canJoinGroups)}</td></tr>
+    <tr><td align="left">Читає всі повідомлення в групах</td><td align="left">${ynTg(m.canReadAllGroupMessages)}</td></tr>
+    <tr><td align="left">Підтримує inline-запити</td><td align="left">${ynTg(m.supportsInlineQueries)}</td></tr>
+    <tr><td align="left">Підключення до Business</td><td align="left">${ynTg(m.canConnectToBusiness)}</td></tr>
+    <tr><td align="left">Є головний Web App</td><td align="left">${ynTg(m.hasMainWebApp)}</td></tr>
+    <tr><td align="left">Join request queries</td><td align="left">${ynTg(m.joinToSendMessages)}</td></tr>
+    <tr><td align="left">Guest queries</td><td align="left">${ynTg(m.hasGuestQueries)}</td></tr>
+    <tr><td align="left">Оновлено з TG</td><td align="left">${escapeHtml(fmtUaDate(m.updatedAt))}</td></tr>
   </tbody>
 </table>
 </details>
 `.trim();
+}
+
+/** ✅ так / ❌ ні / — for Telegram boolean flags */
+function ynTg(v) {
+    if (v === true) return '✅ так';
+    if (v === false) return '❌ ні';
+    return '—';
 }
 
 /**
@@ -1033,6 +1046,43 @@ async function broadcastToAllUsers(api, msg) {
     return { ok, fail, total: users.length };
 }
 
+/**
+ * Map Telegram User / Chat object → tgMeta fields we store.
+ * Only sets keys that are actually present on the payload.
+ */
+function extractTgMeta(fromOrChat) {
+    if (!fromOrChat || typeof fromOrChat !== 'object') return null;
+    const meta = {};
+    const setBool = (key, ...vals) => {
+        for (const v of vals) {
+            if (typeof v === 'boolean') {
+                meta[key] = v;
+                return;
+            }
+        }
+    };
+    setBool('isBot', fromOrChat.is_bot);
+    setBool('isPremium', fromOrChat.is_premium);
+    setBool('addedToAttachmentMenu', fromOrChat.added_to_attachment_menu);
+    setBool('canJoinGroups', fromOrChat.can_join_groups);
+    setBool(
+        'canReadAllGroupMessages',
+        fromOrChat.can_read_all_group_messages
+    );
+    setBool('supportsInlineQueries', fromOrChat.supports_inline_queries);
+    setBool('canConnectToBusiness', fromOrChat.can_connect_to_business);
+    setBool('hasMainWebApp', fromOrChat.has_main_web_app);
+    setBool(
+        'joinToSendMessages',
+        fromOrChat.join_to_send_messages,
+        fromOrChat.can_join_join_request
+    );
+    setBool('hasGuestQueries', fromOrChat.has_guest_queries);
+    if (Object.keys(meta).length === 0) return null;
+    meta.updatedAt = new Date();
+    return meta;
+}
+
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
     const now = new Date();
@@ -1060,6 +1110,13 @@ async function touchUserProfile(from, lang = 'uk') {
             'usage.alertsTotal': 0
         }
     };
+
+    const meta = extractTgMeta(from);
+    if (meta) {
+        for (const [k, v] of Object.entries(meta)) {
+            update.$set[`tgMeta.${k}`] = v;
+        }
+    }
 
     // Avoid overwriting username with undefined
     Object.keys(update.$set).forEach((k) => {
@@ -2332,13 +2389,38 @@ async function handleAdminCallback(ctx) {
                 await api.sendMessage(chatId, '❌ Невірний ID користувача.');
                 return true;
             }
-            const u = await User.findOne({ telegramId: tgId }).lean();
+            let u = await User.findOne({ telegramId: tgId }).lean();
             if (!u) {
                 await api.sendMessage(chatId, `❌ Користувача <code>${tgId}</code> немає в БД.`, {
                     parse_mode: 'HTML'
                 });
                 return true;
             }
+
+            // Підтягнути свіжі прапорці з Telegram (getChat) → tgMeta
+            try {
+                const chat = await api.getChat(tgId);
+                const meta = extractTgMeta(chat);
+                const $set = {};
+                if (chat.first_name) $set.firstName = chat.first_name;
+                if (chat.last_name) $set.lastName = chat.last_name;
+                if (chat.username) $set.username = chat.username;
+                if (meta) {
+                    for (const [k, v] of Object.entries(meta)) {
+                        $set[`tgMeta.${k}`] = v;
+                    }
+                }
+                if (Object.keys($set).length) {
+                    u = await User.findOneAndUpdate(
+                        { telegramId: tgId },
+                        { $set },
+                        { new: true }
+                    ).lean();
+                }
+            } catch (e) {
+                console.warn('[admin] userinfo getChat failed:', e.message);
+            }
+
             const html = buildUserInfoHtml(u);
             const plain = buildUserInfoPlain(u);
             const cbMsg = ctx.callbackQuery?.message;
