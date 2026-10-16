@@ -428,7 +428,8 @@ function buildUserInfoHtml(u, from = null) {
   </tbody>
 </table>
 
-<h3>⚙️ Налаштування</h3>
+<details>
+<summary>⚙️ Налаштування</summary>
 <table bordered striped>
   <thead>
     <tr><th align="left">Параметр</th><th align="left">Значення</th></tr>
@@ -440,8 +441,10 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Алерти</td><td align="left">${alertsStr}</td></tr>
   </tbody>
 </table>
+</details>
 
-<h3>📬 Доставка</h3>
+<details>
+<summary>📬 Доставка</summary>
 <table bordered striped>
   <thead>
     <tr><th align="left">Показник</th><th align="center">Місяць</th><th align="center">Всього</th></tr>
@@ -461,6 +464,7 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">🕐 Остання активність</td><td align="left">${escapeHtml(fmtUaDate(u?.lastActivityAt))}</td></tr>
   </tbody>
 </table>
+</details>
 `.trim();
 }
 
