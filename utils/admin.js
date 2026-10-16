@@ -424,9 +424,15 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
     <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
     <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
-    <tr><td align="left">Культури</td><td align="left"><b>${cropsN}</b> — ${escapeHtml(cropsStr)}</td></tr>
   </tbody>
 </table>
+
+<details>
+<summary>🌱 Культури${cropsN ? ` (${cropsN})` : ''}</summary>
+${cropsN
+    ? `<p>${cropsList.map((k) => escapeHtml(cropLabelUk(k))).join('<br>')}</p>`
+    : '<p>—</p>'}
+</details>
 
 <details>
 <summary>⚙️ Налаштування</summary>
@@ -455,6 +461,10 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Разом</td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
   </tbody>
 </table>
+</details>
+
+<details>
+<summary>📅 Активність</summary>
 <table bordered striped>
   <thead>
     <tr><th align="left">Дата</th><th align="left">Значення</th></tr>
@@ -555,8 +565,9 @@ function buildUserInfoPlain(u, from = null) {
         `TZ: <code>${escapeHtml(tz)}</code>\n` +
         `Темп. зараз: <b>${temp}</b>\n` +
         `Сповіщення: ${notif}\n` +
-        `Вечірній: ${evening}\n` +
-        `Культури: <b>${cropsN}</b> — ${escapeHtml(cropsStr)}\n\n` +
+        `Вечірній: ${evening}\n\n` +
+        `<b>🌱 Культури${cropsN ? ` (${cropsN})` : ''}</b>\n` +
+        `${cropsN ? escapeHtml(cropsStr) : '—'}\n\n` +
         `<b>⚙️ Налаштування</b>\n` +
         `Одиниці: ${windU}\n${pressU}\n${tempU}\n` +
         `Днів у прогнозі: <b>${daysCount}</b>\n` +
@@ -566,6 +577,7 @@ function buildUserInfoPlain(u, from = null) {
         `🌆 Вечірні: <b>${eveningM}</b> / <b>${eveningT}</b> (міс/всього)\n` +
         `🚨 Алерти: <b>${alertsM}</b> / <b>${alertsT}</b>\n` +
         `Разом: <b>${eveningM + alertsM}</b> / <b>${eveningT + alertsT}</b>\n\n` +
+        `<b>📅 Активність</b>\n` +
         `📅 Реєстрація: ${escapeHtml(fmtUaDate(u?.createdAt))}\n` +
         `🕐 Остання активність: ${escapeHtml(fmtUaDate(u?.lastActivityAt))}`
     );
