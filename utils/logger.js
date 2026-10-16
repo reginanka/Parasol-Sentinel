@@ -138,6 +138,14 @@ async function logToTelegram(bot, chatId, html) {
     const isError = looksLikeErrorText(html);
     const errorDest = isError ? resolveErrorDest() : null;
 
+    // Лічильники успішних / невдалих крон-звітів для аналітики
+    try {
+        const { incDailyStat } = require('./stats');
+        await incDailyStat(isError ? 'cronFail' : 'cronOk');
+    } catch (e) {
+        console.error('[logger] incDailyStat failed:', e.message);
+    }
+
     // Реальні помилки — лише в ERROR_ID; успішні звіти з «Помилок: 0» — у звичайний лог
     if (errorDest) {
         console.log(`📡 Error log → chat ${errorDest.chatId} topic ${errorDest.threadId}`);

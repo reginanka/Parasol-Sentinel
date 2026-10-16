@@ -17,6 +17,13 @@ const User = require('../models/User');
 const ErrorLog = require('../models/ErrorLog');
 const getBot = require('./bot');
 const { CROPS_DATA } = require('./crops');
+const {
+    kyivDayKey,
+    kyivDayKeyDaysAgo,
+    incDailyStat,
+    sumDailyStatsSince,
+    getTodayStats
+} = require('./stats');
 
 const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
 
@@ -869,6 +876,11 @@ async function notifyAdmin(from, actionText, extra = {}) {
         }
     }
 
+    // Успішна фіксація дії юзера → денний лічильник actions
+    if (sentOk) {
+        incDailyStat('actions').catch(() => {});
+    }
+
     // Помилка відправки → пінг у гілку ERROR
     if (!sentOk) {
         const errThread = threadOpts('ERRORS');
@@ -992,8 +1004,11 @@ async function touchUserProfile(from, lang = 'uk') {
             accessLevel: 'unlimited',
             createdAt: now,
             'usage.monthKey': monthKey,
+            'usage.dayKey': kyivDayKey(now),
             'usage.eveningThisMonth': 0,
             'usage.alertsThisMonth': 0,
+            'usage.eveningToday': 0,
+            'usage.alertsToday': 0,
             'usage.eveningTotal': 0,
             'usage.alertsTotal': 0
         }
@@ -1004,6 +1019,9 @@ async function touchUserProfile(from, lang = 'uk') {
         if (update.$set[k] === undefined) delete update.$set[k];
     });
 
+    // Кожна взаємодія юзера → денний лічильник activity
+    incDailyStat('activity').catch(() => {});
+
     return User.findOneAndUpdate(
         { telegramId: from.id },
         update,
@@ -1012,17 +1030,23 @@ async function touchUserProfile(from, lang = 'uk') {
 }
 
 /**
- * Reset monthly counters if month changed.
+ * Reset monthly / daily counters if period changed (Kyiv calendar for day).
  */
 function ensureMonthCounters(user) {
     if (!user) return user;
     const now = new Date();
     const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    const dayKey = kyivDayKey(now);
     if (!user.usage) user.usage = {};
     if (user.usage.monthKey !== monthKey) {
         user.usage.monthKey = monthKey;
         user.usage.eveningThisMonth = 0;
         user.usage.alertsThisMonth = 0;
+    }
+    if (user.usage.dayKey !== dayKey) {
+        user.usage.dayKey = dayKey;
+        user.usage.eveningToday = 0;
+        user.usage.alertsToday = 0;
     }
     return user;
 }
@@ -1477,7 +1501,13 @@ async function handleAdminCallback(ctx) {
                 langAgg,
                 cityAgg,
                 errorsThisMonth,
-                errorsTotal
+                errorsTotal,
+                errorsCron,
+                errorsOther,
+                statsToday,
+                stats7d,
+                stats30d,
+                statsAll
             ] = await Promise.all([
                 User.countDocuments(),
                 User.countDocuments({ city: { $ne: null, $exists: true } }),
@@ -1511,6 +1541,24 @@ async function handleAdminCallback(ctx) {
                                     ]
                                 }
                             },
+                            eveningToday: {
+                                $sum: {
+                                    $cond: [
+                                        { $eq: ['$usage.dayKey', kyivDayKey()] },
+                                        { $ifNull: ['$usage.eveningToday', 0] },
+                                        0
+                                    ]
+                                }
+                            },
+                            alertsToday: {
+                                $sum: {
+                                    $cond: [
+                                        { $eq: ['$usage.dayKey', kyivDayKey()] },
+                                        { $ifNull: ['$usage.alertsToday', 0] },
+                                        0
+                                    ]
+                                }
+                            },
                             eveningTotal: { $sum: { $ifNull: ['$usage.eveningTotal', 0] } },
                             alertsTotal: { $sum: { $ifNull: ['$usage.alertsTotal', 0] } }
                         }
@@ -1528,7 +1576,13 @@ async function handleAdminCallback(ctx) {
                     { $limit: 8 }
                 ]),
                 ErrorLog.countDocuments({ createdAt: { $gte: monthStart } }).catch(() => 0),
-                ErrorLog.countDocuments().catch(() => 0)
+                ErrorLog.countDocuments().catch(() => 0),
+                ErrorLog.countDocuments({ source: 'cron' }).catch(() => 0),
+                ErrorLog.countDocuments({ source: { $ne: 'cron' } }).catch(() => 0),
+                getTodayStats(),
+                sumDailyStatsSince(kyivDayKeyDaysAgo(6)),
+                sumDailyStatsSince(kyivDayKeyDaysAgo(29)),
+                sumDailyStatsSince('2000-01-01')
             ]);
 
             const u = usageAgg[0] || {};
@@ -1536,6 +1590,18 @@ async function handleAdminCallback(ctx) {
             const alertsM = u.alertsMonth || 0;
             const eveningT = u.eveningTotal || 0;
             const alertsT = u.alertsTotal || 0;
+            const eveningToday = u.eveningToday || 0;
+            const alertsToday = u.alertsToday || 0;
+
+            const actToday = (statsToday && statsToday.activity) || 0;
+            const act7 = (stats7d && stats7d.activity) || 0;
+            const act30 = (stats30d && stats30d.activity) || 0;
+            const actionsToday = (statsToday && statsToday.actions) || 0;
+            const actionsTotal = (statsAll && statsAll.actions) || 0;
+            const cronOkToday = (statsToday && statsToday.cronOk) || 0;
+            const cronOkTotal = (statsAll && statsAll.cronOk) || 0;
+            const cronFailToday = (statsToday && statsToday.cronFail) || 0;
+            const cronFailTotal = (statsAll && statsAll.cronFail) || 0;
 
             const bar = (n, max, width = 8) => {
                 if (!max || max <= 0) return '░'.repeat(width);
@@ -1559,7 +1625,7 @@ async function handleAdminCallback(ctx) {
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
 
 <details>
-<summary>👥 Користувачі</summary>
+<summary>👥 Користувачі (${total})</summary>
 <table bordered striped>
   <thead>
     <tr>
@@ -1580,39 +1646,42 @@ async function handleAdminCallback(ctx) {
 </details>
 
 <details>
-<summary>🟢 Активність</summary>
+<summary>🟢 Активність (${active1} / ${actToday})</summary>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Період</th>
-      <th align="center">К-сть</th>
+      <th align="center">Юзерів</th>
+      <th align="center">Дій</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">24 години</td><td align="center"><b>${active1}</b></td></tr>
-    <tr><td align="left">7 днів</td><td align="center"><b>${active7}</b></td></tr>
-    <tr><td align="left">30 днів</td><td align="center"><b>${active30}</b></td></tr>
+    <tr><td align="left">Сьогодні / 24г</td><td align="center"><b>${active1}</b></td><td align="center"><b>${actToday}</b></td></tr>
+    <tr><td align="left">7 днів</td><td align="center"><b>${active7}</b></td><td align="center"><b>${act7}</b></td></tr>
+    <tr><td align="left">30 днів</td><td align="center"><b>${active30}</b></td><td align="center"><b>${act30}</b></td></tr>
   </tbody>
 </table>
+<p><i>Юзерів — унікальні з lastActivityAt. Дій — кожна взаємодія (touch). У дужках: юзери 24г / дій сьогодні.</i></p>
 </details>
 
 <details>
-<summary>📬 Доставка</summary>
+<summary>📬 Доставка (${eveningToday + alertsToday})</summary>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Показник</th>
+      <th align="center">Сьогодні</th>
       <th align="center">Місяць</th>
       <th align="center">Всього</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">🌆 Вечірні</td><td align="center"><b>${eveningM}</b></td><td align="center"><b>${eveningT}</b></td></tr>
-    <tr><td align="left">🚨 Алерти</td><td align="center"><b>${alertsM}</b></td><td align="center"><b>${alertsT}</b></td></tr>
-    <tr><td align="left">Разом</td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
+    <tr><td align="left">🌆 Вечірні</td><td align="center"><b>${eveningToday}</b></td><td align="center"><b>${eveningM}</b></td><td align="center"><b>${eveningT}</b></td></tr>
+    <tr><td align="left">🚨 Алерти</td><td align="center"><b>${alertsToday}</b></td><td align="center"><b>${alertsM}</b></td><td align="center"><b>${alertsT}</b></td></tr>
+    <tr><td align="left">Разом</td><td align="center"><b>${eveningToday + alertsToday}</b></td><td align="center"><b>${eveningM + alertsM}</b></td><td align="center"><b>${eveningT + alertsT}</b></td></tr>
   </tbody>
 </table>
-<p><i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i></p>
+<p><i>У дужках — доставлено сьогодні (вечірні + алерти). День за календарем Києва.</i></p>
 </details>
 
 <details>
@@ -1640,20 +1709,26 @@ async function handleAdminCallback(ctx) {
 </details>
 
 <details>
-<summary>❌ Помилки (кількість)</summary>
+<summary>❌ Помилки (${cronOkTotal} / ${errorsTotal})</summary>
 <table bordered striped>
   <thead>
     <tr>
-      <th align="left">Період</th>
-      <th align="center">К-сть</th>
+      <th align="left">Показник</th>
+      <th align="center">Сьогодні</th>
+      <th align="center">Всього</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">Цього місяця</td><td align="center"><b>${errorsThisMonth}</b></td></tr>
-    <tr><td align="left">Всього</td><td align="center"><b>${errorsTotal}</b></td></tr>
+    <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
+    <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
+    <tr><td align="left">❌ Помилки кронів</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
+    <tr><td align="left">❌ Помилки (ErrorLog, місяць)</td><td align="center">—</td><td align="center"><b>${errorsThisMonth}</b></td></tr>
+    <tr><td align="left">❌ Помилки (ErrorLog, всього)</td><td align="center">—</td><td align="center"><b>${errorsTotal}</b></td></tr>
+    <tr><td align="left">ErrorLog · cron</td><td align="center">—</td><td align="center"><b>${errorsCron}</b></td></tr>
+    <tr><td align="left">ErrorLog · інші</td><td align="center">—</td><td align="center"><b>${errorsOther}</b></td></tr>
   </tbody>
 </table>
-<p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
+<p><i>У дужках: успішні крони / помилки всього. Лічильники збираються з моменту деплою.</i></p>
 </details>
 `.trim();
 
@@ -2830,21 +2905,26 @@ async function handleAdminChannelText(ctx) {
 /**
  * Increment usage counters after successful delivery.
  * type: 'evening' | 'alert'
+ * Also bumps today (Kyiv dayKey) + month + total.
  */
 async function incrementUsage(telegramId, type) {
     if (!telegramId) return;
     const now = new Date();
     const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    const dayKey = kyivDayKey(now);
     try {
         const user = await User.findOne({ telegramId });
         if (!user) return;
         ensureMonthCounters(user);
         if (!user.usage) user.usage = {};
         user.usage.monthKey = monthKey;
+        user.usage.dayKey = dayKey;
         if (type === 'evening') {
+            user.usage.eveningToday = (user.usage.eveningToday || 0) + 1;
             user.usage.eveningThisMonth = (user.usage.eveningThisMonth || 0) + 1;
             user.usage.eveningTotal = (user.usage.eveningTotal || 0) + 1;
         } else {
+            user.usage.alertsToday = (user.usage.alertsToday || 0) + 1;
             user.usage.alertsThisMonth = (user.usage.alertsThisMonth || 0) + 1;
             user.usage.alertsTotal = (user.usage.alertsTotal || 0) + 1;
         }

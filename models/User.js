@@ -65,8 +65,11 @@ const UserSchema = new mongoose.Schema({
     /** Usage counters for admin analytics */
     usage: {
         monthKey: { type: String, default: null }, // 'YYYY-MM'
+        dayKey: { type: String, default: null }, // 'YYYY-MM-DD' (Europe/Kyiv)
         eveningThisMonth: { type: Number, default: 0 },
         alertsThisMonth: { type: Number, default: 0 },
+        eveningToday: { type: Number, default: 0 },
+        alertsToday: { type: Number, default: 0 },
         eveningTotal: { type: Number, default: 0 },
         alertsTotal: { type: Number, default: 0 }
     },
