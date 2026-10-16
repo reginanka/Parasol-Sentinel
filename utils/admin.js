@@ -2885,29 +2885,29 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         kind = d.kind;
     }
 
-    let user = await User.findOne({ telegramId: Number(telegramId) });
+    // lean — без Mongoose document, щоб не чіпати __v і не конфліктувати з кроном
+    let user = await User.findOne({ telegramId: Number(telegramId) }).lean();
     if (!user) {
         user = await User.findOneAndUpdate(
             { telegramId: Number(telegramId) },
             { $setOnInsert: { telegramId: Number(telegramId), accessLevel: 'unlimited' } },
-            { upsert: true, new: true }
+            { upsert: true, new: true, lean: true }
         );
     }
 
-    // Asset id: A{telegramId}-{seq}  (e.g. A95508004-2) — matches HISTORY media caption
+    const prevHist = (user && user.supportHistory) || {};
+    // Asset id: A{telegramId}-{seq}  (e.g. A95508004-2)
     let assetId = null;
+    let assetSeq = prevHist.assetSeq || 0;
     if (kind && rawMsg) {
-        const seq = ((user.supportHistory && user.supportHistory.assetSeq) || 0) + 1;
-        assetId = `A${telegramId}-${seq}`;
-        if (!user.supportHistory) user.supportHistory = {};
-        user.supportHistory.assetSeq = seq;
+        assetSeq = assetSeq + 1;
+        assetId = `A${telegramId}-${assetSeq}`;
     }
 
     const line = formatSupportLine(who, media, text, assetId);
-    const prev = (user.supportHistory && user.supportHistory.transcript) || '';
+    const prev = prevHist.transcript || '';
     let transcript = prev ? `${prev}\n${line}` : line;
 
-    // One ID only (in the title line)
     const namePart =
         user.username
             ? `@${user.username}`
@@ -2941,7 +2941,7 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
 </details>
 `.trim();
 
-    // Plain fallback (HTML parse_mode)
+    // Plain fallback — теж expandable, щоб не «вбивати» акордеон
     const plainFull =
         `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
         `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
@@ -2951,37 +2951,47 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         thrId != null && Number.isFinite(Number(thrId)) && Number(thrId) > 0
             ? { message_thread_id: Number(thrId) }
             : {};
-    const histMsgId = user.supportHistory && user.supportHistory.messageId;
+    const histMsgId = prevHist.messageId || null;
 
     let newMsgId = histMsgId;
     try {
         if (histMsgId) {
-            // Prefer edit as rich; if fails — plain edit; if fails — resend rich
+            // 1) edit rich  2) якщо не вийшло — нове rich  3) лише тоді plain
+            // (plain edit поверх rich знімає акордеон — уникаємо)
+            let edited = false;
             try {
                 await api.raw.editMessageText({
                     chat_id: chatId,
                     message_id: histMsgId,
                     rich_message: { html: richHtml, skip_entity_detection: true }
                 });
+                edited = true;
             } catch (editRichErr) {
+                console.warn('[admin] support rich edit failed:', editRichErr.message);
+            }
+            if (!edited) {
                 try {
-                    await api.editMessageText(chatId, histMsgId, plainFull, {
-                        parse_mode: 'HTML',
-                        disable_web_page_preview: true
-                    });
-                } catch (editPlainErr) {
-                    console.warn(
-                        '[admin] support edit failed, resend:',
-                        editPlainErr.message || editRichErr.message
+                    const sent = await api.sendRichMessage(
+                        chatId,
+                        { html: richHtml, skip_entity_detection: true },
+                        thr
                     );
+                    newMsgId = sent?.message_id;
+                    // старе plain/зламане повідомлення прибираємо
                     try {
-                        const sent = await api.sendRichMessage(
-                            chatId,
-                            { html: richHtml, skip_entity_detection: true },
-                            thr
-                        );
-                        newMsgId = sent?.message_id;
-                    } catch (sendRichErr) {
+                        await api.deleteMessage(chatId, histMsgId);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    edited = true;
+                } catch (sendRichErr) {
+                    console.warn('[admin] support rich resend failed:', sendRichErr.message);
+                    try {
+                        await api.editMessageText(chatId, histMsgId, plainFull, {
+                            parse_mode: 'HTML',
+                            disable_web_page_preview: true
+                        });
+                    } catch (editPlainErr) {
                         const sent = await sendInAdminThread(
                             api,
                             chatId,
@@ -3026,14 +3036,26 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         }
     }
 
-    user.supportHistory = {
-        messageId: newMsgId || histMsgId || null,
-        transcript,
-        assetSeq: (user.supportHistory && user.supportHistory.assetSeq) || 0,
-        updatedAt: new Date()
-    };
-    user.markModified('supportHistory');
-    await user.save().catch((e) => console.warn('[admin] supportHistory save:', e.message));
+    // Atomic $set — без document.save() / без VersionError з кроном
+    try {
+        await User.findOneAndUpdate(
+            { telegramId: Number(telegramId) },
+            {
+                $set: {
+                    supportHistory: {
+                        messageId: newMsgId || histMsgId || null,
+                        fileMessageId: prevHist.fileMessageId || null,
+                        notifyMessageIds: prevHist.notifyMessageIds || [],
+                        transcript,
+                        assetSeq,
+                        updatedAt: new Date()
+                    }
+                }
+            }
+        );
+    } catch (e) {
+        console.warn('[admin] supportHistory atomic save failed:', e.message);
+    }
 }
 
 /**

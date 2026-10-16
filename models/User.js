@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 
+/**
+ * Nested optional blocks without `default: null` on every field.
+ * Defaults on nested paths make Mongoose mark them modified on load →
+ * concurrent cron `.save()` hits VersionError
+ * ("No matching document found for id … version N modifiedPaths …").
+ */
 const UserSchema = new mongoose.Schema({
     telegramId: { type: Number, required: true, unique: true },
     username: String,
@@ -74,37 +80,36 @@ const UserSchema = new mongoose.Schema({
         alertsTotal: { type: Number, default: 0 }
     },
 
-
     /**
      * Support chat mirror in TOPIC_HISTORY / HISTORY_MSG_ID:
      * one editable Telegram message per user with running transcript.
+     * No nested defaults — avoid dirtying document on cron load/save.
      */
     supportHistory: {
-        messageId: { type: Number, default: null },
-        fileMessageId: { type: Number, default: null },
-        /** Recent admin-notify Telegram message_ids → for Reply resolution */
-        notifyMessageIds: { type: [Number], default: [] },
-        transcript: { type: String, default: '' },
-        assetSeq: { type: Number, default: 0 },
-        updatedAt: { type: Date, default: null }
+        messageId: Number,
+        fileMessageId: Number,
+        notifyMessageIds: [Number],
+        transcript: String,
+        assetSeq: Number,
+        updatedAt: Date
     },
 
     /**
      * Snapshot of Telegram User flags for admin «Системні».
-     * Filled from message.from on each touch; refreshed via getChat on userinfo.
+     * No nested defaults — same VersionError protection as supportHistory.
      */
     tgMeta: {
-        isBot: { type: Boolean, default: null },
-        isPremium: { type: Boolean, default: null },
-        addedToAttachmentMenu: { type: Boolean, default: null },
-        canJoinGroups: { type: Boolean, default: null },
-        canReadAllGroupMessages: { type: Boolean, default: null },
-        supportsInlineQueries: { type: Boolean, default: null },
-        canConnectToBusiness: { type: Boolean, default: null },
-        hasMainWebApp: { type: Boolean, default: null },
-        joinToSendMessages: { type: Boolean, default: null },
-        hasGuestQueries: { type: Boolean, default: null },
-        updatedAt: { type: Date, default: null }
+        isBot: Boolean,
+        isPremium: Boolean,
+        addedToAttachmentMenu: Boolean,
+        canJoinGroups: Boolean,
+        canReadAllGroupMessages: Boolean,
+        supportsInlineQueries: Boolean,
+        canConnectToBusiness: Boolean,
+        hasMainWebApp: Boolean,
+        joinToSendMessages: Boolean,
+        hasGuestQueries: Boolean,
+        updatedAt: Date
     },
 
     /**
