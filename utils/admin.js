@@ -482,6 +482,28 @@ ${cropsN
   </tbody>
 </table>
 </details>
+
+<details>
+<summary>🛠 Системні</summary>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Поле</th><th align="left">Значення</th></tr>
+  </thead>
+  <tbody>
+    <tr><td align="left">telegramId</td><td align="left"><code>${tgId}</code></td></tr>
+    <tr><td align="left">botMode</td><td align="left"><code>${escapeHtml(u?.botMode || 'idle')}</code></td></tr>
+    <tr><td align="left">accessLevel</td><td align="left"><code>${escapeHtml(u?.accessLevel || 'unlimited')}</code></td></tr>
+    <tr><td align="left">geomagMode</td><td align="left"><code>${escapeHtml(geomagMode)}</code></td></tr>
+    <tr><td align="left">languageCode</td><td align="left"><code>${escapeHtml(tgLang)}</code></td></tr>
+    <tr><td align="left">supportHistory.msgId</td><td align="left"><code>${u?.supportHistory?.messageId ?? '—'}</code></td></tr>
+    <tr><td align="left">supportHistory.assetSeq</td><td align="left"><code>${u?.supportHistory?.assetSeq ?? 0}</code></td></tr>
+    <tr><td align="left">supportHistory.updatedAt</td><td align="left">${escapeHtml(fmtUaDate(u?.supportHistory?.updatedAt))}</td></tr>
+    <tr><td align="left">lastState.updatedAt</td><td align="left">${escapeHtml(fmtUaDate(u?.lastState?.updatedAt))}</td></tr>
+    <tr><td align="left">usage.monthKey</td><td align="left"><code>${escapeHtml(usage.monthKey || '—')}</code></td></tr>
+    <tr><td align="left">usage.dayKey</td><td align="left"><code>${escapeHtml(usage.dayKey || '—')}</code></td></tr>
+  </tbody>
+</table>
+</details>
 `.trim();
 }
 
@@ -1532,7 +1554,10 @@ async function handleAdminCallback(ctx) {
                 statsToday,
                 stats7d,
                 stats30d,
-                statsAll
+                statsMonth,
+                statsAll,
+                userFailTodayRaw,
+                userFailMonthRaw
             ] = await Promise.all([
                 User.countDocuments(),
                 User.countDocuments({ city: { $ne: null, $exists: true } }),
@@ -1607,7 +1632,17 @@ async function handleAdminCallback(ctx) {
                 getTodayStats(),
                 sumDailyStatsSince(kyivDayKeyDaysAgo(6)),
                 sumDailyStatsSince(kyivDayKeyDaysAgo(29)),
-                sumDailyStatsSince('2000-01-01')
+                sumDailyStatsSince(kyivDayKey().slice(0, 8) + '01'),
+                sumDailyStatsSince('2000-01-01'),
+                // Помилки в діях за сьогодні (ErrorLog, не cron)
+                ErrorLog.countDocuments({
+                    createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+                    source: { $ne: 'cron' }
+                }).catch(() => 0),
+                ErrorLog.countDocuments({
+                    createdAt: { $gte: monthStart },
+                    source: { $ne: 'cron' }
+                }).catch(() => 0)
             ]);
 
             const u = usageAgg[0] || {};
@@ -1622,11 +1657,26 @@ async function handleAdminCallback(ctx) {
             const act7 = (stats7d && stats7d.activity) || 0;
             const act30 = (stats30d && stats30d.activity) || 0;
             const actionsToday = (statsToday && statsToday.actions) || 0;
+            const actionsMonth = (statsMonth && statsMonth.actions) || 0;
             const actionsTotal = (statsAll && statsAll.actions) || 0;
             const cronOkToday = (statsToday && statsToday.cronOk) || 0;
+            const cronOkMonth = (statsMonth && statsMonth.cronOk) || 0;
             const cronOkTotal = (statsAll && statsAll.cronOk) || 0;
             const cronFailToday = (statsToday && statsToday.cronFail) || 0;
+            const cronFailMonth = (statsMonth && statsMonth.cronFail) || 0;
             const cronFailTotal = (statsAll && statsAll.cronFail) || 0;
+
+            const cronAttemptsToday = cronOkToday + cronFailToday;
+            const cronFailPctToday =
+                cronAttemptsToday > 0 ? Math.round((100 * cronFailToday) / cronAttemptsToday) : 0;
+            const userFailToday = userFailTodayRaw || 0;
+            const userFailMonth = userFailMonthRaw || 0;
+            const userFailTotal = errorsOther || 0;
+            const actionAttemptsToday = actionsToday || 0;
+            const userFailPctToday =
+                actionAttemptsToday > 0
+                    ? Math.round((100 * userFailToday) / actionAttemptsToday)
+                    : 0;
 
             const bar = (n, max, width = 8) => {
                 if (!max || max <= 0) return '░'.repeat(width);
@@ -1734,26 +1784,24 @@ async function handleAdminCallback(ctx) {
 </details>
 
 <details>
-<summary>❌ Помилки (${cronOkTotal} / ${errorsTotal})</summary>
+<summary>❌ Помилки кронів (${cronFailToday} / ${cronAttemptsToday}) = ${cronFailPctToday}% · ❌ Помилки в діях (${userFailToday} / ${actionAttemptsToday}) = ${userFailPctToday}%</summary>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Показник</th>
       <th align="center">Сьогодні</th>
+      <th align="center">Місяць</th>
       <th align="center">Всього</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
-    <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
-    <tr><td align="left">❌ Помилки кронів</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
-    <tr><td align="left">❌ Помилки (ErrorLog, місяць)</td><td align="center">—</td><td align="center"><b>${errorsThisMonth}</b></td></tr>
-    <tr><td align="left">❌ Помилки (ErrorLog, всього)</td><td align="center">—</td><td align="center"><b>${errorsTotal}</b></td></tr>
-    <tr><td align="left">ErrorLog · cron</td><td align="center">—</td><td align="center"><b>${errorsCron}</b></td></tr>
-    <tr><td align="left">ErrorLog · інші</td><td align="center">—</td><td align="center"><b>${errorsOther}</b></td></tr>
+    <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkMonth}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
+    <tr><td align="left">❌ Невдалі крони</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailMonth}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
+    <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsMonth}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
+    <tr><td align="left">❌ Помилки в діях</td><td align="center"><b>${userFailToday}</b></td><td align="center"><b>${userFailMonth}</b></td><td align="center"><b>${userFailTotal}</b></td></tr>
   </tbody>
 </table>
-<p><i>У дужках: успішні крони / помилки всього. Лічильники збираються з моменту деплою.</i></p>
+<p><i>У дужках: помилки / усі спроби за сьогодні, далі — частка помилок %. Лічильники з моменту деплою.</i></p>
 </details>
 `.trim();
 
