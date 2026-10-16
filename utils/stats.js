@@ -1,6 +1,6 @@
 /**
  * Daily / rolling counters for admin analytics.
- * Used by admin.js (touch, notify), logger.js (cron ok/fail).
+ * Used by admin.js (touch, notify, user errors), logger.js (cron ok/fail).
  */
 
 function kyivDayKey(d = new Date()) {
@@ -25,10 +25,10 @@ function kyivDayKeyDaysAgo(n) {
 
 /**
  * Atomically increment a DailyStat field for today (Kyiv).
- * field: 'activity' | 'actions' | 'cronOk' | 'cronFail'
+ * field: 'activity' | 'actions' | 'cronOk' | 'cronFail' | 'userFail'
  */
 async function incDailyStat(field, n = 1) {
-    const allowed = new Set(['activity', 'actions', 'cronOk', 'cronFail']);
+    const allowed = new Set(['activity', 'actions', 'cronOk', 'cronFail', 'userFail']);
     if (!allowed.has(field) || !n) return;
     try {
         const connectDB = require('./db');
@@ -47,10 +47,10 @@ async function incDailyStat(field, n = 1) {
 
 /**
  * Sum DailyStat fields for dayKeys >= sinceKey (inclusive).
- * Returns { activity, actions, cronOk, cronFail }.
+ * Returns { activity, actions, cronOk, cronFail, userFail }.
  */
 async function sumDailyStatsSince(sinceKey) {
-    const empty = { activity: 0, actions: 0, cronOk: 0, cronFail: 0 };
+    const empty = { activity: 0, actions: 0, cronOk: 0, cronFail: 0, userFail: 0 };
     try {
         const connectDB = require('./db');
         const DailyStat = require('../models/DailyStat');
@@ -63,7 +63,8 @@ async function sumDailyStatsSince(sinceKey) {
                     activity: { $sum: '$activity' },
                     actions: { $sum: '$actions' },
                     cronOk: { $sum: '$cronOk' },
-                    cronFail: { $sum: '$cronFail' }
+                    cronFail: { $sum: '$cronFail' },
+                    userFail: { $sum: '$userFail' }
                 }
             }
         ]);
@@ -72,7 +73,8 @@ async function sumDailyStatsSince(sinceKey) {
                   activity: rows[0].activity || 0,
                   actions: rows[0].actions || 0,
                   cronOk: rows[0].cronOk || 0,
-                  cronFail: rows[0].cronFail || 0
+                  cronFail: rows[0].cronFail || 0,
+                  userFail: rows[0].userFail || 0
               }
             : empty;
     } catch (e) {

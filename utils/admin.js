@@ -1500,10 +1500,6 @@ async function handleAdminCallback(ctx) {
                 usageAgg,
                 langAgg,
                 cityAgg,
-                errorsThisMonth,
-                errorsTotal,
-                errorsCron,
-                errorsOther,
                 statsToday,
                 stats7d,
                 stats30d,
@@ -1575,10 +1571,6 @@ async function handleAdminCallback(ctx) {
                     { $sort: { n: -1 } },
                     { $limit: 8 }
                 ]),
-                ErrorLog.countDocuments({ createdAt: { $gte: monthStart } }).catch(() => 0),
-                ErrorLog.countDocuments().catch(() => 0),
-                ErrorLog.countDocuments({ source: 'cron' }).catch(() => 0),
-                ErrorLog.countDocuments({ source: { $ne: 'cron' } }).catch(() => 0),
                 getTodayStats(),
                 sumDailyStatsSince(kyivDayKeyDaysAgo(6)),
                 sumDailyStatsSince(kyivDayKeyDaysAgo(29)),
@@ -1602,6 +1594,8 @@ async function handleAdminCallback(ctx) {
             const cronOkTotal = (statsAll && statsAll.cronOk) || 0;
             const cronFailToday = (statsToday && statsToday.cronFail) || 0;
             const cronFailTotal = (statsAll && statsAll.cronFail) || 0;
+            const userFailToday = (statsToday && statsToday.userFail) || 0;
+            const userFailTotal = (statsAll && statsAll.userFail) || 0;
 
             const bar = (n, max, width = 8) => {
                 if (!max || max <= 0) return '░'.repeat(width);
@@ -1619,7 +1613,7 @@ async function handleAdminCallback(ctx) {
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
             // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
-            // Помилки — лише кількість (без тексту «коли і що впало»)
+            // Крони + дії юзерів: лише лічильники DailyStat (без тексту «коли і що впало»)
             const html = `
 <h1>📊 Аналітика Parasol Sentinel</h1>
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
@@ -1709,7 +1703,7 @@ async function handleAdminCallback(ctx) {
 </details>
 
 <details>
-<summary>❌ Помилки (${cronOkTotal} / ${errorsTotal})</summary>
+<summary>⚙️ Крони (${cronOkToday} / ${cronFailToday}) · ❌ дії юзерів: ${userFailToday}</summary>
 <table bordered striped>
   <thead>
     <tr>
@@ -1720,15 +1714,12 @@ async function handleAdminCallback(ctx) {
   </thead>
   <tbody>
     <tr><td align="left">✅ Успішні крони</td><td align="center"><b>${cronOkToday}</b></td><td align="center"><b>${cronOkTotal}</b></td></tr>
+    <tr><td align="left">❌ Невдалі крони</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
     <tr><td align="left">⚡ Дії юзерів</td><td align="center"><b>${actionsToday}</b></td><td align="center"><b>${actionsTotal}</b></td></tr>
-    <tr><td align="left">❌ Помилки кронів</td><td align="center"><b>${cronFailToday}</b></td><td align="center"><b>${cronFailTotal}</b></td></tr>
-    <tr><td align="left">❌ Помилки (ErrorLog, місяць)</td><td align="center">—</td><td align="center"><b>${errorsThisMonth}</b></td></tr>
-    <tr><td align="left">❌ Помилки (ErrorLog, всього)</td><td align="center">—</td><td align="center"><b>${errorsTotal}</b></td></tr>
-    <tr><td align="left">ErrorLog · cron</td><td align="center">—</td><td align="center"><b>${errorsCron}</b></td></tr>
-    <tr><td align="left">ErrorLog · інші</td><td align="center">—</td><td align="center"><b>${errorsOther}</b></td></tr>
+    <tr><td align="left">❌ Помилки дій юзерів</td><td align="center"><b>${userFailToday}</b></td><td align="center"><b>${userFailTotal}</b></td></tr>
   </tbody>
 </table>
-<p><i>У дужках: успішні крони / помилки всього. Лічильники збираються з моменту деплою.</i></p>
+<p><i>У дужках: успішні / невдалі крони за сьогодні; поруч — помилки відповідей бота на дії юзерів сьогодні. Лічильники з моменту деплою.</i></p>
 </details>
 `.trim();
 
@@ -1752,7 +1743,8 @@ async function handleAdminCallback(ctx) {
                 `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
                 `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
                 `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
-                `❌ Помилки місяць/всього: <b>${errorsThisMonth}</b>/<b>${errorsTotal}</b>`;
+                `⚙️ Крони сьогодні: ✅ <b>${cronOkToday}</b> / ❌ <b>${cronFailToday}</b>\n` +
+                `❌ Помилки дій юзерів: <b>${userFailToday}</b> (всього <b>${userFailTotal}</b>)`;
 
             // Оновити: edit rich нестабільний (2-й клік → plain).
             // Надійно: прибрати старе повідомлення картки і надіслати нове rich.
@@ -3054,6 +3046,13 @@ async function notifyUserError(from, err, extra = {}) {
         });
     } catch (e) {
         console.error('[admin] notifyUserError ErrorLog failed:', e.message);
+    }
+
+    // Денний лічильник помилок на дії юзера (аналітика)
+    try {
+        await incDailyStat('userFail');
+    } catch (e) {
+        console.error('[admin] notifyUserError userFail stat failed:', e.message);
     }
 }
 
