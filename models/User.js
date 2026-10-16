@@ -96,19 +96,13 @@ const UserSchema = new mongoose.Schema({
 
     /**
      * Snapshot of Telegram User flags for admin «Системні».
+     * Only user-relevant fields (no bot-only: groups/inline/Business/WebApp/join/guest).
      * No nested defaults — same VersionError protection as supportHistory.
      */
     tgMeta: {
         isBot: Boolean,
         isPremium: Boolean,
         addedToAttachmentMenu: Boolean,
-        canJoinGroups: Boolean,
-        canReadAllGroupMessages: Boolean,
-        supportsInlineQueries: Boolean,
-        canConnectToBusiness: Boolean,
-        hasMainWebApp: Boolean,
-        joinToSendMessages: Boolean,
-        hasGuestQueries: Boolean,
         updatedAt: Date
     },
 

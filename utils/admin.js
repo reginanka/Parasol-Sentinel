@@ -500,13 +500,6 @@ ${cropsN
     <tr><td align="left">Мова клієнта TG</td><td align="left"><code>${escapeHtml(tgLang)}</code></td></tr>
     <tr><td align="left">Telegram Premium</td><td align="left">${ynTg(m.isPremium)}</td></tr>
     <tr><td align="left">У меню вкладень</td><td align="left">${ynTg(m.addedToAttachmentMenu)}</td></tr>
-    <tr><td align="left">Може вступати в групи</td><td align="left">${ynTg(m.canJoinGroups)}</td></tr>
-    <tr><td align="left">Читає всі повідомлення в групах</td><td align="left">${ynTg(m.canReadAllGroupMessages)}</td></tr>
-    <tr><td align="left">Підтримує inline-запити</td><td align="left">${ynTg(m.supportsInlineQueries)}</td></tr>
-    <tr><td align="left">Підключення до Business</td><td align="left">${ynTg(m.canConnectToBusiness)}</td></tr>
-    <tr><td align="left">Є головний Web App</td><td align="left">${ynTg(m.hasMainWebApp)}</td></tr>
-    <tr><td align="left">Join request queries</td><td align="left">${ynTg(m.joinToSendMessages)}</td></tr>
-    <tr><td align="left">Guest queries</td><td align="left">${ynTg(m.hasGuestQueries)}</td></tr>
     <tr><td align="left">Оновлено з TG</td><td align="left">${escapeHtml(fmtUaDate(m.updatedAt))}</td></tr>
   </tbody>
 </table>
@@ -542,29 +535,6 @@ function resolveTgMetaDisplay(u, from = null) {
             u?.added_to_attachment_menu,
             from?.added_to_attachment_menu
         ),
-        canJoinGroups: pick(t.canJoinGroups, u?.canJoinGroups, u?.can_join_groups),
-        canReadAllGroupMessages: pick(
-            t.canReadAllGroupMessages,
-            u?.canReadAllGroupMessages,
-            u?.can_read_all_group_messages
-        ),
-        supportsInlineQueries: pick(
-            t.supportsInlineQueries,
-            u?.supportsInlineQueries,
-            u?.supports_inline_queries
-        ),
-        canConnectToBusiness: pick(
-            t.canConnectToBusiness,
-            u?.canConnectToBusiness,
-            u?.can_connect_to_business
-        ),
-        hasMainWebApp: pick(t.hasMainWebApp, u?.hasMainWebApp, u?.has_main_web_app),
-        joinToSendMessages: pick(
-            t.joinToSendMessages,
-            u?.joinToSendMessages,
-            u?.join_to_send_messages
-        ),
-        hasGuestQueries: pick(t.hasGuestQueries, u?.hasGuestQueries, u?.has_guest_queries),
         updatedAt: t.updatedAt || u?.tgMetaUpdatedAt || u?.tgUpdatedAt || null
     };
 }
@@ -1131,23 +1101,10 @@ function extractTgMeta(fromOrChat) {
             }
         }
     };
+    // Лише user-релевантні прапорці (без bot-only: groups/inline/Business/WebApp/join/guest)
     setBool('isBot', fromOrChat.is_bot);
     setBool('isPremium', fromOrChat.is_premium);
     setBool('addedToAttachmentMenu', fromOrChat.added_to_attachment_menu);
-    setBool('canJoinGroups', fromOrChat.can_join_groups);
-    setBool(
-        'canReadAllGroupMessages',
-        fromOrChat.can_read_all_group_messages
-    );
-    setBool('supportsInlineQueries', fromOrChat.supports_inline_queries);
-    setBool('canConnectToBusiness', fromOrChat.can_connect_to_business);
-    setBool('hasMainWebApp', fromOrChat.has_main_web_app);
-    setBool(
-        'joinToSendMessages',
-        fromOrChat.join_to_send_messages,
-        fromOrChat.can_join_join_request
-    );
-    setBool('hasGuestQueries', fromOrChat.has_guest_queries);
     if (Object.keys(meta).length === 0) return null;
     meta.updatedAt = new Date();
     return meta;
