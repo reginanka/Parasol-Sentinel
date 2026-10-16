@@ -22,6 +22,7 @@ const {
     notifyAdmin,
     notifyUserError,
     touchUserProfile,
+    extractTgUserFields,
     isAdminChat,
     handleAdminCallback,
     handleAdminChannelText
@@ -1102,21 +1103,24 @@ bot.on("callback_query:data", async (ctx) => {
             await User.findOneAndUpdate(
                 { telegramId: ctx.from.id },
                 {
-                    username: ctx.from.username,
-                    firstName: ctx.from.first_name,
-                    lastName: ctx.from.last_name,
-                    languageCode: ctx.from.language_code,
-                    city: weather.city_name,
-                    lat: parseFloat(lat),
-                    lon: parseFloat(lon),
-                    timezone: weather.timezone,
-                    language: lang,
-                    botMode: 'idle',
-                    lastActivityAt: new Date(),
-                    lastState: {
-                        temp: weather.temp,
-                        weatherCode: weather.weather.code,
-                        updatedAt: new Date()
+                    $set: {
+                        username: ctx.from.username,
+                        firstName: ctx.from.first_name,
+                        lastName: ctx.from.last_name,
+                        languageCode: ctx.from.language_code,
+                        city: weather.city_name,
+                        lat: parseFloat(lat),
+                        lon: parseFloat(lon),
+                        timezone: weather.timezone,
+                        language: lang,
+                        botMode: 'idle',
+                        lastActivityAt: new Date(),
+                        lastState: {
+                            temp: weather.temp,
+                            weatherCode: weather.weather.code,
+                            updatedAt: new Date()
+                        },
+                        ...extractTgUserFields(ctx.from)
                     }
                 },
                 { upsert: true, new: true }

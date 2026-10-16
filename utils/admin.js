@@ -482,6 +482,8 @@ ${cropsN
   </tbody>
 </table>
 </details>
+
+${buildTgSystemDetailsHtml(u, from)}
 `.trim();
 }
 
@@ -586,7 +588,8 @@ function buildUserInfoPlain(u, from = null) {
         `Разом: <b>${eveningM + alertsM}</b> / <b>${eveningT + alertsT}</b>\n\n` +
         `<b>📅 Активність</b>\n` +
         `📅 Реєстрація: ${escapeHtml(fmtUaDate(u?.createdAt))}\n` +
-        `🕐 Остання активність: ${escapeHtml(fmtUaDate(u?.lastActivityAt))}`
+        `🕐 Остання активність: ${escapeHtml(fmtUaDate(u?.lastActivityAt))}\n\n` +
+        buildTgSystemPlain(u, from)
     );
 }
 
@@ -986,6 +989,115 @@ async function broadcastToAllUsers(api, msg) {
     return { ok, fail, total: users.length };
 }
 
+/**
+ * Map Telegram Bot API User → flat $set fields for Mongo `tg.*` + top-level mirrors.
+ * @see https://core.telegram.org/bots/api#user
+ */
+function extractTgUserFields(from) {
+    if (!from || from.id == null) return {};
+    const set = {
+        'tg.updatedAt': new Date()
+    };
+
+    if (typeof from.is_bot === 'boolean') set['tg.isBot'] = from.is_bot;
+    // is_premium / added_to_attachment_menu often omitted when false — write explicit bool
+    set['tg.isPremium'] = from.is_premium === true;
+    set['tg.addedToAttachmentMenu'] = from.added_to_attachment_menu === true;
+
+    if (from.language_code) {
+        set['tg.languageCode'] = from.language_code;
+        set.languageCode = from.language_code;
+    }
+
+    if (typeof from.can_join_groups === 'boolean') set['tg.canJoinGroups'] = from.can_join_groups;
+    if (typeof from.can_read_all_group_messages === 'boolean') {
+        set['tg.canReadAllGroupMessages'] = from.can_read_all_group_messages;
+    }
+    if (typeof from.supports_inline_queries === 'boolean') {
+        set['tg.supportsInlineQueries'] = from.supports_inline_queries;
+    }
+    if (typeof from.can_connect_to_business === 'boolean') {
+        set['tg.canConnectToBusiness'] = from.can_connect_to_business;
+    }
+    if (typeof from.has_main_web_app === 'boolean') set['tg.hasMainWebApp'] = from.has_main_web_app;
+    if (typeof from.supports_join_request_queries === 'boolean') {
+        set['tg.supportsJoinRequestQueries'] = from.supports_join_request_queries;
+    }
+    if (typeof from.supports_guest_queries === 'boolean') {
+        set['tg.supportsGuestQueries'] = from.supports_guest_queries;
+    }
+
+    return set;
+}
+
+/** Human-readable rows for admin «Системні» (live `from` overrides stored `u.tg`). */
+function resolveTgSystemRows(u, from = null) {
+    const tg = u?.tg || {};
+    const boolLabel = (v) => {
+        if (v === true) return '✅ так';
+        if (v === false) return '❌ ні';
+        return '—';
+    };
+    const pick = (liveKey, stored) => {
+        if (from && Object.prototype.hasOwnProperty.call(from, liveKey)) {
+            const v = from[liveKey];
+            if (typeof v === 'boolean') return boolLabel(v);
+            if (v == null || v === '') return '—';
+            return String(v);
+        }
+        if (typeof stored === 'boolean') return boolLabel(stored);
+        if (stored == null || stored === '') return '—';
+        return String(stored);
+    };
+
+    return [
+        ['id', String(from?.id || u?.telegramId || '—')],
+        ['is_bot', pick('is_bot', tg.isBot)],
+        ['first_name', from?.first_name || u?.firstName || '—'],
+        ['last_name', from?.last_name || u?.lastName || '—'],
+        ['username', from?.username ? `@${from.username}` : u?.username ? `@${u.username}` : '—'],
+        ['language_code', pick('language_code', tg.languageCode || u?.languageCode)],
+        ['is_premium', pick('is_premium', tg.isPremium)],
+        ['added_to_attachment_menu', pick('added_to_attachment_menu', tg.addedToAttachmentMenu)],
+        ['can_join_groups', pick('can_join_groups', tg.canJoinGroups)],
+        ['can_read_all_group_messages', pick('can_read_all_group_messages', tg.canReadAllGroupMessages)],
+        ['supports_inline_queries', pick('supports_inline_queries', tg.supportsInlineQueries)],
+        ['can_connect_to_business', pick('can_connect_to_business', tg.canConnectToBusiness)],
+        ['has_main_web_app', pick('has_main_web_app', tg.hasMainWebApp)],
+        ['supports_join_request_queries', pick('supports_join_request_queries', tg.supportsJoinRequestQueries)],
+        ['supports_guest_queries', pick('supports_guest_queries', tg.supportsGuestQueries)],
+        ['tg.updatedAt', tg.updatedAt ? fmtUaDate(tg.updatedAt) : '—']
+    ];
+}
+
+function buildTgSystemDetailsHtml(u, from = null) {
+    const rows = resolveTgSystemRows(u, from)
+        .map(
+            ([k, v]) =>
+                `<tr><td align="left"><code>${escapeHtml(k)}</code></td><td align="left">${escapeHtml(v)}</td></tr>`
+        )
+        .join('\n');
+    return `
+<details>
+<summary>Системні</summary>
+<table bordered striped>
+  <thead>
+    <tr><th align="left">Поле TG</th><th align="left">Значення</th></tr>
+  </thead>
+  <tbody>
+    ${rows}
+  </tbody>
+</table>
+</details>`.trim();
+}
+
+function buildTgSystemPlain(u, from = null) {
+    const lines = resolveTgSystemRows(u, from)
+        .map(([k, v]) => `<code>${escapeHtml(k)}</code>: ${escapeHtml(v)}`)
+        .join('\n');
+    return `<b>Системні</b>\n${lines}`;
+}
+
 async function touchUserProfile(from, lang = 'uk') {
     if (!from?.id) return null;
     const now = new Date();
@@ -997,7 +1109,8 @@ async function touchUserProfile(from, lang = 'uk') {
             firstName: from.first_name || undefined,
             lastName: from.last_name || undefined,
             languageCode: from.language_code || undefined,
-            lastActivityAt: now
+            lastActivityAt: now,
+            ...extractTgUserFields(from)
         },
         $setOnInsert: {
             language: lang,
@@ -1014,7 +1127,7 @@ async function touchUserProfile(from, lang = 'uk') {
         }
     };
 
-    // Avoid overwriting username with undefined
+    // Avoid overwriting username / empty mirrors with undefined
     Object.keys(update.$set).forEach((k) => {
         if (update.$set[k] === undefined) delete update.$set[k];
     });
@@ -3079,6 +3192,7 @@ module.exports = {
     notifyAdmin,
     notifyUserError,
     touchUserProfile,
+    extractTgUserFields,
     ensureMonthCounters,
     incrementUsage,
     formatUserLine,

@@ -5,7 +5,30 @@ const UserSchema = new mongoose.Schema({
     username: String,
     firstName: String,
     lastName: String,
-    languageCode: String, // raw Telegram language_code
+    languageCode: String, // raw Telegram language_code (mirror of tg.languageCode)
+
+    /**
+     * Snapshot of Telegram User fields from the last interaction (Bot API User).
+     * Updated on every touchUserProfile / registration path that receives `from`.
+     * @see https://core.telegram.org/bots/api#user
+     */
+    tg: {
+        isBot: { type: Boolean, default: null },
+        isPremium: { type: Boolean, default: null },
+        addedToAttachmentMenu: { type: Boolean, default: null },
+        languageCode: { type: String, default: null },
+        /** Bot-only flags — still stored if Telegram ever sends them */
+        canJoinGroups: { type: Boolean, default: null },
+        canReadAllGroupMessages: { type: Boolean, default: null },
+        supportsInlineQueries: { type: Boolean, default: null },
+        canConnectToBusiness: { type: Boolean, default: null },
+        hasMainWebApp: { type: Boolean, default: null },
+        supportsJoinRequestQueries: { type: Boolean, default: null },
+        supportsGuestQueries: { type: Boolean, default: null },
+        /** ISO time of last successful TG field write */
+        updatedAt: { type: Date, default: null }
+    },
+
     city: { type: String, default: null },
     lat: Number,
     lon: Number,
