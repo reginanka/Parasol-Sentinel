@@ -1051,22 +1051,22 @@ function resolveTgSystemRows(u, from = null) {
     };
 
     return [
-        ['id', String(from?.id || u?.telegramId || '—')],
-        ['is_bot', pick('is_bot', tg.isBot)],
-        ['first_name', from?.first_name || u?.firstName || '—'],
-        ['last_name', from?.last_name || u?.lastName || '—'],
-        ['username', from?.username ? `@${from.username}` : u?.username ? `@${u.username}` : '—'],
-        ['language_code', pick('language_code', tg.languageCode || u?.languageCode)],
-        ['is_premium', pick('is_premium', tg.isPremium)],
-        ['added_to_attachment_menu', pick('added_to_attachment_menu', tg.addedToAttachmentMenu)],
-        ['can_join_groups', pick('can_join_groups', tg.canJoinGroups)],
-        ['can_read_all_group_messages', pick('can_read_all_group_messages', tg.canReadAllGroupMessages)],
-        ['supports_inline_queries', pick('supports_inline_queries', tg.supportsInlineQueries)],
-        ['can_connect_to_business', pick('can_connect_to_business', tg.canConnectToBusiness)],
-        ['has_main_web_app', pick('has_main_web_app', tg.hasMainWebApp)],
-        ['supports_join_request_queries', pick('supports_join_request_queries', tg.supportsJoinRequestQueries)],
-        ['supports_guest_queries', pick('supports_guest_queries', tg.supportsGuestQueries)],
-        ['tg.updatedAt', tg.updatedAt ? fmtUaDate(tg.updatedAt) : '—']
+        ['Telegram ID', String(from?.id || u?.telegramId || '—')],
+        ['Це бот', pick('is_bot', tg.isBot)],
+        ["Ім'я", from?.first_name || u?.firstName || '—'],
+        ['Прізвище', from?.last_name || u?.lastName || '—'],
+        ['Username', from?.username ? `@${from.username}` : u?.username ? `@${u.username}` : '—'],
+        ['Мова клієнта TG', pick('language_code', tg.languageCode || u?.languageCode)],
+        ['Telegram Premium', pick('is_premium', tg.isPremium)],
+        ['У меню вкладень', pick('added_to_attachment_menu', tg.addedToAttachmentMenu)],
+        ['Може вступати в групи', pick('can_join_groups', tg.canJoinGroups)],
+        ['Читає всі повідомлення в групах', pick('can_read_all_group_messages', tg.canReadAllGroupMessages)],
+        ['Підтримує inline-запити', pick('supports_inline_queries', tg.supportsInlineQueries)],
+        ['Підключення до Business', pick('can_connect_to_business', tg.canConnectToBusiness)],
+        ['Є головний Web App', pick('has_main_web_app', tg.hasMainWebApp)],
+        ['Join request queries', pick('supports_join_request_queries', tg.supportsJoinRequestQueries)],
+        ['Guest queries', pick('supports_guest_queries', tg.supportsGuestQueries)],
+        ['Оновлено з TG', tg.updatedAt ? fmtUaDate(tg.updatedAt) : '—']
     ];
 }
 
@@ -1074,7 +1074,7 @@ function buildTgSystemDetailsHtml(u, from = null) {
     const rows = resolveTgSystemRows(u, from)
         .map(
             ([k, v]) =>
-                `<tr><td align="left"><code>${escapeHtml(k)}</code></td><td align="left">${escapeHtml(v)}</td></tr>`
+                `<tr><td align="left">${escapeHtml(k)}</td><td align="left">${escapeHtml(v)}</td></tr>`
         )
         .join('\n');
     return `
@@ -1082,7 +1082,7 @@ function buildTgSystemDetailsHtml(u, from = null) {
 <summary>Системні</summary>
 <table bordered striped>
   <thead>
-    <tr><th align="left">Поле TG</th><th align="left">Значення</th></tr>
+    <tr><th align="left">Поле</th><th align="left">Значення</th></tr>
   </thead>
   <tbody>
     ${rows}
@@ -1093,7 +1093,7 @@ function buildTgSystemDetailsHtml(u, from = null) {
 
 function buildTgSystemPlain(u, from = null) {
     const lines = resolveTgSystemRows(u, from)
-        .map(([k, v]) => `<code>${escapeHtml(k)}</code>: ${escapeHtml(v)}`)
+        .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`)
         .join('\n');
     return `<b>Системні</b>\n${lines}`;
 }
