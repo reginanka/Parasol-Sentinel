@@ -382,7 +382,8 @@ function buildUserInfoHtml(u, from = null) {
     const cropsN = cropsList.length;
     const cropsStr = formatCropsList(cropsList);
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
-    const m = u?.tgMeta || {};
+    // tgMeta + legacy flat fields (якщо раніше писали в корінь документа)
+    const m = resolveTgMetaDisplay(u, from);
 
     const units = u?.units || {};
     const windU = units.wind === 'kmh' ? 'км/год' : 'м/с';
@@ -518,6 +519,54 @@ function ynTg(v) {
     if (v === true) return '✅ так';
     if (v === false) return '❌ ні';
     return '—';
+}
+
+/**
+ * Зібрати tg-прапорці для «Системні» з tgMeta + legacy-полів у корені User + from.
+ * Не губить дані, якщо вони лежали під іншими ключами в БД.
+ */
+function resolveTgMetaDisplay(u, from = null) {
+    const t = (u && u.tgMeta) || {};
+    const pick = (...vals) => {
+        for (const v of vals) {
+            if (typeof v === 'boolean') return v;
+        }
+        return null;
+    };
+    return {
+        isBot: pick(t.isBot, u?.isBot, u?.is_bot, from?.is_bot),
+        isPremium: pick(t.isPremium, u?.isPremium, u?.is_premium, from?.is_premium),
+        addedToAttachmentMenu: pick(
+            t.addedToAttachmentMenu,
+            u?.addedToAttachmentMenu,
+            u?.added_to_attachment_menu,
+            from?.added_to_attachment_menu
+        ),
+        canJoinGroups: pick(t.canJoinGroups, u?.canJoinGroups, u?.can_join_groups),
+        canReadAllGroupMessages: pick(
+            t.canReadAllGroupMessages,
+            u?.canReadAllGroupMessages,
+            u?.can_read_all_group_messages
+        ),
+        supportsInlineQueries: pick(
+            t.supportsInlineQueries,
+            u?.supportsInlineQueries,
+            u?.supports_inline_queries
+        ),
+        canConnectToBusiness: pick(
+            t.canConnectToBusiness,
+            u?.canConnectToBusiness,
+            u?.can_connect_to_business
+        ),
+        hasMainWebApp: pick(t.hasMainWebApp, u?.hasMainWebApp, u?.has_main_web_app),
+        joinToSendMessages: pick(
+            t.joinToSendMessages,
+            u?.joinToSendMessages,
+            u?.join_to_send_messages
+        ),
+        hasGuestQueries: pick(t.hasGuestQueries, u?.hasGuestQueries, u?.has_guest_queries),
+        updatedAt: t.updatedAt || u?.tgMetaUpdatedAt || u?.tgUpdatedAt || null
+    };
 }
 
 /**
@@ -857,16 +906,9 @@ async function notifyAdmin(from, actionText, extra = {}) {
         actionText === 'текст' ||
         actionText === 'text';
 
-    let text =
-        `👤 <b>${escapeHtml(name)}</b>\n` +
-        `${escapeHtml(uname)}\n` +
-        `ID: <code>${from.id}</code>\n` +
-        `⚡ Дія: ${escapeHtml(humanAction)}`;
-
+    // Історія гілки — лише для реального тексту (акордеон <details> у rich message)
+    let histSnippet = '';
     if (extra.messageText) {
-        text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
-
-        // Останні повідомлення гілки — лише для реального тексту юзера (не на кліки)
         try {
             const uHist = await User.findOne({ telegramId: from.id })
                 .select('supportHistory.transcript')
@@ -874,27 +916,14 @@ async function notifyAdmin(from, actionText, extra = {}) {
             const rawHist = uHist?.supportHistory?.transcript || '';
             const lines = rawHist.split('\n').filter(Boolean);
             if (lines.length) {
-                let snippet = lines.slice(-6).join('\n');
-                if (snippet.length > 900) {
-                    snippet = '…\n' + snippet.slice(snippet.length - 900);
+                histSnippet = lines.slice(-8).join('\n');
+                if (histSnippet.length > 1200) {
+                    histSnippet = '…\n' + histSnippet.slice(histSnippet.length - 1200);
                 }
-                text +=
-                    `\n\n📜 <b>Останні повідомлення:</b>\n` +
-                    `<blockquote expandable>${escapeHtml(snippet)}</blockquote>`;
             }
         } catch (e) {
             console.warn('[admin] history snippet failed:', e.message);
         }
-    }
-    // Сирий callback лишаємо дрібним сірим рядком лише якщо не впізнали
-    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
-        text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
-    }
-    text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
-
-    // Telegram hard limit ~4096
-    if (text.length > 4000) {
-        text = text.slice(0, 3990) + '…';
     }
 
     const destThread = isUserText ? threadOpts('USERS') : threadOpts('ACTIONS');
@@ -910,26 +939,67 @@ async function notifyAdmin(from, actionText, extra = {}) {
         ]
     };
 
-    const sendOpts = {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        reply_markup: markup,
-        ...thread
-    };
+    // Plain HTML (sendMessage fallback) — ID обовʼязково для Reply
+    let text =
+        `👤 <b>${escapeHtml(name)}</b>\n` +
+        `${escapeHtml(uname)}\n` +
+        `ID: <code>${from.id}</code>\n` +
+        `⚡ Дія: ${escapeHtml(humanAction)}`;
+    if (extra.messageText) {
+        text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
+    }
+    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
+        text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
+    }
+    if (histSnippet) {
+        text +=
+            `\n\n📜 <b>Останні повідомлення:</b>\n` +
+            `<blockquote expandable>${escapeHtml(histSnippet)}</blockquote>`;
+    }
+    text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
+    if (text.length > 4000) text = text.slice(0, 3990) + '…';
+
+    // Rich Message з акордеоном <details> (як аналітика / інфо)
+    const richParts = [
+        `<h2>👤 ${escapeHtml(name)}</h2>`,
+        `<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>`,
+        `<p>⚡ Дія: ${escapeHtml(humanAction)}</p>`
+    ];
+    if (extra.messageText) {
+        richParts.push(`<p>💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}</p>`);
+    }
+    if (extra.callbackData && humanAction.includes(extra.callbackData)) {
+        richParts.push(`<p>🔘 <code>${escapeHtml(extra.callbackData)}</code></p>`);
+    }
+    if (histSnippet) {
+        richParts.push(
+            `<details><summary>📜 Останні повідомлення</summary>` +
+                `<p>${escapeHtml(histSnippet).replace(/\n/g, '<br>')}</p>` +
+                `</details>`
+        );
+    }
+    richParts.push(`<p><i>↩️ Reply → надіслати юзеру</i></p>`);
+    // Прихований ID для extractUserIdFromNotifyText (якщо rich не кладе текст у .text)
+    richParts.push(`<p><code>ID: ${from.id}</code></p>`);
+    const richHtml = richParts.join('\n');
 
     let sentOk = false;
     try {
-        await bot.api.sendMessage(chatId, text, sendOpts);
+        await bot.api.sendRichMessage(
+            chatId,
+            { html: richHtml, skip_entity_detection: true },
+            { reply_markup: markup, ...thread }
+        );
         sentOk = true;
     } catch (e) {
-        console.error('[admin] notify sendMessage failed:', e.message);
+        console.warn('[admin] notify rich failed, plain:', e.message);
         try {
-            await bot.api.sendMessage(
-                chatId,
-                `👤 ${name}\nID: ${from.id}\nДія: ${humanAction}` +
-                    (extra.messageText ? `\n\n${String(extra.messageText).slice(0, 500)}` : ''),
-                { reply_markup: markup, ...thread }
-            );
+            await bot.api.sendMessage(chatId, text, {
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                reply_markup: markup,
+                ...thread
+            });
             sentOk = true;
         } catch (e2) {
             console.error('[admin] notify fallback failed:', e2.message);
@@ -2861,14 +2931,17 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
         }
     }
 
-    // Rich card with expandable transcript (accordion in Telegram clients)
+    // Rich card — акордеон <details> (як аналітика / інфо)
     const richHtml = `
 <h2>💬 Розмова з ${escapeHtml(namePart)}</h2>
 <p><code>${telegramId}</code></p>
-<blockquote expandable>${escapeHtml(transcript)}</blockquote>
+<details>
+<summary>📜 Переписка</summary>
+<p>${escapeHtml(transcript).replace(/\n/g, '<br>')}</p>
+</details>
 `.trim();
 
-    // Plain fallback (HTML parse_mode) — expandable blockquote works here too
+    // Plain fallback (HTML parse_mode)
     const plainFull =
         `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
         `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
