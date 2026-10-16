@@ -16,6 +16,7 @@
 const User = require('../models/User');
 const ErrorLog = require('../models/ErrorLog');
 const getBot = require('./bot');
+const { CROPS_DATA } = require('./crops');
 
 const ADMIN_CHAT_ID = () => process.env.ADMIN_CHAT_ID || null;
 
@@ -311,6 +312,28 @@ function fmtUaDate(d) {
     }
 }
 
+/** Map crop keys (tomato, lawn_grass…) to Ukrainian labels from CROPS_DATA. */
+function cropLabelUk(key) {
+    for (const cat of Object.values(CROPS_DATA || {})) {
+        if (cat?.items?.[key]?.uk) return cat.items[key].uk;
+    }
+    return key;
+}
+
+function formatCropsList(crops) {
+    const list = Array.isArray(crops) ? crops : [];
+    if (!list.length) return '—';
+    return list.map(cropLabelUk).join(', ');
+}
+
+/** Resolve geomag mode with legacy fallback (same logic as bot.js). */
+function resolveGeomagModeAdmin(u) {
+    if (u?.geomagMode === 'active' || u?.geomagMode === 'quiet' || u?.geomagMode === 'off') {
+        return u.geomagMode;
+    }
+    return (u?.alertTriggers?.magneticStorm === false) ? 'off' : 'quiet';
+}
+
 /** Full user profile as Rich Message HTML (tables). */
 function buildUserInfoHtml(u, from = null) {
     const tgId = u?.telegramId || from?.id || '—';
@@ -346,10 +369,11 @@ function buildUserInfoHtml(u, from = null) {
         quiet: 'тихий',
         off: 'вимкнено'
     };
-    const geomag = geomagModes[u?.geomagMode] || u?.geomagMode || 'тихий';
+    const geomagMode = resolveGeomagModeAdmin(u);
+    const geomag = geomagModes[geomagMode] || geomagMode || 'тихий';
     const cropsList = Array.isArray(u?.crops) ? u.crops : [];
     const cropsN = cropsList.length;
-    const cropsStr = cropsN ? cropsList.join(', ') : '—';
+    const cropsStr = formatCropsList(cropsList);
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
 
     const units = u?.units || {};
@@ -369,11 +393,13 @@ function buildUserInfoHtml(u, from = null) {
     const triggers = u?.alertTriggers || {};
     const alertLine = (key, label) =>
         `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
+    // Магнітні бурі — окремі режими (active / quiet / off), не legacy checkbox
+    const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
     const alertsStr = [
         alertLine('temperature', 'температура'),
         alertLine('precip', 'опади'),
         alertLine('airQuality', 'якість повітря'),
-        alertLine('magneticStorm', 'магнітні бурі')
+        `${geomagMark('active')} усі зміни · ${geomagMark('quiet')} тихий · ${geomagMark('off')} вимк`
     ].join(' · ');
 
     return `
@@ -392,7 +418,6 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Темп. зараз</td><td align="left"><b>${temp}</b></td></tr>
     <tr><td align="left">Сповіщення</td><td align="left">${notif}</td></tr>
     <tr><td align="left">Вечірній</td><td align="left">${evening}</td></tr>
-    <tr><td align="left">Магнітні бурі</td><td align="left">${escapeHtml(geomag)}</td></tr>
     <tr><td align="left">Культури</td><td align="left"><b>${cropsN}</b> — ${escapeHtml(cropsStr)}</td></tr>
   </tbody>
 </table>
@@ -471,10 +496,11 @@ function buildUserInfoPlain(u, from = null) {
         quiet: 'тихий',
         off: 'вимкнено'
     };
-    const geomag = geomagModes[u?.geomagMode] || u?.geomagMode || 'тихий';
+    const geomagMode = resolveGeomagModeAdmin(u);
+    const geomag = geomagModes[geomagMode] || geomagMode || 'тихий';
     const cropsList = Array.isArray(u?.crops) ? u.crops : [];
     const cropsN = cropsList.length;
-    const cropsStr = cropsN ? cropsList.join(', ') : '—';
+    const cropsStr = formatCropsList(cropsList);
     const temp = u?.lastState?.temp != null ? `${Math.round(u.lastState.temp)}°C` : '—';
 
     const units = u?.units || {};
@@ -494,11 +520,13 @@ function buildUserInfoPlain(u, from = null) {
     const triggers = u?.alertTriggers || {};
     const alertLine = (key, label) =>
         `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
+    // Магнітні бурі — окремі режими (active / quiet / off), не legacy checkbox
+    const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
     const alertsStr = [
         alertLine('temperature', 'температура'),
         alertLine('precip', 'опади'),
         alertLine('airQuality', 'якість повітря'),
-        alertLine('magneticStorm', 'магнітні бурі')
+        `${geomagMark('active')} усі зміни · ${geomagMark('quiet')} тихий · ${geomagMark('off')} вимк`
     ].join(' · ');
 
     return (
@@ -512,7 +540,6 @@ function buildUserInfoPlain(u, from = null) {
         `Темп. зараз: <b>${temp}</b>\n` +
         `Сповіщення: ${notif}\n` +
         `Вечірній: ${evening}\n` +
-        `Магнітні бурі: ${escapeHtml(geomag)}\n` +
         `Культури: <b>${cropsN}</b> — ${escapeHtml(cropsStr)}\n\n` +
         `<b>⚙️ Налаштування</b>\n` +
         `Одиниці: ${windU} · ${pressU} · ${tempU}\n` +
