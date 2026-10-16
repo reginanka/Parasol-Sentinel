@@ -393,14 +393,20 @@ function buildUserInfoHtml(u, from = null) {
     const triggers = u?.alertTriggers || {};
     const alertLine = (key, label) =>
         `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
-    // Магнітні бурі — окремі режими (active / quiet / off), не legacy checkbox
+    // Магнітні бурі — окремі режими (active / quiet / off), назви як у налаштуваннях
     const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
-    const alertsStr = [
-        alertLine('temperature', 'температура'),
-        alertLine('precip', 'опади'),
-        alertLine('airQuality', 'якість повітря'),
-        `${geomagMark('active')} усі зміни · ${geomagMark('quiet')} тихий · ${geomagMark('off')} вимк`
-    ].join(' · ');
+    const alertsStr =
+        [
+            alertLine('temperature', 'температура'),
+            alertLine('precip', 'опади'),
+            alertLine('airQuality', 'якість повітря')
+        ].join('<br>') +
+        '<br>' +
+        [
+            `${geomagMark('active')} всі сповіщ. магн.бур`,
+            `${geomagMark('quiet')} тихий`,
+            `${geomagMark('off')} без сповіщ. магн.бур`
+        ].join('<br>');
 
     return `
 <h1>👤 ${escapeHtml(name)}</h1>
@@ -431,7 +437,7 @@ function buildUserInfoHtml(u, from = null) {
     <tr><td align="left">Одиниці</td><td align="left">${windU} · ${pressU} · ${tempU}</td></tr>
     <tr><td align="left">Днів у прогнозі</td><td align="left"><b>${daysCount}</b></td></tr>
     <tr><td align="left">Метрики вечірнього</td><td align="left">${escapeHtml(metricsStr)}</td></tr>
-    <tr><td align="left">Алерти</td><td align="left">${escapeHtml(alertsStr)}</td></tr>
+    <tr><td align="left">Алерти</td><td align="left">${alertsStr}</td></tr>
   </tbody>
 </table>
 
@@ -520,14 +526,20 @@ function buildUserInfoPlain(u, from = null) {
     const triggers = u?.alertTriggers || {};
     const alertLine = (key, label) =>
         `${triggers[key] === false ? '⬜️' : '✅'} ${label}`;
-    // Магнітні бурі — окремі режими (active / quiet / off), не legacy checkbox
+    // Магнітні бурі — окремі режими (active / quiet / off), назви як у налаштуваннях
     const geomagMark = (m) => (geomagMode === m ? '✅' : '⬜️');
-    const alertsStr = [
-        alertLine('temperature', 'температура'),
-        alertLine('precip', 'опади'),
-        alertLine('airQuality', 'якість повітря'),
-        `${geomagMark('active')} усі зміни · ${geomagMark('quiet')} тихий · ${geomagMark('off')} вимк`
-    ].join(' · ');
+    const alertsStr =
+        [
+            alertLine('temperature', 'температура'),
+            alertLine('precip', 'опади'),
+            alertLine('airQuality', 'якість повітря')
+        ].join('\n') +
+        '\n' +
+        [
+            `${geomagMark('active')} всі сповіщ. магн.бур`,
+            `${geomagMark('quiet')} тихий`,
+            `${geomagMark('off')} без сповіщ. магн.бур`
+        ].join('\n');
 
     return (
         `👤 <b>${escapeHtml(name)}</b>\n` +
