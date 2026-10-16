@@ -1558,7 +1558,8 @@ async function handleAdminCallback(ctx) {
 <h1>📊 Аналітика Parasol Sentinel</h1>
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
 
-<h3>👥 Користувачі</h3>
+<details>
+<summary>👥 Користувачі</summary>
 <table bordered striped>
   <thead>
     <tr>
@@ -1576,8 +1577,10 @@ async function handleAdminCallback(ctx) {
     <tr><td align="left">🌆 Вечірній</td><td align="center"><b>${eveningOn}</b></td></tr>
   </tbody>
 </table>
+</details>
 
-<h3>🟢 Активність</h3>
+<details>
+<summary>🟢 Активність</summary>
 <table bordered striped>
   <thead>
     <tr>
@@ -1591,8 +1594,10 @@ async function handleAdminCallback(ctx) {
     <tr><td align="left">30 днів</td><td align="center"><b>${active30}</b></td></tr>
   </tbody>
 </table>
+</details>
 
-<h3>📬 Доставка</h3>
+<details>
+<summary>📬 Доставка</summary>
 <table bordered striped>
   <thead>
     <tr>
@@ -1608,8 +1613,10 @@ async function handleAdminCallback(ctx) {
   </tbody>
 </table>
 <p><i>⚠️ Лічильники ростуть після оновлення cron (usage.*)</i></p>
+</details>
 
-<h3>🌐 Мови</h3>
+<details>
+<summary>🌐 Мови</summary>
 <table bordered striped>
   <thead>
     <tr><th align="left">Мова</th><th align="center">К-сть</th></tr>
@@ -1618,8 +1625,10 @@ async function handleAdminCallback(ctx) {
     ${langRows}
   </tbody>
 </table>
+</details>
 
-<h3>📍 Топ міст</h3>
+<details>
+<summary>📍 Топ міст</summary>
 <table bordered striped>
   <thead>
     <tr><th align="left">Місто</th><th align="center">К-сть</th></tr>
@@ -1628,8 +1637,10 @@ async function handleAdminCallback(ctx) {
     ${cityRows}
   </tbody>
 </table>
+</details>
 
-<h3>❌ Помилки (кількість)</h3>
+<details>
+<summary>❌ Помилки (кількість)</summary>
 <table bordered striped>
   <thead>
     <tr>
@@ -1643,6 +1654,7 @@ async function handleAdminCallback(ctx) {
   </tbody>
 </table>
 <p><i>Деталі помилок — у гілці ERROR_ID (окремий топік)</i></p>
+</details>
 `.trim();
 
             const statsRefresh = refreshMarkup('adm|stats');
