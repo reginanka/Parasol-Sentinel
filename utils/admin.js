@@ -707,8 +707,32 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
 
     // Explicit known actions without callback payload
     if (!cb) {
-        if (actionText === '/start') return 'натиснув /start (старт бота)';
-        if (actionText === 'текст') return 'надіслав текст (пошук міста або повідомлення)';
+        if (actionText === 'bot_added_to_group') {
+            const gt = extra.groupTitle || extra.messageText || '';
+            const gid = extra.chatId != null ? extra.chatId : '';
+            const title = gt ? `«${gt}»` : (gid ? String(gid) : 'спільноту');
+            return `додав бота в групу ${title}`;
+        }
+        if (actionText === '/start') {
+            if (extra.isGroup || (extra.chatId != null && Number(extra.chatId) < 0)) {
+                const gt = extra.groupTitle ? ` «${extra.groupTitle}»` : '';
+                return `натиснув /start у групі${gt}`;
+            }
+            return 'натиснув /start (старт бота)';
+        }
+        if (actionText === 'текст' || actionText === 'text') {
+            if (extra.isGroup || (extra.chatId != null && Number(extra.chatId) < 0)) {
+                const gt = extra.groupTitle ? ` «${extra.groupTitle}»` : '';
+                return `написав у групі${gt}`;
+            }
+            return 'надіслав текст (пошук міста або повідомлення)';
+        }
+        if (typeof actionText === 'string' && actionText.startsWith('меню')) {
+            if (extra.isGroup || (extra.chatId != null && Number(extra.chatId) < 0)) {
+                const gt = extra.groupTitle ? ` «${extra.groupTitle}»` : '';
+                return `${actionText} (у групі${gt})`;
+            }
+        }
         return String(actionText || 'невідома дія');
     }
 
@@ -868,6 +892,25 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
 
+    // Group / community context (Telegram group chat ids are negative)
+    const srcChatId = extra.chatId != null ? Number(extra.chatId) : null;
+    let isGroupCtx =
+        Boolean(extra.isGroup) ||
+        (srcChatId != null && !Number.isNaN(srcChatId) && srcChatId < 0);
+    let groupTitle = extra.groupTitle || null;
+    if (isGroupCtx && !groupTitle && srcChatId != null) {
+        try {
+            const gDoc = await User.findOne({ telegramId: srcChatId, isGroupChat: true })
+                .select('firstName username')
+                .lean();
+            if (gDoc) groupTitle = gDoc.firstName || (gDoc.username ? `@${gDoc.username}` : null);
+        } catch (_) { /* ignore */ }
+    }
+    // Enrich extra so describeUserAction / history see the same flags
+    if (isGroupCtx) {
+        extra = { ...extra, isGroup: true, groupTitle: groupTitle || extra.groupTitle || null };
+    }
+
     // Стан ПІСЛЯ toggle (notifyAdmin у finally після DB update у bot.js)
     let userSnapshot = null;
     if (extra.callbackData || actionText === 'callback') {
@@ -879,16 +922,23 @@ async function notifyAdmin(from, actionText, extra = {}) {
     }
     const humanAction = describeUserAction(actionText, extra, userSnapshot);
 
-    // Текст / файл, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
+    // Текст / файл, який юзер пише боту → USERS; усе інше (кліки / службові події) → ACTIONS
+    // bot_added_to_group: messageText може містити назву групи — це НЕ особисте повідомлення юзера
     const userMsg = extra.userMsg || null;
     const userMediaDesc = userMsg ? describeMsgContent(userMsg) : null;
+    const isSystemGroupEvent =
+        actionText === 'bot_added_to_group' ||
+        actionText === 'bot_removed_from_group';
     const isUserText =
-        Boolean(extra.messageText) ||
-        Boolean(userMsg) ||
-        actionText === 'текст' ||
-        actionText === 'text' ||
-        actionText === 'файл' ||
-        actionText === 'file';
+        !isSystemGroupEvent &&
+        (
+            Boolean(extra.messageText) ||
+            Boolean(userMsg) ||
+            actionText === 'текст' ||
+            actionText === 'text' ||
+            actionText === 'файл' ||
+            actionText === 'file'
+        );
 
     // Історія гілки — лише для реального тексту (акордеон <details> у rich message)
     let histSnippet = '';
@@ -924,10 +974,17 @@ async function notifyAdmin(from, actionText, extra = {}) {
     };
 
     // Plain HTML (sendMessage fallback) — ID обовʼязково для Reply
+    const groupLine =
+        isGroupCtx
+            ? `👥 <b>Група:</b> ${escapeHtml(groupTitle || 'спільнота')}` +
+              (srcChatId != null ? ` · <code>${srcChatId}</code>` : '') +
+              `\n`
+            : '';
     let text =
         `👤 <b>${escapeHtml(name)}</b>\n` +
         `${escapeHtml(uname)}\n` +
         `ID: <code>${from.id}</code>\n` +
+        groupLine +
         `⚡ Дія: ${escapeHtml(humanAction)}`;
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
@@ -960,9 +1017,16 @@ async function notifyAdmin(from, actionText, extra = {}) {
     // Rich Message з акордеоном <details> (як аналітика / інфо)
     const richParts = [
         `<h2>👤 ${escapeHtml(name)}</h2>`,
-        `<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>`,
-        `<p>⚡ Дія: ${escapeHtml(humanAction)}</p>`
+        `<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>`
     ];
+    if (isGroupCtx) {
+        richParts.push(
+            `<p>👥 <b>Група:</b> ${escapeHtml(groupTitle || 'спільнота')}` +
+            (srcChatId != null ? ` · <code>${srcChatId}</code>` : '') +
+            `</p>`
+        );
+    }
+    richParts.push(`<p>⚡ Дія: ${escapeHtml(humanAction)}</p>`);
     if (extra.messageText) {
         richParts.push(`<p>💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}</p>`);
     }
@@ -1084,17 +1148,26 @@ async function notifyAdmin(from, actionText, extra = {}) {
     }
 
     // Mirror user text / media into HISTORY conversation card (+ asset file with #id)
-    if (userMsg) {
-        try {
-            await appendSupportConversation(bot.api, from.id, '👤 Юзер', userMsg);
-        } catch (e) {
-            console.warn('[admin] support log media from notify failed:', e.message);
-        }
-    } else if (extra.messageText) {
-        try {
-            await appendSupportConversation(bot.api, from.id, '👤 Юзер', String(extra.messageText));
-        } catch (e) {
-            console.warn('[admin] support log from notify failed:', e.message);
+    // Не пишемо службові події «додали бота в групу» в особисту історію діалогу
+    if (!isSystemGroupEvent) {
+        const whoLabel = isGroupCtx
+            ? `👤 Юзер → 👥 ${groupTitle || 'група'}`
+            : '👤 Юзер';
+        if (userMsg) {
+            try {
+                await appendSupportConversation(bot.api, from.id, whoLabel, userMsg);
+            } catch (e) {
+                console.warn('[admin] support log media from notify failed:', e.message);
+            }
+        } else if (extra.messageText) {
+            try {
+                const body = isGroupCtx
+                    ? `[група ${groupTitle || srcChatId}] ${String(extra.messageText)}`
+                    : String(extra.messageText);
+                await appendSupportConversation(bot.api, from.id, whoLabel, body);
+            } catch (e) {
+                console.warn('[admin] support log from notify failed:', e.message);
+            }
         }
     }
 
@@ -3536,7 +3609,11 @@ async function appendUserDayActions(api, from, humanAction, extra = {}) {
 
     const dayKey = kyivDayKey();
     const timeHms = kyivTimeHms();
-    const line = `${timeHms} · ${humanAction}`;
+    const groupTag =
+        extra.isGroup || (extra.chatId != null && Number(extra.chatId) < 0)
+            ? `👥 ${extra.groupTitle || extra.chatId} · `
+            : '';
+    const line = `${timeHms} · ${groupTag}${humanAction}`;
 
     let user = await User.findOne({ telegramId: Number(from.id) });
     if (!user) {
