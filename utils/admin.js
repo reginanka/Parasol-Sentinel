@@ -1148,23 +1148,35 @@ async function notifyAdmin(from, actionText, extra = {}) {
     }
 
     // Mirror user text / media into HISTORY conversation card (+ asset file with #id)
-    // Не пишемо службові події «додали бота в групу» в особисту історію діалогу
+    // Група → окрема картка на group chat id; особисте → як раніше
+    // Службові події «додали бота» не пишемо в HISTORY повідомлень
     if (!isSystemGroupEvent) {
-        const whoLabel = isGroupCtx
-            ? `👤 Юзер → 👥 ${groupTitle || 'група'}`
-            : '👤 Юзер';
+        const histOwnerId = isGroupCtx && srcChatId != null ? srcChatId : from.id;
+        const actorLabel =
+            from.username
+                ? `@${from.username}`
+                : [from.first_name, from.last_name].filter(Boolean).join(' ') ||
+                  displayName(from) ||
+                  String(from.id);
+        const whoLabel = isGroupCtx ? `👤 ${actorLabel}` : '👤 Юзер';
+        const histMeta = isGroupCtx
+            ? { isGroup: true, groupTitle: groupTitle || null }
+            : {};
         if (userMsg) {
             try {
-                await appendSupportConversation(bot.api, from.id, whoLabel, userMsg);
+                await appendSupportConversation(bot.api, histOwnerId, whoLabel, userMsg, histMeta);
             } catch (e) {
                 console.warn('[admin] support log media from notify failed:', e.message);
             }
         } else if (extra.messageText) {
             try {
-                const body = isGroupCtx
-                    ? `[група ${groupTitle || srcChatId}] ${String(extra.messageText)}`
-                    : String(extra.messageText);
-                await appendSupportConversation(bot.api, from.id, whoLabel, body);
+                await appendSupportConversation(
+                    bot.api,
+                    histOwnerId,
+                    whoLabel,
+                    String(extra.messageText),
+                    histMeta
+                );
             } catch (e) {
                 console.warn('[admin] support log from notify failed:', e.message);
             }
@@ -3609,25 +3621,45 @@ async function appendUserDayActions(api, from, humanAction, extra = {}) {
 
     const dayKey = kyivDayKey();
     const timeHms = kyivTimeHms();
-    const groupTag =
-        extra.isGroup || (extra.chatId != null && Number(extra.chatId) < 0)
-            ? `👥 ${extra.groupTitle || extra.chatId} · `
-            : '';
-    const line = `${timeHms} · ${groupTag}${humanAction}`;
 
-    let user = await User.findOne({ telegramId: Number(from.id) });
+    // Group context → окрема денна картка на документі групи (telegramId = chat.id)
+    const srcChatId = extra.chatId != null ? Number(extra.chatId) : null;
+    const isGroup =
+        Boolean(extra.isGroup) ||
+        (srcChatId != null && !Number.isNaN(srcChatId) && srcChatId < 0);
+    const ownerId = isGroup && srcChatId != null ? srcChatId : Number(from.id);
+
+    const actorName =
+        from.username
+            ? `@${from.username}`
+            : [from.first_name, from.last_name].filter(Boolean).join(' ') ||
+              displayName(from) ||
+              String(from.id);
+
+    // У групі: хто тицьнув · дія; особисто: лише дія
+    const line = isGroup
+        ? `${timeHms} · ${actorName} · ${humanAction}`
+        : `${timeHms} · ${humanAction}`;
+
+    let user = await User.findOne({ telegramId: ownerId });
     if (!user) {
+        const insert = isGroup
+            ? {
+                  telegramId: ownerId,
+                  isGroupChat: true,
+                  firstName: extra.groupTitle || `Group ${ownerId}`,
+                  accessLevel: 'unlimited'
+              }
+            : {
+                  telegramId: ownerId,
+                  accessLevel: 'unlimited',
+                  username: from.username || undefined,
+                  firstName: from.first_name || undefined,
+                  lastName: from.last_name || undefined
+              };
         user = await User.findOneAndUpdate(
-            { telegramId: Number(from.id) },
-            {
-                $setOnInsert: {
-                    telegramId: Number(from.id),
-                    accessLevel: 'unlimited',
-                    username: from.username || undefined,
-                    firstName: from.first_name || undefined,
-                    lastName: from.last_name || undefined
-                }
-            },
+            { telegramId: ownerId },
+            { $setOnInsert: insert },
             { upsert: true, new: true }
         );
     }
@@ -3652,18 +3684,25 @@ async function appendUserDayActions(api, from, humanAction, extra = {}) {
 
     // Summary from live Mongo state vs baseline (not from log text)
     const summary = buildActionDaySummaryFromBaseline(baseline, user);
-    const namePart =
-        user.username
-            ? `@${user.username}`
-            : [user.firstName, user.lastName].filter(Boolean).join(' ') ||
-              displayName(from) ||
-              'user';
+    const groupTitle =
+        extra.groupTitle ||
+        (isGroup ? user.firstName || user.username || `Group ${ownerId}` : null);
+    const namePart = isGroup
+        ? groupTitle || `Group ${ownerId}`
+        : user.username
+          ? `@${user.username}`
+          : [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+            displayName(from) ||
+            'user';
     const dateUa = formatDayKeyUa(dayKey);
 
     const listHtml = lines.map((l) => `<li>${escapeHtml(l)}</li>`).join('\n');
+    const titleHtml = isGroup
+        ? `⚡ Дії в групі — ${escapeHtml(namePart)}`
+        : `⚡ Дії користувача — ${escapeHtml(namePart)}`;
     const richHtml = `
-<h2>⚡ Дії користувача — ${escapeHtml(namePart)}</h2>
-<p><code>${from.id}</code> · ${escapeHtml(dateUa)}</p>
+<h2>${titleHtml}</h2>
+<p><code>${ownerId}</code> · ${escapeHtml(dateUa)}</p>
 <details>
 <summary>📋 Список дій за день (${lines.length})</summary>
 <ol>
@@ -3673,9 +3712,12 @@ ${listHtml}
 <p><b>Підсумок змін:</b> ${escapeHtml(summary)}</p>
 `.trim();
 
+    const plainTitle = isGroup
+        ? `⚡ <b>Дії в групі — ${escapeHtml(namePart)}</b>`
+        : `⚡ <b>Дії користувача — ${escapeHtml(namePart)}</b>`;
     const plainFull =
-        `⚡ <b>Дії користувача — ${escapeHtml(namePart)}</b>\n` +
-        `<code>${from.id}</code> · ${escapeHtml(dateUa)}\n\n` +
+        `${plainTitle}\n` +
+        `<code>${ownerId}</code> · ${escapeHtml(dateUa)}\n\n` +
         `<blockquote expandable>${escapeHtml(lines.join('\n'))}</blockquote>\n\n` +
         `<b>Підсумок змін:</b> ${escapeHtml(summary)}`;
 
@@ -3684,8 +3726,7 @@ ${listHtml}
             ? { message_thread_id: Number(thrId) }
             : {};
 
-    let newMsgId = canEdit ? prev.messageId : null;
-
+    let newMsgId = null;
     try {
         if (canEdit) {
             try {
@@ -3765,7 +3806,7 @@ ${listHtml}
  * Media → line has type + #assetId; asset itself is sent as a separate HISTORY message.
  * Over 3500 chars → full content archived as .txt, card keeps only the fresh tail.
  */
-async function appendSupportConversation(api, telegramId, who, msgOrText) {
+async function appendSupportConversation(api, telegramId, who, msgOrText, meta = {}) {
     const chatId = ADMIN_CHAT_ID();
     if (!chatId || !telegramId) return;
 
@@ -3786,9 +3827,21 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
     // lean — без Mongoose document, щоб не чіпати __v і не конфліктувати з кроном
     let user = await User.findOne({ telegramId: Number(telegramId) }).lean();
     if (!user) {
+        const isGroupInsert = Boolean(meta.isGroup) || Number(telegramId) < 0;
         user = await User.findOneAndUpdate(
             { telegramId: Number(telegramId) },
-            { $setOnInsert: { telegramId: Number(telegramId), accessLevel: 'unlimited' } },
+            {
+                $setOnInsert: {
+                    telegramId: Number(telegramId),
+                    accessLevel: 'unlimited',
+                    ...(isGroupInsert
+                        ? {
+                              isGroupChat: true,
+                              firstName: meta.groupTitle || `Group ${telegramId}`
+                          }
+                        : {})
+                }
+            },
             { upsert: true, new: true, lean: true }
         );
     }
@@ -3806,10 +3859,15 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
     const prev = prevHist.transcript || '';
     let transcript = prev ? `${prev}\n${line}` : line;
 
-    const namePart =
-        user.username
-            ? `@${user.username}`
-            : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
+    const isGroupCard =
+        Boolean(meta.isGroup) ||
+        Boolean(user.isGroupChat) ||
+        Number(telegramId) < 0;
+    const namePart = isGroupCard
+        ? (meta.groupTitle || user.firstName || user.username || `Group ${telegramId}`)
+        : user.username
+          ? `@${user.username}`
+          : [user.firstName, user.lastName].filter(Boolean).join(' ') || 'user';
 
     // Over char limit → archive full transcript as .txt (no data loss), keep fresh tail in card
     const MAX_TRANSCRIPT = 3500;
@@ -3830,8 +3888,11 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
     }
 
     // Rich card — акордеон <details> (як аналітика / інфо)
+    const cardTitle = isGroupCard
+        ? `💬 Повідомлення в групі — ${escapeHtml(namePart)}`
+        : `💬 Розмова з ${escapeHtml(namePart)}`;
     const richHtml = `
-<h2>💬 Розмова з ${escapeHtml(namePart)}</h2>
+<h2>${cardTitle}</h2>
 <p><code>${telegramId}</code></p>
 <details>
 <summary>📜 Переписка</summary>
@@ -3840,9 +3901,11 @@ async function appendSupportConversation(api, telegramId, who, msgOrText) {
 `.trim();
 
     // Plain fallback — теж expandable, щоб не «вбивати» акордеон
-    const plainFull =
-        `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
-        `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
+    const plainFull = isGroupCard
+        ? `💬 <b>Повідомлення в групі — ${escapeHtml(namePart)}</b> · <code>${telegramId}</code>\n\n` +
+          `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`
+        : `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
+          `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
 
     const thrId = topicId('HISTORY');
     const thr =
