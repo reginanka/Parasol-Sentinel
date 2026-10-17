@@ -1017,7 +1017,7 @@ bot.on(
     }
 );
 
-// Same for admin group/supergroup (not channel): reply with photo etc.
+// Admin group/supergroup media (reply to user) OR user media → USERS + HISTORY
 bot.on(
     [
         "message:photo",
@@ -1030,11 +1030,51 @@ bot.on(
     ],
     async (ctx) => {
         try {
-            if (!isAdminChat(ctx.chat?.id)) return;
             await connectDB();
-            await handleAdminChannelText(ctx);
+            // Admin channel: handle reply / ignore orphan media
+            if (isAdminChat(ctx.chat?.id)) {
+                await handleAdminChannelText(ctx);
+                return;
+            }
+            // User sent a file/photo/voice to the bot → notify USERS + HISTORY (with #assetId)
+            if (!ctx.from) return;
+            const lang = getLang(ctx);
+            await touchUserProfile(ctx.from, lang);
+            const msg = ctx.message || {};
+            const d = {
+                photo: msg.photo,
+                document: msg.document,
+                video: msg.video,
+                animation: msg.animation,
+                voice: msg.voice,
+                audio: msg.audio,
+                sticker: msg.sticker,
+                caption: msg.caption,
+                text: msg.text
+            };
+            // Build a lightweight description for ACTIONS-style action label
+            let mediaLabel = 'файл';
+            if (msg.photo) mediaLabel = 'фото';
+            else if (msg.document) mediaLabel = msg.document.file_name ? `документ (${msg.document.file_name})` : 'документ';
+            else if (msg.video) mediaLabel = 'відео';
+            else if (msg.animation) mediaLabel = 'gif';
+            else if (msg.voice) mediaLabel = 'голосове';
+            else if (msg.audio) mediaLabel = 'аудіо';
+            else if (msg.sticker) mediaLabel = 'sticker';
+
+            await notifyAdmin(ctx.from, 'файл', {
+                chatId: ctx.chat?.id,
+                messageText: msg.caption || undefined,
+                userMsg: msg
+            });
+
+            // Confirm to user (same as free-text support)
+            const mode = await getBotMode(ctx.from.id);
+            if (mode === 'support' || mode === 'idle' || !mode) {
+                await ctx.reply(dict[lang].supportAccepted).catch(() => {});
+            }
         } catch (e) {
-            console.error('[admin] message media error:', e.message);
+            console.error('[bot] user/admin media error:', e.message);
         }
     }
 );
