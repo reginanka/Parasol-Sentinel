@@ -700,7 +700,11 @@ bot.command("start", async (ctx) => {
     const lang = getLang(ctx);
     await connectDB();
     await touchUserProfile(ctx.from, lang);
-    await notifyAdmin(ctx.from, '/start', { chatId: ctx.chat?.id });
+    await notifyAdmin(ctx.from, '/start', {
+        chatId: ctx.chat?.id,
+        isGroup: isGroupCtx(ctx),
+        groupTitle: isGroupCtx(ctx) ? (ctx.chat?.title || null) : null
+    });
 
     // Group / supergroup — separate onboarding, no mini-app / no agro
     if (isGroupCtx(ctx)) {
@@ -763,9 +767,11 @@ bot.on('my_chat_member', async (ctx) => {
             if (ctx.from) await touchUserProfile(ctx.from, lang);
             await sendGroupWelcome(ctx, lang);
             try {
+                // groupTitle окремо — НЕ messageText, інакше падає в TOPIC_USERS / особисту HISTORY
                 await notifyAdmin(ctx.from || { id: 0, first_name: 'system' }, 'bot_added_to_group', {
                     chatId: chat.id,
-                    messageText: chat.title || String(chat.id)
+                    isGroup: true,
+                    groupTitle: chat.title || String(chat.id)
                 });
             } catch (_e) {}
         }
@@ -960,6 +966,9 @@ bot.on("message:text", async (ctx) => {
     if (!isAdminChat(ctx.chat?.id) && ctx.from) {
         await connectDB();
         await touchUserProfile(ctx.from, lang);
+        const groupMeta = isGroupCtx(ctx)
+            ? { isGroup: true, groupTitle: ctx.chat?.title || null }
+            : { isGroup: false };
         if (isMenuButton) {
             let menuAction = 'меню';
             if (isSettings) menuAction = 'меню: налаштування';
@@ -968,9 +977,13 @@ bot.on("message:text", async (ctx) => {
             else if (isAgroAnalytics) menuAction = 'меню: агро-аналітика';
             else if (isAgroForecast) menuAction = 'меню: агро-прогноз';
             else if (isArchive) menuAction = 'меню: архів';
-            await notifyAdmin(ctx.from, menuAction, { chatId: ctx.chat?.id });
+            await notifyAdmin(ctx.from, menuAction, { chatId: ctx.chat?.id, ...groupMeta });
         } else {
-            await notifyAdmin(ctx.from, 'текст', { chatId: ctx.chat?.id, messageText: query });
+            await notifyAdmin(ctx.from, 'текст', {
+                chatId: ctx.chat?.id,
+                messageText: query,
+                ...groupMeta
+            });
         }
     }
 
@@ -1235,7 +1248,9 @@ bot.on(
             await notifyAdmin(ctx.from, 'файл', {
                 chatId: ctx.chat?.id,
                 messageText: msg.caption || undefined,
-                userMsg: msg
+                userMsg: msg,
+                isGroup: isGroupCtx(ctx),
+                groupTitle: isGroupCtx(ctx) ? (ctx.chat?.title || null) : null
             });
 
             // Confirm to user (same as free-text support)
@@ -3134,7 +3149,9 @@ bot.on("callback_query:data", async (ctx) => {
             try {
                 await notifyAdmin(ctx.from, 'callback', {
                     chatId: ctx.callbackQuery && ctx.callbackQuery.message && ctx.callbackQuery.message.chat && ctx.callbackQuery.message.chat.id,
-                    callbackData: ctx.callbackQuery && ctx.callbackQuery.data
+                    callbackData: ctx.callbackQuery && ctx.callbackQuery.data,
+                    isGroup: isGroupCtx(ctx),
+                    groupTitle: isGroupCtx(ctx) ? ((ctx.chat && ctx.chat.title) || (ctx.callbackQuery && ctx.callbackQuery.message && ctx.callbackQuery.message.chat && ctx.callbackQuery.message.chat.title) || null) : null
                 });
             } catch (e) {
                 console.error('[admin] notify on callback failed:', e.message);
