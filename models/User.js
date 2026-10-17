@@ -97,13 +97,16 @@ const UserSchema = new mongoose.Schema({
     /**
      * Daily action digest in TOPIC_HISTORY_ACTIONS / HISTORY_ACTIONS:
      * one editable Telegram message per user per Kyiv calendar day.
-     * lines[] = timed human-readable actions; summary = net changes text.
+     * lines[] = full timed action log (accordion).
+     * baseline = settings snapshot at first action of the day (for net summary).
+     * summary = only real diffs vs baseline (toggle back → disappears from summary).
      * No nested defaults — same VersionError protection as supportHistory.
      */
     actionHistory: {
         dayKey: String, // YYYY-MM-DD Europe/Kyiv
         messageId: Number,
         lines: [String],
+        baseline: Object, // plain JSON snapshot of settings at day start
         summary: String,
         updatedAt: Date
     },
