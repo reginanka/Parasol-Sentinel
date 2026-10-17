@@ -941,6 +941,15 @@ async function notifyAdmin(from, actionText, extra = {}) {
             `\n\n📜 <b>Останні повідомлення:</b>\n` +
             `<blockquote expandable>${escapeHtml(histSnippet)}</blockquote>`;
     }
+    // Machine-readable context for reply_to (rich often drops visible text)
+    if (extra.messageText) {
+        text += `\n<code>#ctx_msg:${escapeHtml(String(extra.messageText).slice(0, 200))}#ctx_end</code>`;
+    } else if (userMediaDesc && (userMediaDesc.media || userMediaDesc.text)) {
+        const mctx = [userMediaDesc.media, userMediaDesc.text].filter(Boolean).join(' ').slice(0, 200);
+        text += `\n<code>#ctx_msg:${escapeHtml(mctx)}#ctx_end</code>`;
+    } else if (!isUserText && humanAction) {
+        text += `\n<code>#ctx_act:${escapeHtml(String(humanAction).slice(0, 200))}#ctx_end</code>`;
+    }
     text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
     if (text.length > 4000) text = text.slice(0, 3990) + '…';
 
@@ -961,6 +970,19 @@ async function notifyAdmin(from, actionText, extra = {}) {
             `<details><summary>📜 Останні повідомлення</summary>` +
                 `<p>${escapeHtml(histSnippet).replace(/\n/g, '<br>')}</p>` +
                 `</details>`
+        );
+    }
+    // Machine markers + ID (rich reply_to often only keeps code/text fragments)
+    if (extra.messageText) {
+        richParts.push(
+            `<p><code>#ctx_msg:${escapeHtml(String(extra.messageText).slice(0, 200))}#ctx_end</code></p>`
+        );
+    } else if (userMediaDesc && (userMediaDesc.media || userMediaDesc.text)) {
+        const mctx = [userMediaDesc.media, userMediaDesc.text].filter(Boolean).join(' ').slice(0, 200);
+        richParts.push(`<p><code>#ctx_msg:${escapeHtml(mctx)}#ctx_end</code></p>`);
+    } else if (!isUserText && humanAction) {
+        richParts.push(
+            `<p><code>#ctx_act:${escapeHtml(String(humanAction).slice(0, 200))}#ctx_end</code></p>`
         );
     }
     richParts.push(`<p><i>↩️ Reply → надіслати юзеру</i></p>`);
@@ -1024,6 +1046,37 @@ async function notifyAdmin(from, actionText, extra = {}) {
         } catch (e3) {
             console.error('[admin] error-topic notify failed:', e3.message);
         }
+    }
+
+    // Remember last inbound for reliable «↪️ на …» when reply_to has no text (rich cards)
+    try {
+        let lnKind = 'action';
+        let lnText = humanAction || actionText || '';
+        if (extra.messageText) {
+            lnKind = 'message';
+            lnText = String(extra.messageText).slice(0, 300);
+        } else if (userMsg) {
+            lnKind = 'message';
+            const d = userMediaDesc || describeMsgContent(userMsg);
+            lnText = [d.media, d.text].filter(Boolean).join(' ').slice(0, 300) || 'файл';
+        }
+        if (lnText) {
+            await User.findOneAndUpdate(
+                { telegramId: Number(from.id) },
+                {
+                    $set: {
+                        'supportHistory.lastNotify': {
+                            kind: lnKind,
+                            text: lnText,
+                            at: new Date()
+                        }
+                    }
+                },
+                { upsert: false }
+            );
+        }
+    } catch (e) {
+        console.warn('[admin] lastNotify save failed:', e.message);
     }
 
     // Mirror user text / media into HISTORY conversation card (+ asset file with #id)
@@ -2664,34 +2717,69 @@ function formatReplyContextLine(ctx) {
     return `↪️ на ваше повідомлення: «${t}»`;
 }
 
+/** Flatten reply_to / rich payload into one searchable string (same idea as extractUserId). */
+function flattenReplyToText(replyTo) {
+    if (replyTo == null) return '';
+    if (typeof replyTo === 'string') return replyTo;
+    const parts = [
+        replyTo.text,
+        replyTo.caption,
+        replyTo.quote?.text,
+        replyTo.quote?.html,
+        // Rich Message may expose structured HTML / plain fields
+        replyTo.rich_text,
+        replyTo.richText,
+        typeof replyTo.rich_message === 'string' ? replyTo.rich_message : null,
+        replyTo.rich_message?.html,
+        replyTo.rich_message?.text
+    ];
+    // Entities alt / description sometimes hold visible text
+    if (Array.isArray(replyTo.entities)) {
+        for (const e of replyTo.entities) {
+            if (e?.url) parts.push(e.url);
+            if (e?.description) parts.push(e.description);
+        }
+    }
+    parts.push(JSON.stringify(replyTo));
+    return parts.filter(Boolean).join('\n');
+}
+
 /**
- * Extract what the admin is replying to from the notify card (USERS / ACTIONS).
+ * Sync parse of notify card text.
  * Returns { type: 'message'|'action'|null, text: string, isAction: boolean }
  */
 function extractReplyContext(replyTo) {
     if (!replyTo) return { type: null, text: '', isAction: false };
-    const s = [replyTo.text, replyTo.caption, replyTo.quote?.text]
-        .filter(Boolean)
-        .join('\n');
+    const s = flattenReplyToText(replyTo);
 
-    // User free-text card: line with 💬 after the header
-    const msgMatch = s.match(/💬\s*([\s\S]+?)(?:\n\n|$)/);
-    // Prefer explicit user message block (not the footer hint)
+    // Machine markers we embed in notify cards (survive rich → reply_to better than emoji lines)
+    const markerMsg = s.match(/#ctx_msg:([\s\S]*?)(?:#ctx_end|ID:\s*\d{5,15}|$)/i);
+    const markerAct = s.match(/#ctx_act:([\s\S]*?)(?:#ctx_end|ID:\s*\d{5,15}|$)/i);
+
     let userText = '';
-    if (msgMatch) {
-        userText = msgMatch[1].replace(/↩️.*$/s, '').trim();
-        // strip HTML tags if any leaked
-        userText = userText.replace(/<[^>]+>/g, '').trim();
-    }
-
-    // Action line: ⚡ Дія: …
     let actionText = '';
-    const actMatch = s.match(/⚡\s*Дія:\s*(.+)/i);
-    if (actMatch) {
-        actionText = actMatch[1].replace(/<[^>]+>/g, '').trim();
+
+    if (markerMsg) {
+        userText = markerMsg[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    if (markerAct) {
+        actionText = markerAct[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    // Thread-based detection (forum topics)
+    // Fallback: human-readable lines from plain / partial rich dumps
+    if (!userText) {
+        const msgMatch = s.match(/💬\s*([^\n<#][^\n]{0,400})/);
+        if (msgMatch) {
+            userText = msgMatch[1].replace(/↩️.*$/, '').replace(/<[^>]+>/g, '').trim();
+        }
+    }
+    if (!actionText) {
+        const actMatch = s.match(/⚡\s*Дія:\s*([^\n<#][^\n]{0,300})/i);
+        if (actMatch) {
+            actionText = actMatch[1].replace(/<[^>]+>/g, '').trim();
+        }
+    }
+
     const actionsTopic = topicId('ACTIONS');
     const usersTopic = topicId('USERS');
     const thr = replyTo.message_thread_id != null ? Number(replyTo.message_thread_id) : null;
@@ -2700,22 +2788,69 @@ function extractReplyContext(replyTo) {
     const thrIsUsers =
         usersTopic != null && thr != null && Number(usersTopic) === thr;
 
-    // Heuristic: pure action cards usually have no 💬 user message body
     const looksLikeAction =
         thrIsActions ||
-        (!userText && !!actionText) ||
-        (!thrIsUsers && !!actionText && !/💬/.test(s));
+        Boolean(markerAct && !markerMsg) ||
+        (!userText && !!actionText);
 
     if (userText && !looksLikeAction) {
-        return { type: 'message', text: userText, isAction: false };
+        return { type: 'message', text: userText.slice(0, 300), isAction: false };
     }
     if (actionText) {
-        return { type: 'action', text: actionText, isAction: true };
+        return { type: 'action', text: actionText.slice(0, 300), isAction: true };
     }
     if (userText) {
-        return { type: 'message', text: userText, isAction: false };
+        return { type: 'message', text: userText.slice(0, 300), isAction: false };
     }
     return { type: null, text: '', isAction: thrIsActions };
+}
+
+/**
+ * Reliable context for admin → user reply.
+ * 1) Parse reply_to card
+ * 2) Fallback: last inbound stored on User.supportHistory.lastNotify
+ * 3) Fallback: last «👤 Юзер» line from transcript
+ */
+async function resolveReplyContext(replyTo, targetId) {
+    let ctx = extractReplyContext(replyTo);
+    if (ctx && ctx.text) return ctx;
+
+    if (!targetId) return ctx || { type: null, text: '', isAction: false };
+
+    try {
+        const u = await User.findOne({ telegramId: Number(targetId) })
+            .select('supportHistory')
+            .lean();
+        const ln = u?.supportHistory?.lastNotify;
+        if (ln && ln.text) {
+            const isAct = ln.kind === 'action';
+            return {
+                type: isAct ? 'action' : 'message',
+                text: String(ln.text).slice(0, 300),
+                isAction: isAct
+            };
+        }
+        // Last user line from transcript: "[dd.mm, hh:mm] 👤 Юзер: …"
+        const tr = u?.supportHistory?.transcript || '';
+        const lines = tr.split('\n').filter(Boolean);
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+            if (/👤\s*Юзер:/i.test(line)) {
+                let body = line.replace(/^.*?👤\s*Юзер:\s*/i, '').trim();
+                // drop media label prefix like "📷 фото #A123-1 "
+                body = body.replace(/^(📷|📎|🎬|🎞|🎤|🎵|😊)[^:]*#A[\w-]+\s*/u, '').trim();
+                if (body) {
+                    return { type: 'message', text: body.slice(0, 300), isAction: false };
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[admin] resolveReplyContext DB fallback failed:', e.message);
+    }
+
+    // Thread-only hint
+    if (ctx && ctx.isAction) return ctx;
+    return ctx || { type: null, text: '', isAction: false };
 }
 
 /**
@@ -3779,7 +3914,7 @@ async function handleAdminChannelText(ctx) {
         const targetId = extractUserIdFromNotifyText(replyTo);
         if (targetId) {
             try {
-                const replyCtx = extractReplyContext(replyTo);
+                const replyCtx = await resolveReplyContext(replyTo, targetId);
                 const kind = await sendAdminReplyToUser(api, targetId, msg, replyCtx);
                 if (!kind) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
