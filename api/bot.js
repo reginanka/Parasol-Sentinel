@@ -615,13 +615,9 @@ function ownerTelegramId(ctx) {
     return ctx.from?.id;
 }
 
-/** Reply keyboard for groups: settings only (no agro / no mini-app) */
-function buildGroupReplyKeyboard(lang) {
-    return {
-        keyboard: [[{ text: dict[lang].settingsBtn }]],
-        resize_keyboard: true,
-        is_persistent: false
-    };
+/** Groups: never show reply keyboard — only remove any leftover one */
+function buildGroupReplyKeyboard(_lang) {
+    return { remove_keyboard: true };
 }
 
 /** Reply keyboard for private chats */
@@ -710,10 +706,25 @@ async function sendGroupWelcome(ctx, lang) {
         await setBotMode(ctx.from.id, 'awaiting_city');
     }
 
-    await ctx.reply(text, {
+    // Groups: first strip any reply-keyboard, then attach inline buttons under the message
+    const sent = await ctx.reply(text, {
         parse_mode: 'Markdown',
-        reply_markup: buildWelcomeReplyKeyboard(lang)
+        reply_markup: { remove_keyboard: true }
     });
+    try {
+        await ctx.api.editMessageReplyMarkup({
+            chat_id: ctx.chat.id,
+            message_id: sent.message_id,
+            reply_markup: buildWelcomeReplyKeyboard(lang)
+        });
+    } catch (e) {
+        // Fallback: second message with inline only
+        console.warn('[bot] group welcome inline markup:', e.message);
+        await ctx.reply(text, {
+            parse_mode: 'Markdown',
+            reply_markup: buildWelcomeReplyKeyboard(lang)
+        }).catch(() => {});
+    }
 }
 
 // /start command
@@ -1529,13 +1540,13 @@ bot.on("callback_query:data", async (ctx) => {
                 reply_markup: afterCityKeyboard
             });
 
-            // Re-show reply keyboard (group: settings only; private: settings + agro)
+            // Groups: no reply keyboard at all. Private: settings + agro reply keyboard
             if (isGroup) {
                 await ctx.reply(
                     lang === 'uk'
                         ? '✅ Місто спільноти збережено.'
                         : '✅ Community city saved.',
-                    { reply_markup: buildGroupReplyKeyboard(lang) }
+                    { reply_markup: { remove_keyboard: true } }
                 );
                 await clearChatMenuButton(ctx.api, chat.id);
             } else {
