@@ -729,6 +729,7 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
         open_help: 'відкрив допомогу',
         forecast_menu: 'відкрив налаштування вечірнього прогнозу',
         alert_settings: 'відкрив налаштування сповіщень',
+        'alert_settings|new': 'відкрив налаштування сповіщень',
         change_city: 'хоче змінити місто',
         delete_city: 'видалив місто',
         crops_main: 'відкрив меню культур',
@@ -741,6 +742,8 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
         noop: 'натиснув службову кнопку (без дії)'
     };
     if (map[cb]) return map[cb];
+    // alert_settings|new, alert_settings|… — відкриття меню алертів
+    if (head === 'alert_settings') return 'відкрив налаштування сповіщень';
     if (parts.length === 1 && map[head]) return map[head];
 
     if (head === 'forecast') {
@@ -2833,18 +2836,19 @@ async function archiveTranscriptToFile(api, chatId, telegramId, namePart, fullTr
 }
 
 /**
- * Kyiv HH:MM for action log lines.
+ * Kyiv HH:MM:SS for action log lines (seconds help order same-minute clicks).
  */
-function kyivTimeHm(d = new Date()) {
+function kyivTimeHms(d = new Date()) {
     try {
         return new Intl.DateTimeFormat('uk-UA', {
             timeZone: 'Europe/Kyiv',
             hour: '2-digit',
             minute: '2-digit',
+            second: '2-digit',
             hour12: false
         }).format(d);
     } catch {
-        return d.toISOString().slice(11, 16);
+        return d.toISOString().slice(11, 19);
     }
 }
 
@@ -2858,81 +2862,325 @@ function formatDayKeyUa(dayKey) {
     return `${m[3]}.${m[2]}.${m[1]}`;
 }
 
+/** Resolve geomag mode the same way as elsewhere (legacy fallback). */
+function snapshotGeomagMode(u) {
+    if (u?.geomagMode === 'active' || u?.geomagMode === 'quiet' || u?.geomagMode === 'off') {
+        return u.geomagMode;
+    }
+    return u?.alertTriggers?.magneticStorm === false ? 'off' : 'quiet';
+}
+
 /**
- * Build a short net-change summary from a list of human action lines.
- * Collapses toggle spam (on/off same thing) into the final state.
+ * Plain JSON snapshot of user settings at the first action of the day.
+ * Used as baseline: summary only shows what still differs at the end.
  */
-function buildActionDaySummary(lines) {
-    if (!Array.isArray(lines) || !lines.length) return 'Змін немає.';
+function captureSettingsBaseline(u) {
+    const metrics = Array.isArray(u?.forecastSettings?.enabledMetrics)
+        ? [...u.forecastSettings.enabledMetrics].filter(Boolean).sort()
+        : [];
+    const crops = Array.isArray(u?.crops) ? [...u.crops].filter(Boolean).sort() : [];
+    const alerts = u?.alertTriggers || {};
+    return {
+        notificationsEnabled: u?.notificationsEnabled !== false,
+        eveningForecastEnabled: u?.eveningForecastEnabled !== false,
+        geomagMode: snapshotGeomagMode(u),
+        units: {
+            wind: u?.units?.wind || 'ms',
+            pressure: u?.units?.pressure || 'mmhg',
+            temp: u?.units?.temp || 'c'
+        },
+        forecastDays: Number(u?.forecastSettings?.daysCount) || 3,
+        metrics,
+        alerts: {
+            temperature: alerts.temperature !== false,
+            precip: alerts.precip !== false,
+            airQuality: alerts.airQuality !== false,
+            magneticStorm: alerts.magneticStorm !== false
+        },
+        crops,
+        city: u?.city || null,
+        lat: u?.lat != null ? Number(u.lat) : null,
+        lon: u?.lon != null ? Number(u.lon) : null
+    };
+}
 
-    // Map of setting label → last verb (увімкнув / вимкнув / встановив …)
-    const finalState = new Map(); // key → { verb, label, raw }
-    const other = [];
+function cloneBaseline(b) {
+    return JSON.parse(JSON.stringify(b || {}));
+}
 
-    const toggleRe =
-        /^(увімкнув|вимкнув)\s+(.+)$/i;
-    const setRe =
-        /^(встановив режим магнітних бур:\s*.+|одиниці вітру:\s*.+|одиниці тиску:\s*.+|температура:\s*.+|обрав \d+ дн\. у вечірньому прогнозі)$/i;
-    const cityRe = /^(обрав місто|видалив місто)/i;
+const METRIC_UA_TO_KEY = (() => {
+    const m = {};
+    for (const [k, v] of Object.entries(METRIC_NAMES_UA || {})) {
+        m[String(v).toLowerCase()] = k;
+    }
+    return m;
+})();
 
-    for (const rawLine of lines) {
-        // strip "HH:MM · "
-        const action = String(rawLine || '').replace(/^\d{1,2}:\d{2}\s*·\s*/, '').trim();
+const ALERT_UA_TO_KEY = {
+    температура: 'temperature',
+    опади: 'precip',
+    'якість повітря': 'airQuality',
+    'магнітні бурі': 'magneticStorm'
+};
+
+const GEOMAG_UA_TO_MODE = {
+    'активний (усі зміни)': 'active',
+    'тихий (лише сильніші за план)': 'quiet',
+    вимкнено: 'off'
+};
+
+const GEOMAG_MODE_UA = {
+    active: 'активний (усі зміни)',
+    quiet: 'тихий (лише сильніші за план)',
+    off: 'вимкнено'
+};
+
+/**
+ * Replay human action lines onto a working copy of baseline → final state.
+ * Only setting-changing phrases are applied; views are ignored here.
+ */
+function applyActionLinesToState(baseline, lines) {
+    const state = cloneBaseline(baseline);
+    if (!state.metrics) state.metrics = [];
+    if (!state.crops) state.crops = [];
+    if (!state.alerts) {
+        state.alerts = {
+            temperature: true,
+            precip: true,
+            airQuality: true,
+            magneticStorm: true
+        };
+    }
+    if (!state.units) state.units = { wind: 'ms', pressure: 'mmhg', temp: 'c' };
+
+    const stripTime = (raw) =>
+        String(raw || '')
+            .replace(/^\d{1,2}:\d{2}(?::\d{2})?\s*·\s*/, '')
+            .trim();
+
+    for (const rawLine of lines || []) {
+        const action = stripTime(rawLine);
         if (!action) continue;
 
-        const tm = action.match(toggleRe);
-        if (tm) {
-            const verb = tm[1].toLowerCase();
-            const label = tm[2].trim();
-            finalState.set(label, { verb, label });
+        // увімкнув/вимкнув усі сповіщення
+        let m = action.match(/^(увімкнув|вимкнув)\s+усі сповіщення$/i);
+        if (m) {
+            state.notificationsEnabled = m[1].toLowerCase() === 'увімкнув';
             continue;
         }
-        if (setRe.test(action) || cityRe.test(action)) {
-            // treat as unique key by full text
-            finalState.set(action, { verb: null, label: action });
+        m = action.match(/^(увімкнув|вимкнув)\s+вечірній прогноз$/i);
+        if (m) {
+            state.eveningForecastEnabled = m[1].toLowerCase() === 'увімкнув';
             continue;
         }
-        // culture toggle: увімкнув/вимкнув культуру «…»
-        const cropM = action.match(/^(увімкнув|вимкнув)\s+культуру\s+[«"]([^»"]+)[»"]/i);
-        if (cropM) {
-            const key = `культура «${cropM[2]}»`;
-            finalState.set(key, { verb: cropM[1].toLowerCase(), label: key });
+
+        // алерт «…»
+        m = action.match(/^(увімкнув|вимкнув)\s+алерт\s+[«"]([^»"]+)[»"]$/i);
+        if (m) {
+            const key = ALERT_UA_TO_KEY[m[2].toLowerCase()];
+            if (key) state.alerts[key] = m[1].toLowerCase() === 'увімкнув';
             continue;
         }
-        other.push(action);
+        m = action.match(/^увімкнув усі алерти$/i);
+        if (m) {
+            for (const k of Object.keys(state.alerts)) state.alerts[k] = true;
+            continue;
+        }
+        m = action.match(/^вимкнув усі алерти$/i);
+        if (m) {
+            for (const k of Object.keys(state.alerts)) state.alerts[k] = false;
+            continue;
+        }
+
+        // метрику «…» у вечірньому прогнозі
+        m = action.match(/^(увімкнув|вимкнув)\s+метрику\s+[«"]([^»"]+)[»"]\s+у вечірньому прогнозі$/i);
+        if (m) {
+            const on = m[1].toLowerCase() === 'увімкнув';
+            const metricKey =
+                METRIC_UA_TO_KEY[m[2].toLowerCase()] ||
+                Object.keys(METRIC_NAMES_UA || {}).find(
+                    (k) => (METRIC_NAMES_UA[k] || '').toLowerCase() === m[2].toLowerCase()
+                ) ||
+                m[2];
+            const set = new Set(state.metrics);
+            if (on) set.add(metricKey);
+            else set.delete(metricKey);
+            state.metrics = [...set].sort();
+            continue;
+        }
+
+        // культура «…»
+        m = action.match(/^(увімкнув|вимкнув)\s+культуру\s+[«"]([^»"]+)[»"]$/i);
+        if (m) {
+            const on = m[1].toLowerCase() === 'увімкнув';
+            const id = m[2];
+            const set = new Set(state.crops);
+            if (on) set.add(id);
+            else {
+                set.delete(id);
+                // also drop cat|id form
+                for (const c of [...set]) {
+                    if (c === id || c.endsWith(`|${id}`)) set.delete(c);
+                }
+            }
+            state.crops = [...set].sort();
+            continue;
+        }
+
+        // режим магнітних бур
+        m = action.match(/^встановив режим магнітних бур:\s*(.+)$/i);
+        if (m) {
+            const mode = GEOMAG_UA_TO_MODE[m[1].trim()] || m[1].trim();
+            if (mode === 'active' || mode === 'quiet' || mode === 'off') {
+                state.geomagMode = mode;
+            }
+            continue;
+        }
+
+        // дні прогнозу
+        m = action.match(/^обрав\s+(\d+)\s*дн\.?\s+у вечірньому прогнозі$/i);
+        if (m) {
+            state.forecastDays = Number(m[1]) || state.forecastDays;
+            continue;
+        }
+
+        // одиниці
+        m = action.match(/^одиниці вітру:\s*(м\/с|км\/год)$/i);
+        if (m) {
+            state.units.wind = /км/i.test(m[1]) ? 'kmh' : 'ms';
+            continue;
+        }
+        m = action.match(/^одиниці тиску:\s*(гПа|мм)/i);
+        if (m) {
+            state.units.pressure = /гПа/i.test(m[1]) ? 'hpa' : 'mmhg';
+            continue;
+        }
+        m = action.match(/^температура:\s*(°?F|°?C)/i);
+        if (m) {
+            state.units.temp = /f/i.test(m[1]) ? 'f' : 'c';
+            continue;
+        }
+
+        // місто
+        if (/^видалив місто/i.test(action)) {
+            state.city = null;
+            state.lat = null;
+            state.lon = null;
+            continue;
+        }
+        m = action.match(/^обрав місто на карті\s*\(([^,]+),\s*([^)]+)\)/i);
+        if (m) {
+            state.lat = Number(m[1]);
+            state.lon = Number(m[2]);
+            state.city = state.city || '(на карті)';
+            continue;
+        }
     }
 
+    return state;
+}
+
+/**
+ * Diff final vs baseline → short Ukrainian summary of real net changes only.
+ * If user toggled something and restored the original value — it does not appear.
+ */
+function buildActionDaySummaryFromBaseline(baseline, lines) {
+    if (!baseline) {
+        // Fallback: no baseline yet
+        return 'Змін немає.';
+    }
+    const final = applyActionLinesToState(baseline, lines);
     const net = [];
-    for (const { verb, label } of finalState.values()) {
-        if (verb) net.push(`${verb} ${label}`);
-        else net.push(label);
+
+    if (final.notificationsEnabled !== baseline.notificationsEnabled) {
+        net.push(
+            final.notificationsEnabled ? 'увімкнув усі сповіщення' : 'вимкнув усі сповіщення'
+        );
+    }
+    if (final.eveningForecastEnabled !== baseline.eveningForecastEnabled) {
+        net.push(
+            final.eveningForecastEnabled ? 'увімкнув вечірній прогноз' : 'вимкнув вечірній прогноз'
+        );
+    }
+    if (final.geomagMode !== baseline.geomagMode) {
+        net.push(
+            `встановив режим магнітних бур: ${GEOMAG_MODE_UA[final.geomagMode] || final.geomagMode}`
+        );
+    }
+    if (Number(final.forecastDays) !== Number(baseline.forecastDays)) {
+        net.push(`обрав ${final.forecastDays} дн. у вечірньому прогнозі`);
     }
 
-    // Deduplicate pure views (open menu / help) — only count once each type
-    const viewSeen = new Set();
-    for (const a of other) {
-        if (/^(відкрив|читає|меню:|погодинний|перевірка|агро-)/i.test(a)) {
-            const k = a.split(' ')[0] + '|' + a.slice(0, 40);
-            if (viewSeen.has(k)) continue;
-            viewSeen.add(k);
-            net.push(a);
-        } else {
-            net.push(a);
+    const bu = baseline.units || {};
+    const fu = final.units || {};
+    if (fu.wind !== bu.wind) {
+        net.push(fu.wind === 'kmh' ? 'одиниці вітру: км/год' : 'одиниці вітру: м/с');
+    }
+    if (fu.pressure !== bu.pressure) {
+        net.push(fu.pressure === 'hpa' ? 'одиниці тиску: гПа' : 'одиниці тиску: мм рт. ст.');
+    }
+    if (fu.temp !== bu.temp) {
+        net.push(fu.temp === 'f' ? 'температура: °F' : 'температура: °C');
+    }
+
+    const baseAlerts = baseline.alerts || {};
+    const finAlerts = final.alerts || {};
+    const alertNames = {
+        temperature: 'температура',
+        precip: 'опади',
+        airQuality: 'якість повітря',
+        magneticStorm: 'магнітні бурі'
+    };
+    for (const key of Object.keys(alertNames)) {
+        if (Boolean(finAlerts[key]) !== Boolean(baseAlerts[key])) {
+            net.push(
+                `${finAlerts[key] ? 'увімкнув' : 'вимкнув'} алерт «${alertNames[key]}»`
+            );
         }
     }
 
-    if (!net.length) return 'Лише перегляди / навігація без змін налаштувань.';
-    // Cap summary length
-    const joined = net.slice(0, 12).join('; ');
-    return net.length > 12 ? joined + '…' : joined;
+    const baseMetrics = new Set(baseline.metrics || []);
+    const finMetrics = new Set(final.metrics || []);
+    for (const k of finMetrics) {
+        if (!baseMetrics.has(k)) {
+            const label = METRIC_NAMES_UA[k] || k;
+            net.push(`увімкнув метрику «${label}» у вечірньому прогнозі`);
+        }
+    }
+    for (const k of baseMetrics) {
+        if (!finMetrics.has(k)) {
+            const label = METRIC_NAMES_UA[k] || k;
+            net.push(`вимкнув метрику «${label}» у вечірньому прогнозі`);
+        }
+    }
+
+    const baseCrops = new Set(baseline.crops || []);
+    const finCrops = new Set(final.crops || []);
+    for (const c of finCrops) {
+        if (!baseCrops.has(c)) net.push(`увімкнув культуру «${c}»`);
+    }
+    for (const c of baseCrops) {
+        if (!finCrops.has(c)) net.push(`вимкнув культуру «${c}»`);
+    }
+
+    // City change (coarse)
+    if ((final.city || null) !== (baseline.city || null) || final.lat !== baseline.lat || final.lon !== baseline.lon) {
+        if (!final.city && final.lat == null) net.push('видалив місто');
+        else if (final.lat != null && final.lon != null) {
+            net.push(`змінив місто (${final.lat}, ${final.lon})`);
+        } else if (final.city) net.push(`змінив місто: ${final.city}`);
+    }
+
+    if (!net.length) return 'Змін налаштувань немає (усе повернуто як було / лише перегляди).';
+    const joined = net.slice(0, 14).join('; ');
+    return net.length > 14 ? joined + '…' : joined;
 }
 
 /**
  * Append one user action to the daily HISTORY_ACTIONS card.
- * - New day or no message → send new rich message
+ * - First action of the day → snapshot baseline settings + send new rich message
  * - Same day → edit existing message
- * Title: «Дії користувача — @login / Name · ID · DD.MM.YYYY»
- * Body: expandable list of timed actions + short net summary at bottom
+ * Accordion = full chronological list; summary = net vs baseline only
  */
 async function appendUserDayActions(api, from, humanAction, extra = {}) {
     const chatId = ADMIN_CHAT_ID();
@@ -2945,8 +3193,8 @@ async function appendUserDayActions(api, from, humanAction, extra = {}) {
     }
 
     const dayKey = kyivDayKey();
-    const timeHm = kyivTimeHm();
-    const line = `${timeHm} · ${humanAction}`;
+    const timeHms = kyivTimeHms();
+    const line = `${timeHms} · ${humanAction}`;
 
     let user = await User.findOne({ telegramId: Number(from.id) });
     if (!user) {
@@ -2966,13 +3214,23 @@ async function appendUserDayActions(api, from, humanAction, extra = {}) {
     }
 
     const prev = user.actionHistory || {};
-    const sameDay = prev.dayKey === dayKey && prev.messageId;
+    const sameDay = prev.dayKey === dayKey;
     let lines = sameDay && Array.isArray(prev.lines) ? [...prev.lines] : [];
     lines.push(line);
     // Keep last ~80 lines to stay under Telegram limits
     if (lines.length > 80) lines = lines.slice(lines.length - 80);
 
-    const summary = buildActionDaySummary(lines);
+    // Baseline: freeze settings at the FIRST action of this Kyiv day
+    // (notify runs before toggle → snapshot is pre-first-action state)
+    let baseline = sameDay && prev.baseline ? prev.baseline : null;
+    if (!baseline) {
+        baseline = captureSettingsBaseline(user);
+    }
+
+    // Can edit only if we already have a Telegram message for this day
+    const canEdit = sameDay && prev.messageId;
+
+    const summary = buildActionDaySummaryFromBaseline(baseline, lines);
     const namePart =
         user.username
             ? `@${user.username}`
@@ -3005,10 +3263,10 @@ ${listHtml}
             ? { message_thread_id: Number(thrId) }
             : {};
 
-    let newMsgId = sameDay ? prev.messageId : null;
+    let newMsgId = canEdit ? prev.messageId : null;
 
     try {
-        if (sameDay && prev.messageId) {
+        if (canEdit) {
             try {
                 await api.raw.editMessageText({
                     chat_id: chatId,
@@ -3071,8 +3329,9 @@ ${listHtml}
 
     user.actionHistory = {
         dayKey,
-        messageId: newMsgId || (sameDay ? prev.messageId : null) || null,
+        messageId: newMsgId || (canEdit ? prev.messageId : null) || null,
         lines,
+        baseline,
         summary,
         updatedAt: new Date()
     };
