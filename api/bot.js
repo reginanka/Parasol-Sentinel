@@ -706,25 +706,13 @@ async function sendGroupWelcome(ctx, lang) {
         await setBotMode(ctx.from.id, 'awaiting_city');
     }
 
-    // Groups: first strip any reply-keyboard, then attach inline buttons under the message
-    const sent = await ctx.reply(text, {
+    // One message with inline buttons (Choose city | Help).
+    // Do NOT send remove_keyboard first + editMessageReplyMarkup — edit often fails
+    // in groups/forums and the fallback produced a second identical message without buttons.
+    await ctx.reply(text, {
         parse_mode: 'Markdown',
-        reply_markup: { remove_keyboard: true }
+        reply_markup: buildWelcomeReplyKeyboard(lang)
     });
-    try {
-        await ctx.api.editMessageReplyMarkup({
-            chat_id: ctx.chat.id,
-            message_id: sent.message_id,
-            reply_markup: buildWelcomeReplyKeyboard(lang)
-        });
-    } catch (e) {
-        // Fallback: second message with inline only
-        console.warn('[bot] group welcome inline markup:', e.message);
-        await ctx.reply(text, {
-            parse_mode: 'Markdown',
-            reply_markup: buildWelcomeReplyKeyboard(lang)
-        }).catch(() => {});
-    }
 }
 
 // /start command
