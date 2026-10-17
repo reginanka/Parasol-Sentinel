@@ -12,6 +12,13 @@ const UserSchema = new mongoose.Schema({
     firstName: String,
     lastName: String,
     languageCode: String, // raw Telegram language_code
+    /**
+     * true = document represents a Telegram group/supergroup (telegramId = chat.id).
+     * Alerts/evening forecasts are delivered to that chat id.
+     */
+    isGroupChat: { type: Boolean, default: false },
+    /** Group chat ids where this personal user set city / interacted (for admin). */
+    groupChatIds: { type: [Number], default: undefined },
     city: { type: String, default: null },
     lat: Number,
     lon: Number,
