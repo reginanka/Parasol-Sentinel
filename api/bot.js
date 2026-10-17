@@ -1039,11 +1039,10 @@ bot.on("message:text", async (ctx) => {
         if (isGroupCtx(ctx)) {
             html += dict[lang].selectCityGroupHint;
         }
+        // No buttons under the "send city name" prompt — user should just type the city
         return ctx.api.sendRichMessage(ctx.chat.id, {
             html,
             skip_entity_detection: true
-        }, {
-            reply_markup: buildWelcomeReplyKeyboard(lang)
         });
     }
 
@@ -1350,11 +1349,10 @@ bot.on("callback_query:data", async (ctx) => {
             if (isGroupCtx(ctx)) {
                 html += dict[lang].selectCityGroupHint;
             }
+            // No buttons under the "send city name" prompt — user should just type the city
             return ctx.api.sendRichMessage(ctx.chat.id, {
                 html,
                 skip_entity_detection: true
-            }, {
-                reply_markup: buildWelcomeReplyKeyboard(lang)
             });
         }
         return;
