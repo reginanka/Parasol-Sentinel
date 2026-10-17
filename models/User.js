@@ -95,6 +95,20 @@ const UserSchema = new mongoose.Schema({
     },
 
     /**
+     * Daily action digest in TOPIC_HISTORY_ACTIONS / HISTORY_ACTIONS:
+     * one editable Telegram message per user per Kyiv calendar day.
+     * lines[] = timed human-readable actions; summary = net changes text.
+     * No nested defaults — same VersionError protection as supportHistory.
+     */
+    actionHistory: {
+        dayKey: String, // YYYY-MM-DD Europe/Kyiv
+        messageId: Number,
+        lines: [String],
+        summary: String,
+        updatedAt: Date
+    },
+
+    /**
      * Snapshot of Telegram User flags for admin «Системні».
      * Only user-relevant fields (no bot-only: groups/inline/Business/WebApp/join/guest).
      * No nested defaults — same VersionError protection as supportHistory.
