@@ -36,7 +36,7 @@ const {
 
 const dict = {
     uk: {
-        welcome: "👋 Вітаю! Мене звати **Парасоль☔️**.\n\nЯ буду стежити за погодою у вашому місті та надсилати сповіщення про різкі зміни.\n\nБудь ласка, введіть назву вашого міста (українською або англійською):",
+        welcome: "👋 Вітаю, {name}!\n\nМене звати *Парасоль☔️*, я кожен вечір шлю прогноз для вашого міста. Стежу за погодою і шлю сповіщення, якщо погода стала відрізнятися від запланованого прогнозу.",
         select: "🔍 Оберіть правильний варіант зі списку:",
         notFound: "❌ Не вдалося знайти це місто. Спробуйте уточнити запит (наприклад, додайте область).",
         errorSearch: "❌ Сталася помилка пошуку. Спробуйте пізніше.",
@@ -45,6 +45,12 @@ const dict = {
         dashboard: "📊",
         settingsBtn: "Налаштування",
         helpBtn: "Допомога",
+        selectCityBtn: "Обрати місто",
+        helpRefBtn: "Допомога/Довідка",
+        selectCityPrompt: "📍 Надішліть <b>назву міста</b> (українською або англійською) — або оберіть зі списку після пошуку.",
+        selectCityGroupHint: "\n\n<details><summary><i>Бот не бачить місто?</i></summary>\nУ групі Парасоль не читає всі повідомлення — лише ті, що адресовані їй. Затисніть своє повідомлення з назвою міста → <b>Відповісти</b> на повідомлення бота (або згадайте бота через @). Так спокійніше для приватності чату ☂️\n</details>",
+        citySetEveningBtn: "🌆 Налаштування вечірнього прогнозу",
+        citySetAlertsBtn: "🔔 Налаштування сповіщень про зміни",
         helpSelect: "🔍 Оберіть тему, яка вас цікавить:",
         helpWriteAdmin: "<i>💬 Можна просто написати повідомлення — його отримає підтримка.</i>",
         supportAccepted: "✅ Ваше звернення прийнято. Ми відповімо, щойно зможемо.",
@@ -179,7 +185,7 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
     },
     en: {
 
-        welcome: "👋 Hello! My name is **Parasol**.\n\nI will monitor the weather in your city and send alerts about sudden changes.\n\nPlease type the name of your city:",
+        welcome: "👋 Hello, {name}!\n\nMy name is *Parasol☔️*. Every evening I send a forecast for your city. I watch the weather and alert you if it differs from the planned forecast.",
         select: "🔍 Choose the correct option from the list:",
         notFound: "❌ Cannot find this city. Please try to be more specific (e.g. add region/state).",
         errorSearch: "❌ Search error occurred. Please try again later.",
@@ -188,6 +194,12 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         dashboard: "📊",
         settingsBtn: "Settings",
         helpBtn: "Help",
+        selectCityBtn: "Choose city",
+        helpRefBtn: "Help / Guide",
+        selectCityPrompt: "📍 Send a <b>city name</b> — or pick from the search list.",
+        selectCityGroupHint: "\n\n<details><summary><i>Bot doesn't see the city?</i></summary>\nIn a group Parasol does not read every message — only those addressed to it. Long-press your message with the city name → <b>Reply</b> to the bot’s message (or @mention the bot). This keeps the chat more private ☂️\n</details>",
+        citySetEveningBtn: "🌆 Evening forecast settings",
+        citySetAlertsBtn: "🔔 Change alerts settings",
         helpSelect: "🔍 Choose a topic you are interested in:",
         helpWriteAdmin: "<i>💬 You can also just type a message — support will receive it.</i>",
         supportAccepted: "✅ Your message has been received. We will reply as soon as we can.",
@@ -620,6 +632,14 @@ function buildPrivateReplyKeyboard(lang) {
     };
 }
 
+/** Welcome keyboard: one row — Choose city | Help */
+function buildWelcomeReplyKeyboard(lang) {
+    return {
+        keyboard: [[{ text: dict[lang].selectCityBtn }, { text: dict[lang].helpRefBtn }]],
+        resize_keyboard: true
+    };
+}
+
 /** Hide WebApp menu button in a specific chat (groups). */
 async function clearChatMenuButton(api, chatId) {
     if (!chatId) return;
@@ -676,15 +696,11 @@ async function sendGroupWelcome(ctx, lang) {
     const text = lang === 'uk'
         ? (
             `👋 Вітаю, ${title}!\n\n` +
-            `Я *Парасоль☔️* — стежитиму за погодою для цієї спільноти.\n\n` +
-            `Налаштуємо сповіщення про зміни погоди та вечірній прогноз.\n\n` +
-            `📍 Надішліть *назву міста* для групи (або оберіть зі списку після пошуку).`
+            `Мене звати *Парасоль☔️*, я кожен вечір шлю прогноз для вашого міста. Стежу за погодою і шлю сповіщення, якщо погода стала відрізнятися від запланованого прогнозу.`
           )
         : (
             `👋 Hello, ${title}!\n\n` +
-            `I'm *Parasol* — I will monitor weather for this community.\n\n` +
-            `Let's set up change alerts and the evening forecast.\n\n` +
-            `📍 Send a *city name* for the group (or pick from the search list).`
+            `My name is *Parasol☔️*. Every evening I send a forecast for your city. I watch the weather and alert you if it differs from the planned forecast.`
           );
 
     // Who typed /start in group — they type the city next
@@ -694,7 +710,7 @@ async function sendGroupWelcome(ctx, lang) {
 
     await ctx.reply(text, {
         parse_mode: 'Markdown',
-        reply_markup: buildGroupReplyKeyboard(lang)
+        reply_markup: buildWelcomeReplyKeyboard(lang)
     });
 }
 
@@ -726,10 +742,12 @@ bot.command("start", async (ctx) => {
     }
 
     // Private chat
-    const keyboard = buildPrivateReplyKeyboard(lang);
+    const keyboard = buildWelcomeReplyKeyboard(lang);
+    const displayName = ctx.from?.first_name || ctx.from?.username || (lang === 'uk' ? 'друже' : 'friend');
+    const welcomeText = dict[lang].welcome.replace('{name}', displayName);
 
     await setBotMode(ctx.from.id, 'awaiting_city');
-    await ctx.reply(dict[lang].welcome, { parse_mode: 'Markdown', reply_markup: keyboard });
+    await ctx.reply(welcomeText, { parse_mode: 'Markdown', reply_markup: keyboard });
 
     try {
         await ctx.api.setMyCommands([
@@ -959,12 +977,16 @@ bot.on("message:text", async (ctx) => {
     const isSettings = query === dict.uk.settingsBtn || query === dict.en.settingsBtn
         || query.includes(dict.uk.settingsBtn) || query.includes(dict.en.settingsBtn);
     const isHelpBtn = query === dict.uk.helpBtn || query === dict.en.helpBtn
-        || query.includes(dict.uk.helpBtn) || query.includes(dict.en.helpBtn);
+        || query === dict.uk.helpRefBtn || query === dict.en.helpRefBtn
+        || query.includes(dict.uk.helpBtn) || query.includes(dict.en.helpBtn)
+        || query.includes(dict.uk.helpRefBtn) || query.includes(dict.en.helpRefBtn);
+    const isSelectCityBtn = query === dict.uk.selectCityBtn || query === dict.en.selectCityBtn
+        || query.includes(dict.uk.selectCityBtn) || query.includes(dict.en.selectCityBtn);
     const isCropsBtn = query === dict.uk.cropsBtn || query === dict.en.cropsBtn;
     const isAgroAnalytics = query.includes(dict.uk.agroAnalyticsBtn) || query.includes(dict.en.agroAnalyticsBtn);
     const isAgroForecast = query.includes(dict.uk.agroForecastBtn) || query.includes(dict.en.agroForecastBtn);
     const isArchive = query.includes(dict.uk.agroArchiveBtn) || query.includes(dict.en.agroArchiveBtn);
-    const isMenuButton = isSettings || isHelpBtn || isCropsBtn || isAgroAnalytics || isAgroForecast || isArchive;
+    const isMenuButton = isSettings || isHelpBtn || isSelectCityBtn || isCropsBtn || isAgroAnalytics || isAgroForecast || isArchive;
 
     // Notify admin (skip admin chat)
     if (!isAdminChat(ctx.chat?.id) && ctx.from) {
@@ -977,6 +999,7 @@ bot.on("message:text", async (ctx) => {
             let menuAction = 'меню';
             if (isSettings) menuAction = 'меню: налаштування';
             else if (isHelpBtn) menuAction = 'меню: допомога';
+            else if (isSelectCityBtn) menuAction = 'меню: обрати місто';
             else if (isCropsBtn) menuAction = 'меню: культури';
             else if (isAgroAnalytics) menuAction = 'меню: агро-аналітика';
             else if (isAgroForecast) menuAction = 'меню: агро-прогноз';
@@ -1006,6 +1029,19 @@ bot.on("message:text", async (ctx) => {
 
     if (isHelpBtn) {
         return sendHelpMenu(ctx);
+    }
+
+    if (isSelectCityBtn) {
+        await connectDB();
+        await setBotMode(ctx.from.id, 'awaiting_city');
+        let text = dict[lang].selectCityPrompt;
+        if (isGroupCtx(ctx)) {
+            text += dict[lang].selectCityGroupHint;
+        }
+        return ctx.reply(text, {
+            parse_mode: 'HTML',
+            reply_markup: buildWelcomeReplyKeyboard(lang)
+        });
     }
 
     if (query === dict.uk.cropsBtn || query === dict.en.cropsBtn) {
@@ -1454,16 +1490,24 @@ bot.on("callback_query:data", async (ctx) => {
                 .replace('{temp}', Math.round(weather.temp))
                 .replace('{dewpt}', Math.round(weather.dewpt));
 
+            const afterCityKeyboard = {
+                inline_keyboard: [
+                    [{ text: dict[lang].citySetEveningBtn, callback_data: 'forecast_menu' }],
+                    [{ text: dict[lang].citySetAlertsBtn, callback_data: 'alert_settings' }]
+                ]
+            };
+
             await ctx.editMessageText(messageText, {
-                parse_mode: 'Markdown'
+                parse_mode: 'Markdown',
+                reply_markup: afterCityKeyboard
             });
 
             // Re-show reply keyboard (group: settings only; private: settings + agro)
             if (isGroup) {
                 await ctx.reply(
                     lang === 'uk'
-                        ? '✅ Місто спільноти збережено. Далі можна налаштувати сповіщення та вечірній прогноз у «Налаштування».'
-                        : '✅ Community city saved. Next, configure alerts and evening forecast in Settings.',
+                        ? '✅ Місто спільноти збережено.'
+                        : '✅ Community city saved.',
                     { reply_markup: buildGroupReplyKeyboard(lang) }
                 );
                 await clearChatMenuButton(ctx.api, chat.id);
