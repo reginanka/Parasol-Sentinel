@@ -941,10 +941,13 @@ async function notifyAdmin(from, actionText, extra = {}) {
         );
 
     // Історія гілки — лише для реального тексту (акордеон <details> у rich message)
+    // Для групи беремо transcript групової картки
     let histSnippet = '';
     if (extra.messageText) {
         try {
-            const uHist = await User.findOne({ telegramId: from.id })
+            const histKey =
+                isGroupCtx && srcChatId != null ? srcChatId : from.id;
+            const uHist = await User.findOne({ telegramId: histKey })
                 .select('supportHistory.transcript')
                 .lean();
             const rawHist = uHist?.supportHistory?.transcript || '';
@@ -1011,7 +1014,14 @@ async function notifyAdmin(from, actionText, extra = {}) {
     } else if (!isUserText && humanAction) {
         text += `\n<code>#ctx_act:${escapeHtml(String(humanAction).slice(0, 200))}#ctx_end</code>`;
     }
-    text += `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
+    // Machine markers for Reply routing (must survive rich → reply_to)
+    text += `\n<code>#uid:${from.id}</code>`;
+    if (isGroupCtx && srcChatId != null) {
+        text += `\n<code>#gid:${srcChatId}</code>`;
+    }
+    text += isGroupCtx
+        ? `\n\n<i>↩️ Reply → надіслати в групу</i>`
+        : `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
     if (text.length > 4000) text = text.slice(0, 3990) + '…';
 
     // Rich Message з акордеоном <details> (як аналітика / інфо)
@@ -1053,9 +1063,17 @@ async function notifyAdmin(from, actionText, extra = {}) {
             `<p><code>#ctx_act:${escapeHtml(String(humanAction).slice(0, 200))}#ctx_end</code></p>`
         );
     }
-    richParts.push(`<p><i>↩️ Reply → надіслати юзеру</i></p>`);
-    // Прихований ID для extractUserIdFromNotifyText (якщо rich не кладе текст у .text)
+    richParts.push(
+        isGroupCtx
+            ? `<p><i>↩️ Reply → надіслати в групу</i></p>`
+            : `<p><i>↩️ Reply → надіслати юзеру</i></p>`
+    );
+    // Приховані маркери для Reply (rich reply_to часто зберігає лише code)
     richParts.push(`<p><code>ID: ${from.id}</code></p>`);
+    richParts.push(`<p><code>#uid:${from.id}</code></p>`);
+    if (isGroupCtx && srcChatId != null) {
+        richParts.push(`<p><code>#gid:${srcChatId}</code></p>`);
+    }
     const richHtml = richParts.join('\n');
 
     let sentOk = false;
@@ -1151,15 +1169,20 @@ async function notifyAdmin(from, actionText, extra = {}) {
     // Група → окрема картка на group chat id; особисте → як раніше
     // Службові події «додали бота» не пишемо в HISTORY повідомлень
     if (!isSystemGroupEvent) {
-        const histOwnerId = isGroupCtx && srcChatId != null ? srcChatId : from.id;
+        // Жорстко: негативний chatId = група → картка групи (не особиста)
+        const histOwnerId =
+            srcChatId != null && !Number.isNaN(srcChatId) && srcChatId < 0
+                ? srcChatId
+                : from.id;
+        const writingToGroup = histOwnerId < 0;
         const actorLabel =
             from.username
                 ? `@${from.username}`
                 : [from.first_name, from.last_name].filter(Boolean).join(' ') ||
                   displayName(from) ||
                   String(from.id);
-        const whoLabel = isGroupCtx ? `👤 ${actorLabel}` : '👤 Юзер';
-        const histMeta = isGroupCtx
+        const whoLabel = writingToGroup ? `👤 ${actorLabel}` : '👤 Юзер';
+        const histMeta = writingToGroup
             ? { isGroup: true, groupTitle: groupTitle || null }
             : {};
         if (userMsg) {
@@ -1212,41 +1235,94 @@ async function notifyAdmin(from, actionText, extra = {}) {
     }
 }
 
-/** Extract user telegram id from an admin notification / reply_to message */
-function extractUserIdFromNotifyText(raw) {
-    if (raw == null) return null;
-    // Accept full reply_to_message object or plain string
-    let s;
+/** Flatten notify / reply_to payload into searchable string */
+function notifyTextBlob(raw) {
+    if (raw == null) return '';
     if (typeof raw === 'object') {
         const parts = [
             raw.text,
             raw.caption,
             raw.quote?.text,
-            // last resort: stringify (rich / partial payloads)
             JSON.stringify(raw)
         ].filter(Boolean);
-        s = parts.join('\n');
-    } else {
-        s = String(raw);
+        return parts.join('\n');
     }
-    const patterns = [
-        /ID:\s*(\d{5,15})/i,
-        /\bID[:\s]+(\d{5,15})\b/i,
-        /#u(\d{5,15})\b/,
-        /користувачу\s+(\d{5,15})/i,
-        /user[_\s-]?id[:\s]+(\d{5,15})/i,
-        // bare telegram id in code/tags
-        /(?:^|[^\d])(\d{8,15})(?:[^\d]|$)/
-    ];
-    for (const re of patterns) {
-        const m = s.match(re);
-        if (m) {
-            const id = parseInt(m[1], 10);
-            // skip obvious non-user ids (too short already filtered)
-            if (id > 99999) return id;
+    return String(raw);
+}
+
+/**
+ * Extract reply targets from an admin notification card.
+ * - userId: who acted (always positive personal telegram id)
+ * - groupId: group/supergroup chat id if the event was in a group (negative)
+ * - replyChatId: where admin Reply should be delivered (group preferred)
+ */
+function extractNotifyTargets(raw) {
+    const s = notifyTextBlob(raw);
+    let userId = null;
+    let groupId = null;
+
+    // Explicit machine markers (survive rich → reply_to better)
+    const mUid = s.match(/#uid:(-?\d{5,15})\b/i);
+    if (mUid) {
+        const id = parseInt(mUid[1], 10);
+        if (id > 99999) userId = id;
+    }
+    const mGid = s.match(/#gid:(-?\d{5,15})\b/i);
+    if (mGid) {
+        const id = parseInt(mGid[1], 10);
+        if (id < 0) groupId = id;
+    }
+
+    // Human-readable "Група: … · -100…"
+    if (groupId == null) {
+        const mGroup = s.match(/Група:[^\n]*?<code>(-?\d{5,15})<\/code>/i) ||
+            s.match(/Група:[^\n]*?(-\d{5,15})/i) ||
+            s.match(/group[^\n]*?(-\d{5,15})/i);
+        if (mGroup) {
+            const id = parseInt(mGroup[1], 10);
+            if (id < 0) groupId = id;
         }
     }
-    return null;
+
+    // Classic "ID: 123456789" (personal)
+    if (userId == null) {
+        const patterns = [
+            /ID:\s*(\d{5,15})/i,
+            /\bID[:\s]+(\d{5,15})\b/i,
+            /#u(\d{5,15})\b/,
+            /користувачу\s+(\d{5,15})/i,
+            /user[_\s-]?id[:\s]+(\d{5,15})/i,
+            /(?:^|[^\d-])(\d{8,15})(?:[^\d]|$)/
+        ];
+        for (const re of patterns) {
+            const m = s.match(re);
+            if (m) {
+                const id = parseInt(m[1], 10);
+                if (id > 99999) {
+                    userId = id;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Bare negative id as group fallback
+    if (groupId == null) {
+        const mNeg = s.match(/(?:^|[^\d])(-\d{8,15})(?:[^\d]|$)/);
+        if (mNeg) {
+            const id = parseInt(mNeg[1], 10);
+            if (id < 0) groupId = id;
+        }
+    }
+
+    const replyChatId = groupId != null ? groupId : userId;
+    return { userId, groupId, replyChatId, isGroup: groupId != null };
+}
+
+/** Extract user telegram id from an admin notification / reply_to message */
+function extractUserIdFromNotifyText(raw) {
+    const t = extractNotifyTargets(raw);
+    return t.userId || (t.replyChatId != null && t.replyChatId > 0 ? t.replyChatId : null);
 }
 
 /** true if reply target is «надіслати всім» instruction */
@@ -3999,20 +4075,24 @@ async function appendSupportConversation(api, telegramId, who, msgOrText, meta =
 
     // Atomic $set — без document.save() / без VersionError з кроном
     try {
+        const setDoc = {
+            supportHistory: {
+                messageId: newMsgId || histMsgId || null,
+                fileMessageId: prevHist.fileMessageId || null,
+                notifyMessageIds: prevHist.notifyMessageIds || [],
+                transcript,
+                assetSeq,
+                updatedAt: new Date()
+            }
+        };
+        // Гарантуємо isGroupChat на груповій картці
+        if (Boolean(meta.isGroup) || Number(telegramId) < 0) {
+            setDoc.isGroupChat = true;
+            if (meta.groupTitle) setDoc.firstName = meta.groupTitle;
+        }
         await User.findOneAndUpdate(
             { telegramId: Number(telegramId) },
-            {
-                $set: {
-                    supportHistory: {
-                        messageId: newMsgId || histMsgId || null,
-                        fileMessageId: prevHist.fileMessageId || null,
-                        notifyMessageIds: prevHist.notifyMessageIds || [],
-                        transcript,
-                        assetSeq,
-                        updatedAt: new Date()
-                    }
-                }
-            }
+            { $set: setDoc }
         );
     } catch (e) {
         console.warn('[admin] supportHistory atomic save failed:', e.message);
@@ -4069,45 +4149,59 @@ async function handleAdminChannelText(ctx) {
             }
             return true;
         }
-        const targetId = extractUserIdFromNotifyText(replyTo);
+        const targets = extractNotifyTargets(replyTo);
+        const targetId = targets.replyChatId; // група, якщо була; інакше особистий
+        const actorUserId = targets.userId;
         if (targetId) {
             try {
-                const replyCtx = await resolveReplyContext(replyTo, targetId);
+                const replyCtx = await resolveReplyContext(replyTo, actorUserId || targetId);
                 const kind = await sendAdminReplyToUser(api, targetId, msg, replyCtx);
                 if (!kind) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
-                // If admin replied to an ACTIONS card — log that explicitly so it is not lost
-                if (replyCtx.isAction && replyCtx.text) {
-                    const note =
-                        typeof msg === 'object' && (msg.photo || msg.document || msg.video || msg.animation || msg.voice || msg.audio || msg.sticker)
-                            ? msg
-                            : `↪️ на дію «${replyCtx.text}»: ${(msg.caption || msg.text || '').trim() || '(медіа)'}`;
-                    if (typeof note === 'string') {
-                        await appendSupportConversation(api, targetId, '🛡 Адмін', note);
+                // HISTORY: admin reply goes to the same card we replied about (group or personal)
+                const histMeta =
+                    targets.isGroup || targetId < 0
+                        ? { isGroup: true, groupTitle: null }
+                        : {};
+                if (replyCtx && replyCtx.isAction && replyCtx.text) {
+                    const note = `↪️ на дію «${replyCtx.text}»`;
+                    if (!hasMedia) {
+                        await appendSupportConversation(
+                            api,
+                            targetId,
+                            '🛡 Адмін',
+                            `${note}\n${(msg.text || msg.caption || '').trim()}`.trim(),
+                            histMeta
+                        );
                     } else {
                         // Media reply: store media + prefix action context in transcript via string then media
                         await appendSupportConversation(
                             api,
                             targetId,
                             '🛡 Адмін',
-                            `↪️ на дію «${replyCtx.text}»`
+                            `↪️ на дію «${replyCtx.text}»`,
+                            histMeta
                         );
-                        await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
+                        await appendSupportConversation(api, targetId, '🛡 Адмін', msg, histMeta);
                     }
                 } else {
-                    await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
+                    await appendSupportConversation(api, targetId, '🛡 Адмін', msg, histMeta);
                 }
                 // ACTIONS: delete only admin reply; keep the original action notification
                 await cleanupScenarioMessages(api, chatId, msg, replyTo, {
                     keepInstruction: !!replyCtx.isAction
                 });
             } catch (e) {
+                const where =
+                    targetId < 0
+                        ? `в групу <code>${targetId}</code>`
+                        : `користувачу <code>${targetId}</code>`;
                 await api.sendMessage(
                     chatId,
-                    `❌ Не вдалося надіслати <code>${targetId}</code>: ${escapeHtml(e.message)}\n` +
-                        `(Користувач міг не стартувати бота або заблокував його.)`,
+                    `❌ Не вдалося надіслати ${where}: ${escapeHtml(e.message)}\n` +
+                        `(Бот міг не мати прав писати в групу, або юзер не стартував / заблокував бота.)`,
                     { parse_mode: 'HTML', ...sameThread }
                 );
             }
