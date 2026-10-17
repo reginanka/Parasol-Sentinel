@@ -1914,14 +1914,25 @@ async function handleAdminCallback(ctx) {
             const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
             const monthLabel = now.toLocaleString('uk-UA', { month: 'long', year: 'numeric', timeZone: 'Europe/Kyiv' });
 
+            // Users vs groups (isGroupChat: true = Telegram group/supergroup chat record)
+            const isUser = { isGroupChat: { $ne: true } };
+            const isGroup = { isGroupChat: true };
+
             const [
-                total,
-                withCity,
-                unlimited,
-                blocked,
-                notifOn,
-                eveningOn,
-                newThisMonth,
+                totalUsers,
+                totalGroups,
+                withCityUsers,
+                withCityGroups,
+                unlimitedUsers,
+                unlimitedGroups,
+                blockedUsers,
+                blockedGroups,
+                notifOnUsers,
+                notifOnGroups,
+                eveningOnUsers,
+                eveningOnGroups,
+                newThisMonthUsers,
+                newThisMonthGroups,
                 active1,
                 active7,
                 active30,
@@ -1940,13 +1951,20 @@ async function handleAdminCallback(ctx) {
                 userFailTodayRaw,
                 userFailMonthRaw
             ] = await Promise.all([
-                User.countDocuments(),
-                User.countDocuments({ city: { $ne: null, $exists: true } }),
-                User.countDocuments({ accessLevel: { $ne: 'none' } }),
-                User.countDocuments({ accessLevel: 'none' }),
-                User.countDocuments({ notificationsEnabled: { $ne: false } }),
-                User.countDocuments({ eveningForecastEnabled: { $ne: false } }),
-                User.countDocuments({ createdAt: { $gte: monthStart } }),
+                User.countDocuments(isUser),
+                User.countDocuments(isGroup),
+                User.countDocuments({ ...isUser, city: { $ne: null, $exists: true } }),
+                User.countDocuments({ ...isGroup, city: { $ne: null, $exists: true } }),
+                User.countDocuments({ ...isUser, accessLevel: { $ne: 'none' } }),
+                User.countDocuments({ ...isGroup, accessLevel: { $ne: 'none' } }),
+                User.countDocuments({ ...isUser, accessLevel: 'none' }),
+                User.countDocuments({ ...isGroup, accessLevel: 'none' }),
+                User.countDocuments({ ...isUser, notificationsEnabled: { $ne: false } }),
+                User.countDocuments({ ...isGroup, notificationsEnabled: { $ne: false } }),
+                User.countDocuments({ ...isUser, eveningForecastEnabled: { $ne: false } }),
+                User.countDocuments({ ...isGroup, eveningForecastEnabled: { $ne: false } }),
+                User.countDocuments({ ...isUser, createdAt: { $gte: monthStart } }),
+                User.countDocuments({ ...isGroup, createdAt: { $gte: monthStart } }),
                 User.countDocuments({ lastActivityAt: { $gte: d1 } }),
                 User.countDocuments({ lastActivityAt: { $gte: d7 } }),
                 User.countDocuments({ lastActivityAt: { $gte: d30 } }),
@@ -2074,6 +2092,14 @@ async function handleAdminCallback(ctx) {
                 .map((x) => `<tr><td align="left">${escapeHtml(String(x._id))}</td><td align="center"><b>${x.n}</b></td></tr>`)
                 .join('') || '<tr><td colspan="2" align="center">—</td></tr>';
 
+            const total = totalUsers + totalGroups;
+            const withCity = withCityUsers + withCityGroups;
+            const unlimited = unlimitedUsers + unlimitedGroups;
+            const blocked = blockedUsers + blockedGroups;
+            const notifOn = notifOnUsers + notifOnGroups;
+            const eveningOn = eveningOnUsers + eveningOnGroups;
+            const newThisMonth = newThisMonthUsers + newThisMonthGroups;
+
             // Same Rich Message dialect as evening forecasts (h1/h3, table bordered striped)
             // Помилки — лише кількість (без тексту «коли і що впало»)
             const html = `
@@ -2081,22 +2107,23 @@ async function handleAdminCallback(ctx) {
 <p><i>${escapeHtml(monthLabel)} · оновлено зараз</i></p>
 
 <details>
-<summary>👥 Користувачі (${total})</summary>
+<summary>👥 Користувачі/групи (${totalUsers}/${totalGroups})</summary>
 <table bordered striped>
   <thead>
     <tr>
       <th align="left">Показник</th>
-      <th align="center">К-сть</th>
+      <th align="center">Юзери</th>
+      <th align="center">Групи</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">Всього</td><td align="center"><b>${total}</b></td></tr>
-    <tr><td align="left">З містом</td><td align="center"><b>${withCity}</b></td></tr>
-    <tr><td align="left">Нові цього місяця</td><td align="center"><b>${newThisMonth}</b></td></tr>
-    <tr><td align="left">✅ Безліміт</td><td align="center"><b>${unlimited}</b></td></tr>
-    <tr><td align="left">🚫 Немає доступу</td><td align="center"><b>${blocked}</b></td></tr>
-    <tr><td align="left">🔔 Сповіщення</td><td align="center"><b>${notifOn}</b></td></tr>
-    <tr><td align="left">🌆 Вечірній</td><td align="center"><b>${eveningOn}</b></td></tr>
+    <tr><td align="left">Всього</td><td align="center"><b>${totalUsers}</b></td><td align="center"><b>${totalGroups}</b></td></tr>
+    <tr><td align="left">З містом</td><td align="center"><b>${withCityUsers}</b></td><td align="center"><b>${withCityGroups}</b></td></tr>
+    <tr><td align="left">Нові цього місяця</td><td align="center"><b>${newThisMonthUsers}</b></td><td align="center"><b>${newThisMonthGroups}</b></td></tr>
+    <tr><td align="left">✅ Безліміт</td><td align="center"><b>${unlimitedUsers}</b></td><td align="center"><b>${unlimitedGroups}</b></td></tr>
+    <tr><td align="left">🚫 Немає доступу</td><td align="center"><b>${blockedUsers}</b></td><td align="center"><b>${blockedGroups}</b></td></tr>
+    <tr><td align="left">🔔 Сповіщення</td><td align="center"><b>${notifOnUsers}</b></td><td align="center"><b>${notifOnGroups}</b></td></tr>
+    <tr><td align="left">🌆 Вечірній</td><td align="center"><b>${eveningOnUsers}</b></td><td align="center"><b>${eveningOnGroups}</b></td></tr>
   </tbody>
 </table>
 </details>
@@ -2200,9 +2227,9 @@ async function handleAdminCallback(ctx) {
             const plain =
                 `📊 <b>Аналітика Parasol Sentinel</b>\n` +
                 `<i>${escapeHtml(monthLabel)}</i>\n\n` +
-                `👥 Всього: <b>${total}</b> · місто: <b>${withCity}</b>\n` +
-                `✅ Безліміт: <b>${unlimited}</b> · 🚫: <b>${blocked}</b>\n` +
-                `🔔: <b>${notifOn}</b> · 🌆: <b>${eveningOn}</b>\n\n` +
+                `👥 Юзери/групи: <b>${totalUsers}</b>/<b>${totalGroups}</b> · місто: <b>${withCityUsers}</b>/<b>${withCityGroups}</b>\n` +
+                `✅ Безліміт: <b>${unlimitedUsers}</b>/<b>${unlimitedGroups}</b> · 🚫: <b>${blockedUsers}</b>/<b>${blockedGroups}</b>\n` +
+                `🔔: <b>${notifOnUsers}</b>/<b>${notifOnGroups}</b> · 🌆: <b>${eveningOnUsers}</b>/<b>${eveningOnGroups}</b>\n\n` +
                 `🟢 24г: <b>${active1}</b> · 7д: <b>${active7}</b> · 30д: <b>${active30}</b>\n\n` +
                 `📬 Місяць — вечірні: <b>${eveningM}</b>, алерти: <b>${alertsM}</b>\n` +
                 `Всього — вечірні: <b>${eveningT}</b>, алерти: <b>${alertsT}</b>\n\n` +
