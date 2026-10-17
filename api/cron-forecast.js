@@ -1371,9 +1371,10 @@ module.exports = async (req, res) => {
                         ]
                     };
 
-                    // ========== 6. Відправка Rich Message ==========
+                    // ========== 6. Відправка Rich Message + pin (лише наш попередній прогноз) ==========
+                    let sentMsg = null;
                     try {
-                        await bot.api.sendRichMessage(user.telegramId, {
+                        sentMsg = await bot.api.sendRichMessage(user.telegramId, {
                             html: fullHtml,
                             skip_entity_detection: true
                         }, {
@@ -1385,12 +1386,47 @@ module.exports = async (req, res) => {
                             .replace(/<[^>]+>/g, ' ')
                             .replace(/\s+/g, ' ')
                             .trim();
-                        await bot.api.sendMessage(user.telegramId, plain, {
-                            reply_markup: replyMarkup
-                        }).catch(() => {});
+                        try {
+                            sentMsg = await bot.api.sendMessage(user.telegramId, plain, {
+                                reply_markup: replyMarkup
+                            });
+                        } catch (_) {
+                            sentMsg = null;
+                        }
                     }
+
+                    // Pin new evening forecast; unpin only yesterday's bot pin (не чіпаємо чужі закріплення)
+                    if (sentMsg && sentMsg.message_id) {
+                        const chatId = user.telegramId;
+                        const newMsgId = sentMsg.message_id;
+                        const prevMsgId = user.lastEveningPinnedMsgId;
+
+                        if (prevMsgId && prevMsgId !== newMsgId) {
+                            try {
+                                await bot.api.unpinChatMessage(chatId, prevMsgId);
+                            } catch (unpinErr) {
+                                // вже знято / видалено / немає прав — ігноруємо
+                                console.error(`unpinChatMessage ${chatId}/${prevMsgId}:`, unpinErr.message);
+                            }
+                        }
+
+                        try {
+                            // disable_notification: true — без сповіщення «закріплено» (у приватних і так тихо;
+                            // у групах не шле push/звук; service-повідомлення про pin Telegram часто не створює при true)
+                            await bot.api.pinChatMessage(chatId, newMsgId, {
+                                disable_notification: true
+                            });
+                            await User.updateOne(
+                                { telegramId: chatId },
+                                { $set: { lastEveningPinnedMsgId: newMsgId } }
+                            ).catch((e) => console.error('save lastEveningPinnedMsgId:', e.message));
+                        } catch (pinErr) {
+                            console.error(`pinChatMessage ${chatId}/${newMsgId}:`, pinErr.message);
+                        }
+                    }
+
                     sent++;
-                        await incrementUsage(user.telegramId, 'evening').catch(() => {});
+                    await incrementUsage(user.telegramId, 'evening').catch(() => {});
                 }
                 logLines.push({
                     city: cityInfo.name,
