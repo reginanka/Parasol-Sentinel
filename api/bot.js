@@ -47,8 +47,8 @@ const dict = {
         helpBtn: "Допомога",
         selectCityBtn: "Обрати місто",
         helpRefBtn: "Допомога/Довідка",
-        selectCityPrompt: "📍 Надішліть <b>назву міста</b> (українською або англійською) — або оберіть зі списку після пошуку.",
-        selectCityGroupHint: "\n\n<details><summary><i>Бот не бачить місто?</i></summary>\nУ групі Парасоль не читає всі повідомлення — лише ті, що адресовані їй. Затисніть своє повідомлення з назвою міста → <b>Відповісти</b> на повідомлення бота (або згадайте бота через @). Так спокійніше для приватності чату ☂️\n</details>",
+        selectCityPrompt: "<p>📍 Надішліть <b>назву міста</b> (українською або англійською) — або оберіть зі списку після пошуку.</p>",
+        selectCityGroupHint: "<details><summary><i>💡 Бот не бачить місто?</i></summary><p>У групі Парасоль не читає всі повідомлення — лише ті, що адресовані їй. Затисніть своє повідомлення з назвою міста → <b>Відповісти</b> на повідомлення бота (або згадайте бота через @). Так спокійніше для приватності чату ☂️</p></details>",
         citySetEveningBtn: "🌆 Налаштування вечірнього прогнозу",
         citySetAlertsBtn: "🔔 Налаштування сповіщень про зміни",
         helpSelect: "🔍 Оберіть тему, яка вас цікавить:",
@@ -196,8 +196,8 @@ help_how_desc: "<h3>ℹ️ Як це працює</h3><ol><li>Напишіть �
         helpBtn: "Help",
         selectCityBtn: "Choose city",
         helpRefBtn: "Help / Guide",
-        selectCityPrompt: "📍 Send a <b>city name</b> — or pick from the search list.",
-        selectCityGroupHint: "\n\n<details><summary><i>Bot doesn't see the city?</i></summary>\nIn a group Parasol does not read every message — only those addressed to it. Long-press your message with the city name → <b>Reply</b> to the bot’s message (or @mention the bot). This keeps the chat more private ☂️\n</details>",
+        selectCityPrompt: "<p>📍 Send a <b>city name</b> — or pick from the search list.</p>",
+        selectCityGroupHint: "<details><summary><i>💡 Bot doesn't see the city?</i></summary><p>In a group Parasol does not read every message — only those addressed to it. Long-press your message with the city name → <b>Reply</b> to the bot’s message (or @mention the bot). This keeps the chat more private ☂️</p></details>",
         citySetEveningBtn: "🌆 Evening forecast settings",
         citySetAlertsBtn: "🔔 Change alerts settings",
         helpSelect: "🔍 Choose a topic you are interested in:",
@@ -1036,12 +1036,14 @@ bot.on("message:text", async (ctx) => {
     if (isSelectCityBtn) {
         await connectDB();
         await setBotMode(ctx.from.id, 'awaiting_city');
-        let text = dict[lang].selectCityPrompt;
+        let html = dict[lang].selectCityPrompt;
         if (isGroupCtx(ctx)) {
-            text += dict[lang].selectCityGroupHint;
+            html += dict[lang].selectCityGroupHint;
         }
-        return ctx.reply(text, {
-            parse_mode: 'HTML',
+        return ctx.api.sendRichMessage(ctx.chat.id, {
+            html,
+            skip_entity_detection: true
+        }, {
             reply_markup: buildWelcomeReplyKeyboard(lang)
         });
     }
@@ -1345,12 +1347,14 @@ bot.on("callback_query:data", async (ctx) => {
         if (data[1] === 'select_city') {
             await connectDB();
             await setBotMode(ctx.from.id, 'awaiting_city');
-            let text = dict[lang].selectCityPrompt;
+            let html = dict[lang].selectCityPrompt;
             if (isGroupCtx(ctx)) {
-                text += dict[lang].selectCityGroupHint;
+                html += dict[lang].selectCityGroupHint;
             }
-            return ctx.reply(text, {
-                parse_mode: 'HTML',
+            return ctx.api.sendRichMessage(ctx.chat.id, {
+                html,
+                skip_entity_detection: true
+            }, {
                 reply_markup: buildWelcomeReplyKeyboard(lang)
             });
         }
