@@ -126,9 +126,11 @@ function accessLabel(level) {
  * Format one user line (plain HTML fallback / access updates).
  */
 function formatUserLine(u) {
-    const name = u.username
-        ? u.username
-        : [u.firstName, u.lastName].filter(Boolean).join(' ') || `user_${u.telegramId}`;
+    const name = u.isGroupChat
+        ? `👥 ${u.firstName || u.username || 'Group'}`
+        : (u.username
+            ? u.username
+            : [u.firstName, u.lastName].filter(Boolean).join(' ') || `user_${u.telegramId}`);
     const lang = u.language || u.languageCode || '—';
     const access = accessLabel(u.accessLevel || 'unlimited');
     const geo = u.city
@@ -148,9 +150,11 @@ function formatUserLine(u) {
 
 /** One table row for user list / active list (Rich Message). */
 function formatUserRow(u) {
-    const name = u.username
-        ? `@${u.username}`
-        : [u.firstName, u.lastName].filter(Boolean).join(' ') || '—';
+    const name = u.isGroupChat
+        ? `👥 ${u.firstName || u.username || 'Group'}`
+        : (u.username
+            ? `@${u.username}`
+            : [u.firstName, u.lastName].filter(Boolean).join(' ') || '—');
     const lang = u.language || u.languageCode || '—';
     const access = accessLabel(u.accessLevel || 'unlimited');
     const city = u.city || '—';
@@ -1218,6 +1222,20 @@ function extractTgMeta(fromOrChat) {
     if (Object.keys(meta).length === 0) return null;
     meta.updatedAt = new Date();
     return meta;
+}
+
+/**
+ * Flat $set fields for tgMeta.* — for spread inside User.findOneAndUpdate $set.
+ * Keeps bot.js city-save path working after rename extractTgMeta.
+ */
+function extractTgUserFields(from) {
+    const meta = extractTgMeta(from);
+    if (!meta) return {};
+    const out = {};
+    for (const [k, v] of Object.entries(meta)) {
+        out[`tgMeta.${k}`] = v;
+    }
+    return out;
 }
 
 async function touchUserProfile(from, lang = 'uk') {
@@ -4203,6 +4221,8 @@ module.exports = {
     notifyAdmin,
     notifyUserError,
     touchUserProfile,
+    extractTgUserFields,
+    extractTgMeta,
     ensureMonthCounters,
     incrementUsage,
     formatUserLine,
