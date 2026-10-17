@@ -700,7 +700,8 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
         soil0: 'ґрунт 0 см',
         soil6: 'ґрунт 6 см',
         geomag: 'магнітні бурі',
-        how: 'як це працює'
+        how: 'як це працює',
+        group: 'бот у групі'
     };
 
     const onOff = (willBeOn) => (willBeOn ? 'увімкнув' : 'вимкнув');
