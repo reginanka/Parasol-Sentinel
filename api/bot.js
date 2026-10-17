@@ -632,11 +632,13 @@ function buildPrivateReplyKeyboard(lang) {
     };
 }
 
-/** Welcome keyboard: one row — Choose city | Help */
+/** Welcome inline keyboard under the message — Choose city | Help */
 function buildWelcomeReplyKeyboard(lang) {
     return {
-        keyboard: [[{ text: dict[lang].selectCityBtn }, { text: dict[lang].helpRefBtn }]],
-        resize_keyboard: true
+        inline_keyboard: [[
+            { text: dict[lang].selectCityBtn, callback_data: 'welcome|select_city' },
+            { text: dict[lang].helpRefBtn, callback_data: 'welcome|help' }
+        ]]
     };
 }
 
@@ -1332,6 +1334,27 @@ bot.on("callback_query:data", async (ctx) => {
     if (data[0] === 'open_help') {
         await ctx.answerCallbackQuery().catch(() => { });
         return sendHelpMenu(ctx);
+    }
+
+    // Welcome buttons: Choose city / Help (inline under /start message)
+    if (data[0] === 'welcome') {
+        await ctx.answerCallbackQuery().catch(() => { });
+        if (data[1] === 'help') {
+            return sendHelpMenu(ctx);
+        }
+        if (data[1] === 'select_city') {
+            await connectDB();
+            await setBotMode(ctx.from.id, 'awaiting_city');
+            let text = dict[lang].selectCityPrompt;
+            if (isGroupCtx(ctx)) {
+                text += dict[lang].selectCityGroupHint;
+            }
+            return ctx.reply(text, {
+                parse_mode: 'HTML',
+                reply_markup: buildWelcomeReplyKeyboard(lang)
+            });
+        }
+        return;
     }
 
     if (data[0] === 'agro_forecast_menu') {
