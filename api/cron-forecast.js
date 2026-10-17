@@ -1422,6 +1422,9 @@ module.exports = async (req, res) => {
             )
             .join('');
 
+        const personCount = users.filter((u) => !u.isGroupChat).length;
+        const groupCount = users.filter((u) => !!u.isGroupChat).length;
+
         const summary = `
 <h1>🌆 Вечірній прогноз</h1>
 <p>🕐 ${escapeHTML(startTime)}</p>
@@ -1434,7 +1437,8 @@ ${modeNote}
     </tr>
   </thead>
   <tbody>
-    <tr><td align="left">👥 Користувачів</td><td align="center"><b>${users.length}</b></td></tr>
+    <tr><td align="left">👤 Користувачів</td><td align="center"><b>${personCount}</b></td></tr>
+    <tr><td align="left">👥 Груп</td><td align="center"><b>${groupCount}</b></td></tr>
     <tr><td align="left">📨 Надіслано</td><td align="center"><b>${sent}</b></td></tr>
     <tr><td align="left">❌ Помилок</td><td align="center"><b>${errors}</b></td></tr>
   </tbody>

@@ -583,26 +583,146 @@ module.exports = async (req, res) => {
     }
 }
 
+
+/** true if current chat is group or supergroup */
+function isGroupCtx(ctx) {
+    const chat = ctx?.chat || ctx?.callbackQuery?.message?.chat;
+    return !!(chat && (chat.type === 'group' || chat.type === 'supergroup'));
+}
+
+/** Whose settings/city apply: group chat id in groups, else private user id */
+function ownerTelegramId(ctx) {
+    if (isGroupCtx(ctx)) {
+        const chat = ctx.chat || ctx.callbackQuery?.message?.chat;
+        if (chat?.id != null) return chat.id;
+    }
+    return ctx.from?.id;
+}
+
+/** Reply keyboard for groups: settings only (no agro / no mini-app) */
+function buildGroupReplyKeyboard(lang) {
+    return {
+        keyboard: [[{ text: dict[lang].settingsBtn }]],
+        resize_keyboard: true,
+        is_persistent: false
+    };
+}
+
+/** Reply keyboard for private chats */
+function buildPrivateReplyKeyboard(lang) {
+    return {
+        keyboard: [[{ text: dict[lang].settingsBtn }, { text: dict[lang].agroAnalyticsBtn }]],
+        resize_keyboard: true
+    };
+}
+
+/** Hide WebApp menu button in a specific chat (groups). */
+async function clearChatMenuButton(api, chatId) {
+    if (!chatId) return;
+    try {
+        await api.setChatMenuButton({
+            chat_id: chatId,
+            menu_button: { type: 'commands' }
+        });
+    } catch (e) {
+        console.warn('[bot] clearChatMenuButton:', e.message);
+    }
+}
+
+/**
+ * Ensure a User document for a group/supergroup chat.
+ * Does not overwrite city/lat/lon if already set.
+ */
+async function ensureGroupUser(chat, lang = 'uk') {
+    if (!chat?.id) return null;
+    const now = new Date();
+    return User.findOneAndUpdate(
+        { telegramId: chat.id },
+        {
+            $set: {
+                isGroupChat: true,
+                firstName: chat.title || `Group ${chat.id}`,
+                username: chat.username || undefined,
+                lastActivityAt: now
+            },
+            $setOnInsert: {
+                language: lang,
+                accessLevel: 'unlimited',
+                createdAt: now,
+                botMode: 'idle',
+                notificationsEnabled: true,
+                eveningForecastEnabled: true,
+                'usage.monthKey': null,
+                'usage.eveningThisMonth': 0,
+                'usage.alertsThisMonth': 0,
+                'usage.eveningTotal': 0,
+                'usage.alertsTotal': 0
+            }
+        },
+        { upsert: true, new: true }
+    );
+}
+
+async function sendGroupWelcome(ctx, lang) {
+    const chat = ctx.chat;
+    await ensureGroupUser(chat, lang);
+    await clearChatMenuButton(ctx.api, chat.id);
+
+    const title = chat?.title ? `«${chat.title}»` : (lang === 'uk' ? 'спільноті' : 'the community');
+    const text = lang === 'uk'
+        ? (
+            `👋 Вітаю, ${title}!\n\n` +
+            `Я *Parasol* — стежитиму за погодою для цієї спільноти.\n\n` +
+            `Налаштуємо сповіщення про зміни погоди та вечірній прогноз.\n\n` +
+            `📍 Надішліть *назву міста* для групи (або оберіть зі списку після пошуку).`
+          )
+        : (
+            `👋 Hello, ${title}!\n\n` +
+            `I'm *Parasol* — I will monitor weather for this community.\n\n` +
+            `Let's set up change alerts and the evening forecast.\n\n` +
+            `📍 Send a *city name* for the group (or pick from the search list).`
+          );
+
+    // Who typed /start in group — they type the city next
+    if (ctx.from?.id) {
+        await setBotMode(ctx.from.id, 'awaiting_city');
+    }
+
+    await ctx.reply(text, {
+        parse_mode: 'Markdown',
+        reply_markup: buildGroupReplyKeyboard(lang)
+    });
+}
+
 // /start command
 bot.command("start", async (ctx) => {
-    console.log('Start command from:', ctx.from.id);
+    console.log('Start command from:', ctx.from?.id, 'chat:', ctx.chat?.id, ctx.chat?.type);
     const lang = getLang(ctx);
     await connectDB();
     await touchUserProfile(ctx.from, lang);
     await notifyAdmin(ctx.from, '/start', { chatId: ctx.chat?.id });
 
-    // Reply keyboard: compact, dismissable with swipe — without is_persistent to avoid UI bugs
-    const keyboard = {
-        keyboard: [
-            [{ text: dict[lang].settingsBtn }, { text: dict[lang].agroAnalyticsBtn }]
-        ],
-        resize_keyboard: true
-    };
+    // Group / supergroup — separate onboarding, no mini-app / no agro
+    if (isGroupCtx(ctx)) {
+        await sendGroupWelcome(ctx, lang);
+        try {
+            await ctx.api.setMyCommands([
+                { command: 'start', description: lang === 'uk' ? 'Налаштувати для групи' : 'Set up for group' },
+                { command: 'settings', description: lang === 'uk' ? 'Налаштування групи' : 'Group settings' },
+                { command: 'help', description: lang === 'uk' ? 'Допомога' : 'Help' }
+            ], { scope: { type: 'chat', chat_id: ctx.chat.id } });
+        } catch (e) {
+            console.error('Error setting group commands:', e.message);
+        }
+        return;
+    }
+
+    // Private chat
+    const keyboard = buildPrivateReplyKeyboard(lang);
 
     await setBotMode(ctx.from.id, 'awaiting_city');
     await ctx.reply(dict[lang].welcome, { parse_mode: 'Markdown', reply_markup: keyboard });
 
-    // Register commands for the user
     try {
         await ctx.api.setMyCommands([
             { command: 'start', description: lang === 'uk' ? 'Запустити бота' : 'Start the bot' },
@@ -610,14 +730,47 @@ bot.command("start", async (ctx) => {
             { command: 'help', description: lang === 'uk' ? 'Допомога' : 'Help' }
         ]);
 
-        // Set WebApp menu button (this will be on the left of the input field)
-        await ctx.api.setChatMenuButton({ menu_button: {
-            type: 'web_app',
-            text: dict[lang].dashboard,
-            web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
-        } });
+        await ctx.api.setChatMenuButton({
+            chat_id: ctx.chat.id,
+            menu_button: {
+                type: 'web_app',
+                text: dict[lang].dashboard,
+                web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
+            }
+        });
     } catch (e) {
         console.error('Error setting commands/menu:', e.message);
+    }
+});
+
+// Bot added / removed / promoted in a group
+bot.on('my_chat_member', async (ctx) => {
+    try {
+        const upd = ctx.myChatMember;
+        if (!upd?.chat) return;
+        const chat = upd.chat;
+        if (chat.type !== 'group' && chat.type !== 'supergroup') return;
+
+        const oldS = upd.old_chat_member?.status;
+        const newS = upd.new_chat_member?.status;
+        const wasOut = oldS === 'left' || oldS === 'kicked';
+        const isIn = newS === 'member' || newS === 'administrator';
+
+        if (wasOut && isIn) {
+            const lang = getLang(ctx) || 'uk';
+            await connectDB();
+            // from = who added the bot
+            if (ctx.from) await touchUserProfile(ctx.from, lang);
+            await sendGroupWelcome(ctx, lang);
+            try {
+                await notifyAdmin(ctx.from || { id: 0, first_name: 'system' }, 'bot_added_to_group', {
+                    chatId: chat.id,
+                    messageText: chat.title || String(chat.id)
+                });
+            } catch (_e) {}
+        }
+    } catch (e) {
+        console.error('[bot] my_chat_member error:', e.message);
     }
 });
 
@@ -625,12 +778,17 @@ bot.command("start", async (ctx) => {
 bot.command('settings', async (ctx) => {
     const lang = getLang(ctx);
     await connectDB();
-    const user = await User.findOne({ telegramId: ctx.from.id });
+    const ownerId = isGroupCtx(ctx) ? ctx.chat.id : ctx.from.id;
+    const user = await User.findOne({ telegramId: ownerId });
     if (!user || !user.city) {
         await setBotMode(ctx.from.id, 'awaiting_city');
         return ctx.reply(lang === 'uk'
-            ? '❌ Спочатку встановіть місто, надіславши його назву.'
-            : '❌ Please set your city first by sending its name.', { parse_mode: 'Markdown' });
+            ? (isGroupCtx(ctx)
+                ? '❌ Спочатку встановіть місто для спільноти — надішліть його назву.'
+                : '❌ Спочатку встановіть місто, надіславши його назву.')
+            : (isGroupCtx(ctx)
+                ? '❌ Please set a city for the community first by sending its name.'
+                : '❌ Please set your city first by sending its name.'), { parse_mode: 'Markdown' });
     }
     await ctx.reply(
         dict[lang].settings, { parse_mode: 'Markdown', reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) });
@@ -818,9 +976,13 @@ bot.on("message:text", async (ctx) => {
 
     // Handle Menu Buttons
     if (isSettings) {
-        const user = await User.findOne({ telegramId: ctx.from.id });
-        if (!user) {
-            return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
+        const ownerId = isGroupCtx(ctx) ? ctx.chat.id : ctx.from.id;
+        const user = await User.findOne({ telegramId: ownerId });
+        if (!user || !user.city) {
+            await setBotMode(ctx.from.id, 'awaiting_city');
+            return ctx.reply(lang === 'uk'
+                ? (isGroupCtx(ctx) ? '📍 Спочатку встановіть місто для спільноти.' : '📍 Спочатку встановіть місто.')
+                : (isGroupCtx(ctx) ? '📍 Please set a city for the community first.' : '📍 Please set a city first.'));
         }
         return ctx.reply(dict[lang].settings, { parse_mode: 'Markdown', reply_markup: buildSettingsKeyboard(lang, user.units, user.notificationsEnabled !== false) });
     }
@@ -833,6 +995,14 @@ bot.on("message:text", async (ctx) => {
         return ctx.reply(dict[lang].cropsSelectCat, {
             reply_markup: buildCropsCategoriesKeyboard(lang)
         });
+    }
+
+    if (isAgroAnalytics || isAgroForecast || isArchive) {
+        if (isGroupCtx(ctx)) {
+            return ctx.reply(lang === 'uk'
+                ? '👥 Агро-аналітика та архів доступні лише в особистому чаті з ботом.'
+                : '👥 Agro analytics and archive are available only in a private chat with the bot.');
+        }
     }
 
     if (isAgroAnalytics) {
@@ -1111,7 +1281,12 @@ bot.on("callback_query:data", async (ctx) => {
 
     if (data[0] === 'agro_forecast_menu') {
         await ctx.answerCallbackQuery().catch(() => { });
-        const user = await User.findOne({ telegramId: ctx.from.id });
+        if (isGroupCtx(ctx)) {
+            return ctx.reply(lang === 'uk'
+                ? '👥 Агро-аналітика доступна лише в особистому чаті з ботом.'
+                : '👥 Agro analytics is available only in a private chat with the bot.');
+        }
+        const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
         if (!user || !user.lat) return ctx.reply(lang === 'uk' ? '📍 Спочатку встановіть місто.' : '📍 Please set a city first.');
         const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
         const cityData = await City.findOne({ externalId: cityKey });
@@ -1122,6 +1297,11 @@ bot.on("callback_query:data", async (ctx) => {
 
     if (data[0] === 'agro_archive_menu') {
         await ctx.answerCallbackQuery().catch(() => { });
+        if (isGroupCtx(ctx)) {
+            return ctx.reply(lang === 'uk'
+                ? '👥 Архів доступний лише в особистому чаті з ботом.'
+                : '👥 Archive is available only in a private chat with the bot.');
+        }
         return ctx.editMessageText(lang === 'uk' ? '📊 Оберіть період для аналізу:' : '📊 Select period for analysis:', {
             reply_markup: buildArchiveKeyboard(lang)
         });
@@ -1143,16 +1323,12 @@ bot.on("callback_query:data", async (ctx) => {
             const latN = parseFloat(lat);
             const lonN = parseFloat(lon);
             const chat = ctx.chat || ctx.callbackQuery?.message?.chat;
-            const isGroup = chat && (chat.type === 'group' || chat.type === 'supergroup');
+            const isGroup = !!(chat && (chat.type === 'group' || chat.type === 'supergroup'));
             const tgFields = (typeof extractTgUserFields === 'function')
                 ? extractTgUserFields(ctx.from)
                 : {};
 
-            const personalSet = {
-                username: ctx.from.username,
-                firstName: ctx.from.first_name,
-                lastName: ctx.from.last_name,
-                languageCode: ctx.from.language_code,
+            const locationFields = {
                 city: weather.city_name,
                 lat: latN,
                 lon: lonN,
@@ -1164,24 +1340,11 @@ bot.on("callback_query:data", async (ctx) => {
                     temp: weather.temp,
                     weatherCode: weather.weather.code,
                     updatedAt: new Date()
-                },
-                ...tgFields
+                }
             };
 
-            const personalUpdate = { $set: personalSet };
             if (isGroup && chat.id != null) {
-                personalUpdate.$addToSet = { groupChatIds: chat.id };
-            }
-
-            await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
-                personalUpdate,
-                { upsert: true, new: true }
-            );
-
-            // Group/supergroup: окремий User-документ з telegramId = chat.id,
-            // щоб група з'явилась у списку користувачів і отримувала алерти.
-            if (isGroup && chat.id != null) {
+                // Група / спільнота: місто тільки для chat.id, НЕ чіпаємо локацію персонального юзера
                 await User.findOneAndUpdate(
                     { telegramId: chat.id },
                     {
@@ -1189,18 +1352,7 @@ bot.on("callback_query:data", async (ctx) => {
                             isGroupChat: true,
                             firstName: chat.title || `Group ${chat.id}`,
                             username: chat.username || undefined,
-                            city: weather.city_name,
-                            lat: latN,
-                            lon: lonN,
-                            timezone: weather.timezone,
-                            language: lang,
-                            botMode: 'idle',
-                            lastActivityAt: new Date(),
-                            lastState: {
-                                temp: weather.temp,
-                                weatherCode: weather.weather.code,
-                                updatedAt: new Date()
-                            },
+                            ...locationFields,
                             notificationsEnabled: true,
                             eveningForecastEnabled: true
                         },
@@ -1212,6 +1364,45 @@ bot.on("callback_query:data", async (ctx) => {
                             'usage.alertsThisMonth': 0,
                             'usage.eveningTotal': 0,
                             'usage.alertsTotal': 0
+                        }
+                    },
+                    { upsert: true, new: true }
+                );
+
+                // На персональному юзері лише зв'язок з групою + профіль/активність (без city/lat/lon)
+                await User.findOneAndUpdate(
+                    { telegramId: ctx.from.id },
+                    {
+                        $set: {
+                            username: ctx.from.username,
+                            firstName: ctx.from.first_name,
+                            lastName: ctx.from.last_name,
+                            languageCode: ctx.from.language_code,
+                            lastActivityAt: new Date(),
+                            ...tgFields
+                        },
+                        $addToSet: { groupChatIds: chat.id },
+                        $setOnInsert: {
+                            language: lang,
+                            accessLevel: 'unlimited',
+                            createdAt: new Date(),
+                            botMode: 'idle'
+                        }
+                    },
+                    { upsert: true, new: true }
+                );
+            } else {
+                // Приватний чат: місто тільки для цього користувача
+                await User.findOneAndUpdate(
+                    { telegramId: ownerTelegramId(ctx) },
+                    {
+                        $set: {
+                            username: ctx.from.username,
+                            firstName: ctx.from.first_name,
+                            lastName: ctx.from.last_name,
+                            languageCode: ctx.from.language_code,
+                            ...locationFields,
+                            ...tgFields
                         }
                     },
                     { upsert: true, new: true }
@@ -1248,23 +1439,29 @@ bot.on("callback_query:data", async (ctx) => {
                 parse_mode: 'Markdown'
             });
 
-            // Re-show reply keyboard so bottom menu stays visible after city change
-            await ctx.reply(
-                lang === 'uk' ? '👇 Обери що тебе цікавить:' : '👇 Choose what you need:',
-                {
-                    reply_markup: {
-                        keyboard: [[{ text: dict[lang].settingsBtn }, { text: dict[lang].agroAnalyticsBtn }]],
-                        resize_keyboard: true
+            // Re-show reply keyboard (group: settings only; private: settings + agro)
+            if (isGroup) {
+                await ctx.reply(
+                    lang === 'uk'
+                        ? '✅ Місто спільноти збережено. Далі можна налаштувати сповіщення та вечірній прогноз у «Налаштування».'
+                        : '✅ Community city saved. Next, configure alerts and evening forecast in Settings.',
+                    { reply_markup: buildGroupReplyKeyboard(lang) }
+                );
+                await clearChatMenuButton(ctx.api, chat.id);
+            } else {
+                await ctx.reply(
+                    lang === 'uk' ? '👇 Обери що тебе цікавить:' : '👇 Choose what you need:',
+                    { reply_markup: buildPrivateReplyKeyboard(lang) }
+                );
+                await ctx.api.setChatMenuButton({
+                    chat_id: ctx.chat?.id,
+                    menu_button: {
+                        type: 'web_app',
+                        text: dict[lang].dashboard,
+                        web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
                     }
-                }
-            );
-
-            // Set WebApp menu button after successful city selection
-            await ctx.api.setChatMenuButton({ menu_button: {
-                type: 'web_app',
-                text: dict[lang].dashboard,
-                web_app: { url: formatUrl(process.env.DOMAIN || 'localhost') }
-            } }).catch(e => console.error('Menu button error:', e.message));
+                }).catch(e => console.error('Menu button error:', e.message));
+            }
 
         } catch (error) {
             console.error('[bot] city set failed:', error?.message || error, error?.stack);
@@ -1284,7 +1481,7 @@ bot.on("callback_query:data", async (ctx) => {
             await ctx.answerCallbackQuery().catch(() => { });
             await connectDB();
 
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user || !user.lat || !user.lon) {
                 return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
@@ -1725,7 +1922,7 @@ bot.on("callback_query:data", async (ctx) => {
             await ctx.answerCallbackQuery().catch(() => { });
             await connectDB();
 
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user || !user.lat || !user.lon) {
                 return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
@@ -1967,7 +2164,7 @@ bot.on("callback_query:data", async (ctx) => {
             await ctx.answerCallbackQuery().catch(() => { });
             await connectDB();
 
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user || !user.lat || !user.lon) {
                 return ctx.reply(lang === 'uk' ? '❌ Помилка: дані користувача не знайдені' : '❌ Error: user data not found');
             }
@@ -2024,7 +2221,7 @@ bot.on("callback_query:data", async (ctx) => {
     // --- Crops category selection callback ---
     else if (data[0] === 'crops_cat') {
         const categoryKey = data[1];
-        const user = await User.findOne({ telegramId: ctx.from.id });
+        const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
         const label = CROPS_DATA[categoryKey].label[lang];
 
         await ctx.answerCallbackQuery();
@@ -2038,7 +2235,7 @@ bot.on("callback_query:data", async (ctx) => {
         const [_, categoryKey, plantId] = data;
         try {
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const hasCrop = user.crops.includes(plantId);
@@ -2047,7 +2244,7 @@ bot.on("callback_query:data", async (ctx) => {
                 : { $addToSet: { crops: plantId } };
 
             const updatedUser = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 update,
                 { new: true }
             );
@@ -2067,7 +2264,7 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await ctx.answerCallbackQuery();
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
             const cityData = await City.findOne({ externalId: cityKey });
 
@@ -2097,7 +2294,7 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await ctx.answerCallbackQuery();
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             const cityKey = `${user.lat.toFixed(2)},${user.lon.toFixed(2)}`;
             const cityData = await City.findOne({ externalId: cityKey });
 
@@ -2171,14 +2368,14 @@ bot.on("callback_query:data", async (ctx) => {
 
         try {
             await connectDB();
-            let user = await User.findOne({ telegramId: ctx.from.id });
+            let user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user) return;
 
             // Lazy migrate geomagMode from legacy magneticStorm flag
             let mode = resolveGeomagMode(user);
             if (user.geomagMode !== mode) {
                 user = await User.findOneAndUpdate(
-                    { telegramId: ctx.from.id },
+                    { telegramId: ownerTelegramId(ctx) },
                     { $set: { geomagMode: mode, 'alertTriggers.magneticStorm': mode !== 'off' } },
                     { new: true }
                 );
@@ -2256,7 +2453,7 @@ bot.on("callback_query:data", async (ctx) => {
         const key = data[2];
         try {
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user) {
                 await ctx.answerCallbackQuery('❌ Error').catch(() => {});
                 return;
@@ -2267,7 +2464,7 @@ bot.on("callback_query:data", async (ctx) => {
             const newValue = !currentValue;
 
             const updatedUser = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 { $set: { [`alertTriggers.${key}`]: newValue } },
                 { new: true }
             );
@@ -2285,7 +2482,7 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await connectDB();
             const updatedUser = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 {
                     $set: {
                         'alertTriggers.temperature': targetState,
@@ -2314,7 +2511,7 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await connectDB();
             const updatedUser = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 {
                     $set: {
                         geomagMode: mode,
@@ -2337,7 +2534,7 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await ctx.answerCallbackQuery().catch(() => {});
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             const userLang = user?.language || lang || 'uk';
             const tz = user?.timezone || 'Europe/Kyiv';
             const isUk = userLang === 'uk';
@@ -2628,12 +2825,12 @@ bot.on("callback_query:data", async (ctx) => {
     else if (data[0] === 'toggle_evening_forecast') {
         try {
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const currentVal = user.eveningForecastEnabled !== false;
             const updatedUser = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 { $set: { eveningForecastEnabled: !currentVal } },
                 { new: true }
             );
@@ -2647,7 +2844,7 @@ bot.on("callback_query:data", async (ctx) => {
 
     // --- Forecast settings menu callback ---
     else if (data[0] === 'forecast_menu') {
-        const user = await User.findOne({ telegramId: ctx.from.id });
+        const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
         if (!user) return ctx.answerCallbackQuery('❌ Error');
         await ctx.answerCallbackQuery();
 
@@ -2694,7 +2891,7 @@ bot.on("callback_query:data", async (ctx) => {
             if (subType === 'days') {
                 update = { $set: { 'forecastSettings.daysCount': parseInt(value) } };
             } else if (subType === 'toggle') {
-                const user = await User.findOne({ telegramId: ctx.from.id });
+                const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
                 let currentMetrics = user.forecastSettings?.enabledMetrics || [];
                 // Міграція legacy 'aqi' → три окремі ключі при першому кліку по новим
                 if (currentMetrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(value)) {
@@ -2710,7 +2907,7 @@ bot.on("callback_query:data", async (ctx) => {
             }
 
             const updatedUser = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 update,
                 { new: true }
             );
@@ -2724,7 +2921,7 @@ bot.on("callback_query:data", async (ctx) => {
 
     // --- Open Settings manual callback ---
     else if (data[0] === 'open_settings') {
-        const user = await User.findOne({ telegramId: ctx.from.id });
+        const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
         if (!user) return ctx.answerCallbackQuery('❌ Error');
         await ctx.answerCallbackQuery();
 
@@ -2746,7 +2943,7 @@ bot.on("callback_query:data", async (ctx) => {
             await connectDB();
             const updateField = `units.${type}`;
             const user = await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 { $set: { [updateField]: value } },
                 { new: true }
             );
@@ -2763,9 +2960,44 @@ bot.on("callback_query:data", async (ctx) => {
         await ctx.answerCallbackQuery();
         await connectDB();
         await setBotMode(ctx.from.id, 'awaiting_city');
-        await ctx.reply(lang === 'uk'
-            ? '📍 Надішліть назву нового міста:'
-            : '📍 Send the name of the new city:');
+
+        const chat = ctx.chat || ctx.callbackQuery?.message?.chat;
+        const isGroup = !!(chat && (chat.type === 'group' || chat.type === 'supergroup'));
+        // У групі — місто спільноти; у приваті — особисте
+        const ownerId = isGroup && chat.id != null ? chat.id : ctx.from.id;
+        const locUser = await User.findOne({ telegramId: ownerId }).lean();
+
+        let currentLine = '';
+        if (locUser?.city || (locUser?.lat != null && locUser?.lon != null)) {
+            const cityName = locUser.city || (lang === 'uk' ? 'без назви' : 'unnamed');
+            const geo =
+                locUser.lat != null && locUser.lon != null
+                    ? `${Number(locUser.lat).toFixed(5)}, ${Number(locUser.lon).toFixed(5)}`
+                    : '—';
+            if (lang === 'uk') {
+                currentLine = isGroup
+                    ? `👥 <b>Поточне місто спільноти:</b> ${cityName}\n🌐 Гео: <code>${geo}</code>\n\n`
+                    : `📍 <b>Поточне місто:</b> ${cityName}\n🌐 Гео: <code>${geo}</code>\n\n`;
+            } else {
+                currentLine = isGroup
+                    ? `👥 <b>Current community city:</b> ${cityName}\n🌐 Geo: <code>${geo}</code>\n\n`
+                    : `📍 <b>Current city:</b> ${cityName}\n🌐 Geo: <code>${geo}</code>\n\n`;
+            }
+        } else if (lang === 'uk') {
+            currentLine = isGroup
+                ? '👥 Місто спільноти ще не обрано.\n\n'
+                : '📍 Місто ще не обрано.\n\n';
+        } else {
+            currentLine = isGroup
+                ? '👥 Community city is not set yet.\n\n'
+                : '📍 City is not set yet.\n\n';
+        }
+
+        const prompt = lang === 'uk'
+            ? 'Надішліть назву нового міста:'
+            : 'Send the name of the new city:';
+
+        await ctx.reply(currentLine + prompt, { parse_mode: 'HTML' });
     }
 
     // --- Delete city callback ---
@@ -2773,7 +3005,7 @@ bot.on("callback_query:data", async (ctx) => {
         try {
             await connectDB();
             await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 { $unset: { city: '', lat: '', lon: '', timezone: '', lastState: '' } }
             );
             await ctx.answerCallbackQuery();
@@ -2787,12 +3019,12 @@ bot.on("callback_query:data", async (ctx) => {
     else if (data[0] === 'toggle_notifications') {
         try {
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user) return ctx.answerCallbackQuery('❌ Error');
 
             const newValue = user.notificationsEnabled === false ? true : false;
             await User.findOneAndUpdate(
-                { telegramId: ctx.from.id },
+                { telegramId: ownerTelegramId(ctx) },
                 { $set: { notificationsEnabled: newValue } }
             );
 
@@ -2809,7 +3041,7 @@ bot.on("callback_query:data", async (ctx) => {
         const mode = data[1];
         try {
             await connectDB();
-            const user = await User.findOne({ telegramId: ctx.from.id });
+            const user = await User.findOne({ telegramId: ownerTelegramId(ctx) });
             if (!user || !user.lat) {
                 return ctx.answerCallbackQuery(lang === 'uk' ? '❌ Спочатку встановіть місто' : '❌ Please set city first');
             }
