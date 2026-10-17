@@ -65,6 +65,13 @@ const UserSchema = new mongoose.Schema({
     eveningForecastEnabled: { type: Boolean, default: true },
 
     /**
+     * message_id of the last evening forecast that the bot pinned in this chat.
+     * Used to unpin only our own previous forecast (never other pins).
+     * No default — avoid dirtying document on load/save (VersionError safety).
+     */
+    lastEveningPinnedMsgId: Number,
+
+    /**
      * Access control for paid / limited features.
      *  - 'none'      — немає доступу (заблокований / без підписки)
      *  - 'unlimited' — безліміт
