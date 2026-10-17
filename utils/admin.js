@@ -712,16 +712,16 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
         return `обрав місто на карті (${parts[1]}, ${parts[2]})`;
     }
 
-    // Toggles that need user state (notify is BEFORE DB update → invert current)
+    // Toggles: notifyAdmin runs in finally AFTER DB update → describe FINAL state (no invert)
     if (cb === 'toggle_notifications') {
-        const wasOn = u ? u.notificationsEnabled !== false : null;
-        if (wasOn == null) return 'перемкнув усі сповіщення';
-        return `${onOff(!wasOn)} усі сповіщення`;
+        const isOn = u ? u.notificationsEnabled !== false : null;
+        if (isOn == null) return 'перемкнув усі сповіщення';
+        return `${onOff(isOn)} усі сповіщення`;
     }
     if (cb === 'toggle_evening_forecast') {
-        const wasOn = u ? u.eveningForecastEnabled !== false : null;
-        if (wasOn == null) return 'перемкнув вечірній прогноз';
-        return `${onOff(!wasOn)} вечірній прогноз`;
+        const isOn = u ? u.eveningForecastEnabled !== false : null;
+        if (isOn == null) return 'перемкнув вечірній прогноз';
+        return `${onOff(isOn)} вечірній прогноз`;
     }
 
     const map = {
@@ -754,13 +754,9 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
             const key = parts[2];
             const m = METRIC_NAMES_UA[key] || key;
             let metrics = u?.forecastSettings?.enabledMetrics || [];
-            // legacy aqi
-            if (metrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(key)) {
-                const wasOn = true; // treated as on before first split
-                return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
-            }
-            const wasOn = metrics.includes(key);
-            if (u) return `${onOff(!wasOn)} метрику «${m}» у вечірньому прогнозі`;
+            // Final state after toggle (notify runs after DB write)
+            const isOn = metrics.includes(key) || (metrics.includes('aqi') && ['aqi_now', 'aqi_main', 'aqi_ext'].includes(key));
+            if (u) return `${onOff(isOn)} метрику «${m}» у вечірньому прогнозі`;
             return `перемкнув метрику «${m}» у вечірньому прогнозі`;
         }
     }
@@ -778,8 +774,8 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
             const key = parts[2];
             const label = names[key] || key;
             if (u?.alertTriggers && Object.prototype.hasOwnProperty.call(u.alertTriggers, key)) {
-                const wasOn = u.alertTriggers[key] !== false;
-                return `${onOff(!wasOn)} алерт «${label}»`;
+                const isOn = u.alertTriggers[key] !== false;
+                return `${onOff(isOn)} алерт «${label}»`;
             }
             return `перемкнув алерт «${label}»`;
         }
@@ -815,8 +811,8 @@ function describeUserAction(actionText, extra = {}, userSnapshot = null) {
     if (head === 'crops_toggle') {
         const cropId = parts[2] || '?';
         const crops = Array.isArray(u?.crops) ? u.crops : [];
-        const wasOn = crops.includes(cropId) || crops.includes(`${parts[1]}|${cropId}`);
-        if (u) return `${onOff(!wasOn)} культуру «${cropId}»`;
+        const isOn = crops.includes(cropId) || crops.includes(`${parts[1]}|${cropId}`);
+        if (u) return `${onOff(isOn)} культуру «${cropId}»`;
         return `перемкнув культуру (${parts[1] || '?'}/${cropId})`;
     }
 
@@ -867,7 +863,7 @@ async function notifyAdmin(from, actionText, extra = {}) {
     const name = displayName(from);
     const uname = from.username ? `@${from.username}` : 'без @username';
 
-    // Стан ДО toggle (notify викликається раніше обробки callback у bot.js)
+    // Стан ПІСЛЯ toggle (notifyAdmin у finally після DB update у bot.js)
     let userSnapshot = null;
     if (extra.callbackData || actionText === 'callback') {
         try {
@@ -3081,15 +3077,79 @@ function applyActionLinesToState(baseline, lines) {
 }
 
 /**
- * Diff final vs baseline → short Ukrainian summary of real net changes only.
- * If user toggled something and restored the original value — it does not appear.
+ * Undo the just-applied callback on a settings snapshot.
+ * Needed because notify runs AFTER DB write — first baseline would otherwise
+ * already include the first change of the day.
  */
-function buildActionDaySummaryFromBaseline(baseline, lines) {
-    if (!baseline) {
-        // Fallback: no baseline yet
-        return 'Змін немає.';
+function undoCallbackOnSnapshot(snapshot, callbackData) {
+    const s = cloneBaseline(snapshot);
+    const parts = String(callbackData || '').split('|');
+    const head = parts[0] || '';
+
+    if (callbackData === 'toggle_notifications') {
+        s.notificationsEnabled = !s.notificationsEnabled;
+        return s;
     }
-    const final = applyActionLinesToState(baseline, lines);
+    if (callbackData === 'toggle_evening_forecast') {
+        s.eveningForecastEnabled = !s.eveningForecastEnabled;
+        return s;
+    }
+    if (head === 'alert' && parts[1] === 'toggle' && parts[2]) {
+        const key = parts[2];
+        if (s.alerts && Object.prototype.hasOwnProperty.call(s.alerts, key)) {
+            s.alerts[key] = !s.alerts[key];
+        }
+        return s;
+    }
+    if (head === 'alert' && parts[1] === 'toggle_all') {
+        // Cannot reliably undo without previous state — leave as-is
+        return s;
+    }
+    if (head === 'forecast' && parts[1] === 'toggle' && parts[2]) {
+        const key = parts[2];
+        const set = new Set(s.metrics || []);
+        if (set.has(key)) set.delete(key);
+        else set.add(key);
+        s.metrics = [...set].sort();
+        return s;
+    }
+    if (head === 'forecast' && parts[1] === 'days' && parts[2]) {
+        // Unknown previous daysCount — cannot undo; leave
+        return s;
+    }
+    if (head === 'geomag_mode') {
+        // Unknown previous mode — cannot undo from callback alone
+        return s;
+    }
+    if (head === 'unit') {
+        // Unknown previous unit — leave
+        return s;
+    }
+    if (head === 'crops_toggle' && parts[2]) {
+        const cropId = parts[2];
+        const set = new Set(s.crops || []);
+        const catForm = parts[1] ? `${parts[1]}|${cropId}` : null;
+        if (set.has(cropId) || (catForm && set.has(catForm))) {
+            set.delete(cropId);
+            if (catForm) set.delete(catForm);
+        } else {
+            set.add(cropId);
+        }
+        s.crops = [...set].sort();
+        return s;
+    }
+    return s;
+}
+
+/**
+ * Diff live user settings vs day baseline → short Ukrainian summary.
+ * Source of truth is MongoDB state, not replaying log text (avoids invert bugs).
+ * Toggle back to baseline → line disappears from summary.
+ */
+function buildActionDaySummaryFromBaseline(baseline, liveUser) {
+    if (!baseline || !liveUser) return 'Змін немає.';
+
+    const final = captureSettingsBaseline(liveUser);
     const net = [];
 
     if (final.notificationsEnabled !== baseline.notificationsEnabled) {
@@ -3163,8 +3223,11 @@ function buildActionDaySummaryFromBaseline(baseline, lines) {
         if (!finCrops.has(c)) net.push(`вимкнув культуру «${c}»`);
     }
 
-    // City change (coarse)
-    if ((final.city || null) !== (baseline.city || null) || final.lat !== baseline.lat || final.lon !== baseline.lon) {
+    if (
+        (final.city || null) !== (baseline.city || null) ||
+        final.lat !== baseline.lat ||
+        final.lon !== baseline.lon
+    ) {
         if (!final.city && final.lat == null) net.push('видалив місто');
         else if (final.lat != null && final.lon != null) {
             net.push(`змінив місто (${final.lat}, ${final.lon})`);
@@ -3220,17 +3283,19 @@ async function appendUserDayActions(api, from, humanAction, extra = {}) {
     // Keep last ~80 lines to stay under Telegram limits
     if (lines.length > 80) lines = lines.slice(lines.length - 80);
 
-    // Baseline: freeze settings at the FIRST action of this Kyiv day
-    // (notify runs before toggle → snapshot is pre-first-action state)
+    // Baseline: freeze settings as they were BEFORE the first action of this Kyiv day.
+    // notifyAdmin runs AFTER DB write → reverse the current callback once when capturing.
     let baseline = sameDay && prev.baseline ? prev.baseline : null;
     if (!baseline) {
-        baseline = captureSettingsBaseline(user);
+        const after = captureSettingsBaseline(user);
+        baseline = undoCallbackOnSnapshot(after, extra.callbackData || '');
     }
 
     // Can edit only if we already have a Telegram message for this day
     const canEdit = sameDay && prev.messageId;
 
-    const summary = buildActionDaySummaryFromBaseline(baseline, lines);
+    // Summary from live Mongo state vs baseline (not from log text)
+    const summary = buildActionDaySummaryFromBaseline(baseline, user);
     const namePart =
         user.username
             ? `@${user.username}`
