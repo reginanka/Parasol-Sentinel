@@ -976,19 +976,43 @@ async function notifyAdmin(from, actionText, extra = {}) {
         ]
     };
 
-    // Plain HTML (sendMessage fallback) — ID обовʼязково для Reply
-    const groupLine =
-        isGroupCtx
-            ? `👥 <b>Група:</b> ${escapeHtml(groupTitle || 'спільнота')}` +
-              (srcChatId != null ? ` · <code>${srcChatId}</code>` : '') +
-              `\n`
-            : '';
-    let text =
-        `👤 <b>${escapeHtml(name)}</b>\n` +
-        `${escapeHtml(uname)}\n` +
-        `ID: <code>${from.id}</code>\n` +
-        groupLine +
-        `⚡ Дія: ${escapeHtml(humanAction)}`;
+    // ── Build notify card ──
+    // Група зверху (якщо є) → юзер → дія → Reply → технічне в <details>
+    const techLines = [];
+    if (extra.messageText) {
+        techLines.push(`#ctx_msg:${String(extra.messageText).slice(0, 200)}#ctx_end`);
+    } else if (userMediaDesc && (userMediaDesc.media || userMediaDesc.text)) {
+        const mctx = [userMediaDesc.media, userMediaDesc.text].filter(Boolean).join(' ').slice(0, 200);
+        techLines.push(`#ctx_msg:${mctx}#ctx_end`);
+    } else if (!isUserText && humanAction) {
+        techLines.push(`#ctx_act:${String(humanAction).slice(0, 200)}#ctx_end`);
+    }
+    techLines.push(`ID: ${from.id}`);
+    techLines.push(`#uid:${from.id}`);
+    if (isGroupCtx && srcChatId != null) {
+        techLines.push(`#gid:${srcChatId}`);
+    }
+
+    const replyHint = isGroupCtx
+        ? '↩️ Reply → надіслати в групу'
+        : '↩️ Reply → надіслати юзеру';
+
+    // Plain HTML fallback
+    let text = '';
+    if (isGroupCtx) {
+        text +=
+            `👥 <b>Група: ${escapeHtml(groupTitle || 'спільнота')}</b>\n` +
+            (srcChatId != null ? `ID: <code>${srcChatId}</code>\n` : '') +
+            `\n` +
+            `👤 ${escapeHtml(name)}\n` +
+            `${escapeHtml(uname)} · <code>${from.id}</code>\n`;
+    } else {
+        text +=
+            `👤 <b>${escapeHtml(name)}</b>\n` +
+            `${escapeHtml(uname)}\n` +
+            `ID: <code>${from.id}</code>\n`;
+    }
+    text += `⚡ Дія: ${escapeHtml(humanAction)}`;
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
     } else if (userMediaDesc && userMediaDesc.media) {
@@ -1005,40 +1029,37 @@ async function notifyAdmin(from, actionText, extra = {}) {
             `\n\n📜 <b>Останні повідомлення:</b>\n` +
             `<blockquote expandable>${escapeHtml(histSnippet)}</blockquote>`;
     }
-    // Machine-readable context for reply_to (rich often drops visible text)
-    if (extra.messageText) {
-        text += `\n<code>#ctx_msg:${escapeHtml(String(extra.messageText).slice(0, 200))}#ctx_end</code>`;
-    } else if (userMediaDesc && (userMediaDesc.media || userMediaDesc.text)) {
-        const mctx = [userMediaDesc.media, userMediaDesc.text].filter(Boolean).join(' ').slice(0, 200);
-        text += `\n<code>#ctx_msg:${escapeHtml(mctx)}#ctx_end</code>`;
-    } else if (!isUserText && humanAction) {
-        text += `\n<code>#ctx_act:${escapeHtml(String(humanAction).slice(0, 200))}#ctx_end</code>`;
-    }
-    // Machine markers for Reply routing (must survive rich → reply_to)
-    text += `\n<code>#uid:${from.id}</code>`;
-    if (isGroupCtx && srcChatId != null) {
-        text += `\n<code>#gid:${srcChatId}</code>`;
-    }
-    text += isGroupCtx
-        ? `\n\n<i>↩️ Reply → надіслати в групу</i>`
-        : `\n\n<i>↩️ Reply → надіслати юзеру</i>`;
+    text += `\n\n<i>${replyHint}</i>`;
+    // Технічні маркери — згорнуті (expandable), щоб не засмічувати, але Reply їх бачить
+    text +=
+        `\n\n<blockquote expandable>` +
+        escapeHtml(techLines.join('\n')) +
+        `</blockquote>`;
     if (text.length > 4000) text = text.slice(0, 3990) + '…';
 
-    // Rich Message з акордеоном <details> (як аналітика / інфо)
-    const richParts = [
-        `<h2>👤 ${escapeHtml(name)}</h2>`,
-        `<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>`
-    ];
+    // Rich Message
+    const richParts = [];
     if (isGroupCtx) {
+        richParts.push(`<h2>👥 Група: ${escapeHtml(groupTitle || 'спільнота')}</h2>`);
+        if (srcChatId != null) {
+            richParts.push(`<p>ID: <code>${srcChatId}</code></p>`);
+        }
         richParts.push(
-            `<p>👥 <b>Група:</b> ${escapeHtml(groupTitle || 'спільнота')}` +
-            (srcChatId != null ? ` · <code>${srcChatId}</code>` : '') +
-            `</p>`
+            `<p>👤 ${escapeHtml(name)} · ${escapeHtml(uname)} · <code>${from.id}</code></p>`
         );
+    } else {
+        richParts.push(`<h2>👤 ${escapeHtml(name)}</h2>`);
+        richParts.push(`<p>${escapeHtml(uname)} · ID: <code>${from.id}</code></p>`);
     }
     richParts.push(`<p>⚡ Дія: ${escapeHtml(humanAction)}</p>`);
     if (extra.messageText) {
         richParts.push(`<p>💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}</p>`);
+    } else if (userMediaDesc && userMediaDesc.media) {
+        let mediaLine = `📎 ${escapeHtml(userMediaDesc.media)}`;
+        if (userMediaDesc.text) {
+            mediaLine += `<br>💬 ${escapeHtml(String(userMediaDesc.text).slice(0, 400))}`;
+        }
+        richParts.push(`<p>${mediaLine}</p>`);
     }
     if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         richParts.push(`<p>🔘 <code>${escapeHtml(extra.callbackData)}</code></p>`);
@@ -1050,30 +1071,14 @@ async function notifyAdmin(from, actionText, extra = {}) {
                 `</details>`
         );
     }
-    // Machine markers + ID (rich reply_to often only keeps code/text fragments)
-    if (extra.messageText) {
-        richParts.push(
-            `<p><code>#ctx_msg:${escapeHtml(String(extra.messageText).slice(0, 200))}#ctx_end</code></p>`
-        );
-    } else if (userMediaDesc && (userMediaDesc.media || userMediaDesc.text)) {
-        const mctx = [userMediaDesc.media, userMediaDesc.text].filter(Boolean).join(' ').slice(0, 200);
-        richParts.push(`<p><code>#ctx_msg:${escapeHtml(mctx)}#ctx_end</code></p>`);
-    } else if (!isUserText && humanAction) {
-        richParts.push(
-            `<p><code>#ctx_act:${escapeHtml(String(humanAction).slice(0, 200))}#ctx_end</code></p>`
-        );
-    }
+    // Reply — над технічним блоком
+    richParts.push(`<p><i>${replyHint}</i></p>`);
+    // Технічні маркери для Reply routing — згорнуті
     richParts.push(
-        isGroupCtx
-            ? `<p><i>↩️ Reply → надіслати в групу</i></p>`
-            : `<p><i>↩️ Reply → надіслати юзеру</i></p>`
+        `<details><summary>🔧 Технічне</summary>` +
+            `<p><code>${escapeHtml(techLines.join('\n')).replace(/\n/g, '<br>')}</code></p>` +
+            `</details>`
     );
-    // Приховані маркери для Reply (rich reply_to часто зберігає лише code)
-    richParts.push(`<p><code>ID: ${from.id}</code></p>`);
-    richParts.push(`<p><code>#uid:${from.id}</code></p>`);
-    if (isGroupCtx && srcChatId != null) {
-        richParts.push(`<p><code>#gid:${srcChatId}</code></p>`);
-    }
     const richHtml = richParts.join('\n');
 
     let sentOk = false;
@@ -3964,11 +3969,17 @@ async function appendSupportConversation(api, telegramId, who, msgOrText, meta =
     }
 
     // Rich card — акордеон <details> (як аналітика / інфо)
-    const cardTitle = isGroupCard
-        ? `💬 Повідомлення в групі — ${escapeHtml(namePart)}`
-        : `💬 Розмова з ${escapeHtml(namePart)}`;
-    const richHtml = `
-<h2>${cardTitle}</h2>
+    const richHtml = isGroupCard
+        ? `
+<h2>👥 Група: ${escapeHtml(namePart)}</h2>
+<p>ID: <code>${telegramId}</code></p>
+<details>
+<summary>📜 Повідомлення в групі</summary>
+<p>${escapeHtml(transcript).replace(/\n/g, '<br>')}</p>
+</details>
+`.trim()
+        : `
+<h2>💬 Розмова з ${escapeHtml(namePart)}</h2>
 <p><code>${telegramId}</code></p>
 <details>
 <summary>📜 Переписка</summary>
@@ -3976,9 +3987,9 @@ async function appendSupportConversation(api, telegramId, who, msgOrText, meta =
 </details>
 `.trim();
 
-    // Plain fallback — теж expandable, щоб не «вбивати» акордеон
+    // Plain fallback — expandable
     const plainFull = isGroupCard
-        ? `💬 <b>Повідомлення в групі — ${escapeHtml(namePart)}</b> · <code>${telegramId}</code>\n\n` +
+        ? `👥 <b>Група: ${escapeHtml(namePart)}</b>\nID: <code>${telegramId}</code>\n\n` +
           `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`
         : `💬 <b>Розмова з</b> ${escapeHtml(namePart)} · <code>${telegramId}</code>\n\n` +
           `<blockquote expandable>${escapeHtml(transcript)}</blockquote>`;
