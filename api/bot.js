@@ -1140,40 +1140,92 @@ bot.on("callback_query:data", async (ctx) => {
             if (!weatherRes.data?.data?.[0]) throw new Error('No weather data received');
             const weather = weatherRes.data.data[0];
 
+            const latN = parseFloat(lat);
+            const lonN = parseFloat(lon);
+            const chat = ctx.chat || ctx.callbackQuery?.message?.chat;
+            const isGroup = chat && (chat.type === 'group' || chat.type === 'supergroup');
+            const tgFields = (typeof extractTgUserFields === 'function')
+                ? extractTgUserFields(ctx.from)
+                : {};
+
+            const personalSet = {
+                username: ctx.from.username,
+                firstName: ctx.from.first_name,
+                lastName: ctx.from.last_name,
+                languageCode: ctx.from.language_code,
+                city: weather.city_name,
+                lat: latN,
+                lon: lonN,
+                timezone: weather.timezone,
+                language: lang,
+                botMode: 'idle',
+                lastActivityAt: new Date(),
+                lastState: {
+                    temp: weather.temp,
+                    weatherCode: weather.weather.code,
+                    updatedAt: new Date()
+                },
+                ...tgFields
+            };
+
+            const personalUpdate = { $set: personalSet };
+            if (isGroup && chat.id != null) {
+                personalUpdate.$addToSet = { groupChatIds: chat.id };
+            }
+
             await User.findOneAndUpdate(
                 { telegramId: ctx.from.id },
-                {
-                    $set: {
-                        username: ctx.from.username,
-                        firstName: ctx.from.first_name,
-                        lastName: ctx.from.last_name,
-                        languageCode: ctx.from.language_code,
-                        city: weather.city_name,
-                        lat: parseFloat(lat),
-                        lon: parseFloat(lon),
-                        timezone: weather.timezone,
-                        language: lang,
-                        botMode: 'idle',
-                        lastActivityAt: new Date(),
-                        lastState: {
-                            temp: weather.temp,
-                            weatherCode: weather.weather.code,
-                            updatedAt: new Date()
-                        },
-                        ...extractTgUserFields(ctx.from)
-                    }
-                },
+                personalUpdate,
                 { upsert: true, new: true }
             );
 
+            // Group/supergroup: окремий User-документ з telegramId = chat.id,
+            // щоб група з'явилась у списку користувачів і отримувала алерти.
+            if (isGroup && chat.id != null) {
+                await User.findOneAndUpdate(
+                    { telegramId: chat.id },
+                    {
+                        $set: {
+                            isGroupChat: true,
+                            firstName: chat.title || `Group ${chat.id}`,
+                            username: chat.username || undefined,
+                            city: weather.city_name,
+                            lat: latN,
+                            lon: lonN,
+                            timezone: weather.timezone,
+                            language: lang,
+                            botMode: 'idle',
+                            lastActivityAt: new Date(),
+                            lastState: {
+                                temp: weather.temp,
+                                weatherCode: weather.weather.code,
+                                updatedAt: new Date()
+                            },
+                            notificationsEnabled: true,
+                            eveningForecastEnabled: true
+                        },
+                        $setOnInsert: {
+                            accessLevel: 'unlimited',
+                            createdAt: new Date(),
+                            'usage.monthKey': null,
+                            'usage.eveningThisMonth': 0,
+                            'usage.alertsThisMonth': 0,
+                            'usage.eveningTotal': 0,
+                            'usage.alertsTotal': 0
+                        }
+                    },
+                    { upsert: true, new: true }
+                );
+            }
+
             // --- City Deduplication Logic ---
-            const cityKey = `${parseFloat(lat).toFixed(2)},${parseFloat(lon).toFixed(2)}`;
+            const cityKey = `${latN.toFixed(2)},${lonN.toFixed(2)}`;
             await City.findOneAndUpdate(
                 { externalId: cityKey },
                 {
                     name: weather.city_name,
-                    lat: parseFloat(lat),
-                    lon: parseFloat(lon),
+                    lat: latN,
+                    lon: lonN,
                     externalId: cityKey
                 },
                 { upsert: true }
@@ -1215,6 +1267,13 @@ bot.on("callback_query:data", async (ctx) => {
             } }).catch(e => console.error('Menu button error:', e.message));
 
         } catch (error) {
+            console.error('[bot] city set failed:', error?.message || error, error?.stack);
+            try {
+                await notifyUserError(ctx.from, error, {
+                    where: 'city_set',
+                    messageText: `lat=${lat} lon=${lon}`
+                });
+            } catch (_n) {}
             await ctx.reply(dict[lang].saveError, { parse_mode: 'Markdown' });
         }
     }

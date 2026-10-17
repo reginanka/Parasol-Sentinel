@@ -1231,14 +1231,19 @@ module.exports = async (req, res) => {
                             reply_markup: { inline_keyboard: rows }
                         });
                         alertsTotal++;
+                        await incrementUsage(Number(userId), 'alert').catch(() => {});
                     } catch (sendErr) {
                         console.error(`sendRichMessage failed for ${userId}:`, sendErr.message);
                         const plain = parts.join('\n\n').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-                        await bot.api.sendMessage(userId, plain, {
-                            reply_markup: { inline_keyboard: rows }
-                        }).catch(() => {});
-                        alertsTotal++;
-                        await incrementUsage(Number(userId), 'alert').catch(() => {});
+                        try {
+                            await bot.api.sendMessage(userId, plain, {
+                                reply_markup: { inline_keyboard: rows }
+                            });
+                            alertsTotal++;
+                            await incrementUsage(Number(userId), 'alert').catch(() => {});
+                        } catch (_plainErr) {
+                            /* delivery failed — do not count usage */
+                        }
                     }
                 }
 
