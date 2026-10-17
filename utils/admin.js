@@ -3072,7 +3072,7 @@ async function resolveReplyContext(replyTo, targetId) {
  */
 async function sendAdminReplyToUser(api, targetId, msg, replyContext = null) {
     const caption = (msg.caption || msg.text || '').trim();
-    const header = '💬 Відповідь від підтримки Parasol:';
+    const header = '💬 Відповідь від підтримки Парасоль☔️:';
     const ctxLine = formatReplyContextLine(replyContext);
     const headBlock = ctxLine ? `${header}\n${ctxLine}` : header;
     const fullCaption = caption ? `${headBlock}\n\n${caption}` : headBlock;
@@ -3113,8 +3113,8 @@ async function sendAdminReplyToUser(api, targetId, msg, replyContext = null) {
     }
     if (caption || ctxLine) {
         const htmlHead = ctxLine
-            ? `💬 <b>Відповідь від підтримки Parasol:</b>\n${escapeHtml(ctxLine)}`
-            : `💬 <b>Відповідь від підтримки Parasol:</b>`;
+            ? `💬 <b>Відповідь від підтримки Парасоль☔️:</b>\n${escapeHtml(ctxLine)}`
+            : `💬 <b>Відповідь від підтримки Парасоль☔️:</b>`;
         const body = caption ? `\n\n${escapeHtml(caption)}` : '';
         await api.sendMessage(targetId, htmlHead + body, {
             parse_mode: 'HTML'
