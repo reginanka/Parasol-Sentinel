@@ -653,24 +653,25 @@ function buildUserInfoPlain(u, from = null) {
  * Notify admin about a user action — short card + button «Інфо».
  * Reply to this message → send text/media to the user (ID: in text).
  */
+/** Як на кнопках налаштувань вечірнього прогнозу (dict.uk.metric_*) */
 const METRIC_NAMES_UA = {
-    condition: 'стан неба',
-    temp: 'температура',
-    precip: 'опади',
-    wind: 'вітер',
-    pressure: 'тиск',
-    dew: 'точка роси',
+    condition: 'Стан неба',
+    temp: 'Температура',
+    precip: 'Опади',
+    wind: 'Вітер',
+    pressure: 'Тиск',
+    dew: 'Точка роси',
     uv: 'УФ-індекс',
-    visibility: 'видимість',
-    soil0: 'ґрунт 0 см',
-    soil6: 'ґрунт 6 см',
-    moon: 'місяць',
-    sun: 'сонце',
-    aqi_now: 'AQI зараз',
-    aqi_main: 'AQI основний',
-    aqi_ext: 'AQI розширений',
-    aqi: 'якість повітря',
-    geomag: 'магнітні бурі'
+    visibility: 'Видимість',
+    soil0: '🌱 Ґрунт (поверхня)',
+    soil6: '🌱 Ґрунт (6 см)',
+    moon: 'Місяць',
+    sun: 'Схід/Захід сонця',
+    aqi_now: '🍃 Повітря зараз',
+    aqi_main: '🍃 Повітря основне',
+    aqi_ext: '🍃 Повітря розш.',
+    aqi: '🍃 Якість повітря',
+    geomag: '🧲 Магнітні бурі'
 };
 
 /**
