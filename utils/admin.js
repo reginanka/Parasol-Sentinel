@@ -11,6 +11,7 @@
  *    TOPIC_ACTIONS = 789   → кліки / вибір / callback юзера (ACTIONS_USERS)
  *    ERROR_ID / TOPIC_ERRORS → лише помилки (окрема гілка)
  *    TOPIC_HISTORY / HISTORY_MSG_ID → журнал вихідних і розмов
+ *    TOPIC_HISTORY_ACTIONS / HISTORY_ACTIONS → денний дайджест дій юзера
  */
 
 const User = require('../models/User');
@@ -38,6 +39,7 @@ function isAdminChat(chatId) {
  *  HISTORY also accepts HISTORY_MSG_ID (Vercel secret alias).
  *  ERRORS also accepts ERROR_ID / TOPIC_ERRORS.
  *  ACTIONS also accepts TOPIC_ACTIONS_USERS / ACTIONS_USERS.
+ *  HISTORY_ACTIONS also accepts HISTORY_ACTIONS / TOPIC_HISTORY_ACTIONS.
  */
 function topicId(name) {
     const upper = String(name).toUpperCase();
@@ -50,6 +52,9 @@ function topicId(name) {
     }
     if (upper === 'ACTIONS') {
         keys.push('TOPIC_ACTIONS_USERS', 'ACTIONS_USERS');
+    }
+    if (upper === 'HISTORY_ACTIONS') {
+        keys.push('HISTORY_ACTIONS', 'TOPIC_HISTORY_ACTIONS', 'HISTORY_ACTIONS_ID');
     }
     for (const key of keys) {
         const raw = process.env[key];
@@ -979,6 +984,14 @@ async function notifyAdmin(from, actionText, extra = {}) {
     // Успішна фіксація дії юзера → денний лічильник actions
     if (sentOk) {
         incDailyStat('actions').catch(() => {});
+        // Денна картка в HISTORY_ACTIONS (не для чистого тексту підтримки)
+        if (!isUserText) {
+            try {
+                await appendUserDayActions(bot.api, from, humanAction, extra);
+            } catch (e) {
+                console.warn('[admin] day actions log failed:', e.message);
+            }
+        }
     }
 
     // Помилка відправки → пінг у гілку ERROR
@@ -2817,6 +2830,254 @@ async function archiveTranscriptToFile(api, chatId, telegramId, namePart, fullTr
     }
     if (lastErr) console.warn('[admin] archiveTranscriptToFile failed:', lastErr.message);
     return false;
+}
+
+/**
+ * Kyiv HH:MM for action log lines.
+ */
+function kyivTimeHm(d = new Date()) {
+    try {
+        return new Intl.DateTimeFormat('uk-UA', {
+            timeZone: 'Europe/Kyiv',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        }).format(d);
+    } catch {
+        return d.toISOString().slice(11, 16);
+    }
+}
+
+/**
+ * Format Kyiv dayKey YYYY-MM-DD → DD.MM.YYYY
+ */
+function formatDayKeyUa(dayKey) {
+    if (!dayKey || typeof dayKey !== 'string') return '—';
+    const m = dayKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return dayKey;
+    return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+/**
+ * Build a short net-change summary from a list of human action lines.
+ * Collapses toggle spam (on/off same thing) into the final state.
+ */
+function buildActionDaySummary(lines) {
+    if (!Array.isArray(lines) || !lines.length) return 'Змін немає.';
+
+    // Map of setting label → last verb (увімкнув / вимкнув / встановив …)
+    const finalState = new Map(); // key → { verb, label, raw }
+    const other = [];
+
+    const toggleRe =
+        /^(увімкнув|вимкнув)\s+(.+)$/i;
+    const setRe =
+        /^(встановив режим магнітних бур:\s*.+|одиниці вітру:\s*.+|одиниці тиску:\s*.+|температура:\s*.+|обрав \d+ дн\. у вечірньому прогнозі)$/i;
+    const cityRe = /^(обрав місто|видалив місто)/i;
+
+    for (const rawLine of lines) {
+        // strip "HH:MM · "
+        const action = String(rawLine || '').replace(/^\d{1,2}:\d{2}\s*·\s*/, '').trim();
+        if (!action) continue;
+
+        const tm = action.match(toggleRe);
+        if (tm) {
+            const verb = tm[1].toLowerCase();
+            const label = tm[2].trim();
+            finalState.set(label, { verb, label });
+            continue;
+        }
+        if (setRe.test(action) || cityRe.test(action)) {
+            // treat as unique key by full text
+            finalState.set(action, { verb: null, label: action });
+            continue;
+        }
+        // culture toggle: увімкнув/вимкнув культуру «…»
+        const cropM = action.match(/^(увімкнув|вимкнув)\s+культуру\s+[«"]([^»"]+)[»"]/i);
+        if (cropM) {
+            const key = `культура «${cropM[2]}»`;
+            finalState.set(key, { verb: cropM[1].toLowerCase(), label: key });
+            continue;
+        }
+        other.push(action);
+    }
+
+    const net = [];
+    for (const { verb, label } of finalState.values()) {
+        if (verb) net.push(`${verb} ${label}`);
+        else net.push(label);
+    }
+
+    // Deduplicate pure views (open menu / help) — only count once each type
+    const viewSeen = new Set();
+    for (const a of other) {
+        if (/^(відкрив|читає|меню:|погодинний|перевірка|агро-)/i.test(a)) {
+            const k = a.split(' ')[0] + '|' + a.slice(0, 40);
+            if (viewSeen.has(k)) continue;
+            viewSeen.add(k);
+            net.push(a);
+        } else {
+            net.push(a);
+        }
+    }
+
+    if (!net.length) return 'Лише перегляди / навігація без змін налаштувань.';
+    // Cap summary length
+    const joined = net.slice(0, 12).join('; ');
+    return net.length > 12 ? joined + '…' : joined;
+}
+
+/**
+ * Append one user action to the daily HISTORY_ACTIONS card.
+ * - New day or no message → send new rich message
+ * - Same day → edit existing message
+ * Title: «Дії користувача — @login / Name · ID · DD.MM.YYYY»
+ * Body: expandable list of timed actions + short net summary at bottom
+ */
+async function appendUserDayActions(api, from, humanAction, extra = {}) {
+    const chatId = ADMIN_CHAT_ID();
+    if (!chatId || !from?.id) return;
+
+    const thrId = topicId('HISTORY_ACTIONS');
+    if (thrId == null) {
+        // Topic not configured — skip silently
+        return;
+    }
+
+    const dayKey = kyivDayKey();
+    const timeHm = kyivTimeHm();
+    const line = `${timeHm} · ${humanAction}`;
+
+    let user = await User.findOne({ telegramId: Number(from.id) });
+    if (!user) {
+        user = await User.findOneAndUpdate(
+            { telegramId: Number(from.id) },
+            {
+                $setOnInsert: {
+                    telegramId: Number(from.id),
+                    accessLevel: 'unlimited',
+                    username: from.username || undefined,
+                    firstName: from.first_name || undefined,
+                    lastName: from.last_name || undefined
+                }
+            },
+            { upsert: true, new: true }
+        );
+    }
+
+    const prev = user.actionHistory || {};
+    const sameDay = prev.dayKey === dayKey && prev.messageId;
+    let lines = sameDay && Array.isArray(prev.lines) ? [...prev.lines] : [];
+    lines.push(line);
+    // Keep last ~80 lines to stay under Telegram limits
+    if (lines.length > 80) lines = lines.slice(lines.length - 80);
+
+    const summary = buildActionDaySummary(lines);
+    const namePart =
+        user.username
+            ? `@${user.username}`
+            : [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+              displayName(from) ||
+              'user';
+    const dateUa = formatDayKeyUa(dayKey);
+
+    const listHtml = lines.map((l) => `<li>${escapeHtml(l)}</li>`).join('\n');
+    const richHtml = `
+<h2>⚡ Дії користувача — ${escapeHtml(namePart)}</h2>
+<p><code>${from.id}</code> · ${escapeHtml(dateUa)}</p>
+<details>
+<summary>📋 Список дій за день (${lines.length})</summary>
+<ol>
+${listHtml}
+</ol>
+</details>
+<p><b>Підсумок змін:</b> ${escapeHtml(summary)}</p>
+`.trim();
+
+    const plainFull =
+        `⚡ <b>Дії користувача — ${escapeHtml(namePart)}</b>\n` +
+        `<code>${from.id}</code> · ${escapeHtml(dateUa)}\n\n` +
+        `<blockquote expandable>${escapeHtml(lines.join('\n'))}</blockquote>\n\n` +
+        `<b>Підсумок змін:</b> ${escapeHtml(summary)}`;
+
+    const thr =
+        thrId != null && Number.isFinite(Number(thrId)) && Number(thrId) > 0
+            ? { message_thread_id: Number(thrId) }
+            : {};
+
+    let newMsgId = sameDay ? prev.messageId : null;
+
+    try {
+        if (sameDay && prev.messageId) {
+            try {
+                await api.raw.editMessageText({
+                    chat_id: chatId,
+                    message_id: prev.messageId,
+                    rich_message: { html: richHtml, skip_entity_detection: true }
+                });
+            } catch (editRichErr) {
+                try {
+                    await api.editMessageText(chatId, prev.messageId, plainFull, {
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true
+                    });
+                } catch (editPlainErr) {
+                    console.warn(
+                        '[admin] day-actions edit failed, resend:',
+                        editPlainErr.message || editRichErr.message
+                    );
+                    try {
+                        const sent = await api.sendRichMessage(
+                            chatId,
+                            { html: richHtml, skip_entity_detection: true },
+                            thr
+                        );
+                        newMsgId = sent?.message_id;
+                    } catch (sendRichErr) {
+                        const sent = await sendInAdminThread(
+                            api,
+                            chatId,
+                            plainFull,
+                            { parse_mode: 'HTML', disable_web_page_preview: true },
+                            thrId
+                        );
+                        newMsgId = sent?.message_id;
+                    }
+                }
+            }
+        } else {
+            try {
+                const sent = await api.sendRichMessage(
+                    chatId,
+                    { html: richHtml, skip_entity_detection: true },
+                    thr
+                );
+                newMsgId = sent?.message_id;
+            } catch (sendRichErr) {
+                console.warn('[admin] day-actions rich failed, plain:', sendRichErr.message);
+                const sent = await sendInAdminThread(
+                    api,
+                    chatId,
+                    plainFull,
+                    { parse_mode: 'HTML', disable_web_page_preview: true },
+                    thrId
+                );
+                newMsgId = sent?.message_id;
+            }
+        }
+    } catch (e) {
+        console.warn('[admin] appendUserDayActions send failed:', e.message);
+    }
+
+    user.actionHistory = {
+        dayKey,
+        messageId: newMsgId || (sameDay ? prev.messageId : null) || null,
+        lines,
+        summary,
+        updatedAt: new Date()
+    };
+    user.markModified('actionHistory');
+    await user.save().catch((e) => console.warn('[admin] actionHistory save:', e.message));
 }
 
 /**
