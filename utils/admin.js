@@ -875,11 +875,16 @@ async function notifyAdmin(from, actionText, extra = {}) {
     }
     const humanAction = describeUserAction(actionText, extra, userSnapshot);
 
-    // Текст, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
+    // Текст / файл, який юзер пише боту → USERS; усе інше (кліки) → ACTIONS
+    const userMsg = extra.userMsg || null;
+    const userMediaDesc = userMsg ? describeMsgContent(userMsg) : null;
     const isUserText =
         Boolean(extra.messageText) ||
+        Boolean(userMsg) ||
         actionText === 'текст' ||
-        actionText === 'text';
+        actionText === 'text' ||
+        actionText === 'файл' ||
+        actionText === 'file';
 
     // Історія гілки — лише для реального тексту (акордеон <details> у rich message)
     let histSnippet = '';
@@ -922,6 +927,11 @@ async function notifyAdmin(from, actionText, extra = {}) {
         `⚡ Дія: ${escapeHtml(humanAction)}`;
     if (extra.messageText) {
         text += `\n\n💬 ${escapeHtml(String(extra.messageText).slice(0, 500))}`;
+    } else if (userMediaDesc && userMediaDesc.media) {
+        text += `\n\n📎 ${escapeHtml(userMediaDesc.media)}`;
+        if (userMediaDesc.text) {
+            text += `\n💬 ${escapeHtml(String(userMediaDesc.text).slice(0, 400))}`;
+        }
     }
     if (extra.callbackData && humanAction.includes(extra.callbackData)) {
         text += `\n🔘 <code>${escapeHtml(extra.callbackData)}</code>`;
@@ -1016,12 +1026,46 @@ async function notifyAdmin(from, actionText, extra = {}) {
         }
     }
 
-    // Mirror only real user text into HISTORY conversation card (not every button tap)
-    if (extra.messageText) {
+    // Mirror user text / media into HISTORY conversation card (+ asset file with #id)
+    if (userMsg) {
+        try {
+            await appendSupportConversation(bot.api, from.id, '👤 Юзер', userMsg);
+        } catch (e) {
+            console.warn('[admin] support log media from notify failed:', e.message);
+        }
+    } else if (extra.messageText) {
         try {
             await appendSupportConversation(bot.api, from.id, '👤 Юзер', String(extra.messageText));
         } catch (e) {
             console.warn('[admin] support log from notify failed:', e.message);
+        }
+    }
+
+    // Also place the actual media file into TOPIC_USERS so admin sees the file there
+    if (userMsg && userMediaDesc && userMediaDesc.kind && userMediaDesc.fileId) {
+        try {
+            const thrUsers = threadOpts('USERS');
+            const cap =
+                `👤 ${escapeHtml(name)} · <code>${from.id}</code>` +
+                (userMediaDesc.text ? `\n${escapeHtml(userMediaDesc.text.slice(0, 400))}` : '');
+            const opts = { caption: cap, parse_mode: 'HTML', reply_markup: markup, ...thrUsers };
+            if (userMediaDesc.kind === 'photo') {
+                await bot.api.sendPhoto(chatId, userMediaDesc.fileId, opts);
+            } else if (userMediaDesc.kind === 'document') {
+                await bot.api.sendDocument(chatId, userMediaDesc.fileId, opts);
+            } else if (userMediaDesc.kind === 'video') {
+                await bot.api.sendVideo(chatId, userMediaDesc.fileId, opts);
+            } else if (userMediaDesc.kind === 'animation') {
+                await bot.api.sendAnimation(chatId, userMediaDesc.fileId, opts);
+            } else if (userMediaDesc.kind === 'voice') {
+                await bot.api.sendVoice(chatId, userMediaDesc.fileId, opts);
+            } else if (userMediaDesc.kind === 'audio') {
+                await bot.api.sendAudio(chatId, userMediaDesc.fileId, opts);
+            } else if (userMediaDesc.kind === 'sticker') {
+                await bot.api.sendSticker(chatId, userMediaDesc.fileId, thrUsers);
+            }
+        } catch (e) {
+            console.warn('[admin] forward user media to USERS failed:', e.message);
         }
     }
 }
@@ -1306,10 +1350,13 @@ async function deleteCallbackMessage(api, ctx) {
 /**
  * After successful outbound message: delete admin reply + bot instruction in General.
  */
-async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg) {
+async function cleanupScenarioMessages(api, chatId, adminMsg, instructionMsg, opts = {}) {
     const ids = [];
     if (adminMsg?.message_id != null) ids.push(adminMsg.message_id);
-    if (instructionMsg?.message_id != null) ids.push(instructionMsg.message_id);
+    // When replying from ACTIONS topic — keep the original action notification
+    if (!opts.keepInstruction && instructionMsg?.message_id != null) {
+        ids.push(instructionMsg.message_id);
+    }
     for (const id of ids) {
         try {
             await api.deleteMessage(chatId, id);
@@ -2603,16 +2650,90 @@ async function handleAdminCallback(ctx) {
  * Send media (or text) from admin reply to a user.
  * Supports: photo, document, video, animation, voice, audio, sticker + caption.
  */
-async function sendAdminReplyToUser(api, targetId, msg) {
+/**
+ * Build "in reply to …" context line for the user-facing support message.
+ * @param {{ type: 'message'|'action'|null, text: string }} ctx
+ */
+function formatReplyContextLine(ctx) {
+    if (!ctx || !ctx.text) return '';
+    const t = String(ctx.text).replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!t) return '';
+    if (ctx.type === 'action') {
+        return `↪️ на дію: «${t}»`;
+    }
+    return `↪️ на ваше повідомлення: «${t}»`;
+}
+
+/**
+ * Extract what the admin is replying to from the notify card (USERS / ACTIONS).
+ * Returns { type: 'message'|'action'|null, text: string, isAction: boolean }
+ */
+function extractReplyContext(replyTo) {
+    if (!replyTo) return { type: null, text: '', isAction: false };
+    const s = [replyTo.text, replyTo.caption, replyTo.quote?.text]
+        .filter(Boolean)
+        .join('\n');
+
+    // User free-text card: line with 💬 after the header
+    const msgMatch = s.match(/💬\s*([\s\S]+?)(?:\n\n|$)/);
+    // Prefer explicit user message block (not the footer hint)
+    let userText = '';
+    if (msgMatch) {
+        userText = msgMatch[1].replace(/↩️.*$/s, '').trim();
+        // strip HTML tags if any leaked
+        userText = userText.replace(/<[^>]+>/g, '').trim();
+    }
+
+    // Action line: ⚡ Дія: …
+    let actionText = '';
+    const actMatch = s.match(/⚡\s*Дія:\s*(.+)/i);
+    if (actMatch) {
+        actionText = actMatch[1].replace(/<[^>]+>/g, '').trim();
+    }
+
+    // Thread-based detection (forum topics)
+    const actionsTopic = topicId('ACTIONS');
+    const usersTopic = topicId('USERS');
+    const thr = replyTo.message_thread_id != null ? Number(replyTo.message_thread_id) : null;
+    const thrIsActions =
+        actionsTopic != null && thr != null && Number(actionsTopic) === thr;
+    const thrIsUsers =
+        usersTopic != null && thr != null && Number(usersTopic) === thr;
+
+    // Heuristic: pure action cards usually have no 💬 user message body
+    const looksLikeAction =
+        thrIsActions ||
+        (!userText && !!actionText) ||
+        (!thrIsUsers && !!actionText && !/💬/.test(s));
+
+    if (userText && !looksLikeAction) {
+        return { type: 'message', text: userText, isAction: false };
+    }
+    if (actionText) {
+        return { type: 'action', text: actionText, isAction: true };
+    }
+    if (userText) {
+        return { type: 'message', text: userText, isAction: false };
+    }
+    return { type: null, text: '', isAction: thrIsActions };
+}
+
+/**
+ * Send media (or text) from admin reply to a user.
+ * Supports: photo, document, video, animation, voice, audio, sticker + caption.
+ * @param {object} [replyContext] from extractReplyContext — adds "↪️ на …" under the header
+ */
+async function sendAdminReplyToUser(api, targetId, msg, replyContext = null) {
     const caption = (msg.caption || msg.text || '').trim();
     const header = '💬 Відповідь від підтримки Parasol:';
-    const fullCaption = caption ? `${header}\n\n${caption}` : header;
+    const ctxLine = formatReplyContextLine(replyContext);
+    const headBlock = ctxLine ? `${header}\n${ctxLine}` : header;
+    const fullCaption = caption ? `${headBlock}\n\n${caption}` : headBlock;
 
     if (msg.photo && msg.photo.length) {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
         await api.sendPhoto(targetId, fileId, {
-            caption: fullCaption,
-            parse_mode: caption ? undefined : undefined
+            caption: fullCaption
         });
         return 'photo';
     }
@@ -2638,13 +2759,17 @@ async function sendAdminReplyToUser(api, targetId, msg) {
     }
     if (msg.sticker) {
         await api.sendSticker(targetId, msg.sticker.file_id);
-        if (caption) {
+        if (caption || ctxLine) {
             await api.sendMessage(targetId, fullCaption);
         }
         return 'sticker';
     }
-    if (caption) {
-        await api.sendMessage(targetId, `💬 <b>Відповідь від підтримки Parasol:</b>\n\n${escapeHtml(caption)}`, {
+    if (caption || ctxLine) {
+        const htmlHead = ctxLine
+            ? `💬 <b>Відповідь від підтримки Parasol:</b>\n${escapeHtml(ctxLine)}`
+            : `💬 <b>Відповідь від підтримки Parasol:</b>`;
+        const body = caption ? `\n\n${escapeHtml(caption)}` : '';
+        await api.sendMessage(targetId, htmlHead + body, {
             parse_mode: 'HTML'
         });
         return 'text';
@@ -3654,13 +3779,37 @@ async function handleAdminChannelText(ctx) {
         const targetId = extractUserIdFromNotifyText(replyTo);
         if (targetId) {
             try {
-                const kind = await sendAdminReplyToUser(api, targetId, msg);
+                const replyCtx = extractReplyContext(replyTo);
+                const kind = await sendAdminReplyToUser(api, targetId, msg, replyCtx);
                 if (!kind) {
                     await api.sendMessage(chatId, 'ℹ️ Нічого надсилати (порожня відповідь).', sameThread);
                     return true;
                 }
-                await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
-                await cleanupScenarioMessages(api, chatId, msg, replyTo);
+                // If admin replied to an ACTIONS card — log that explicitly so it is not lost
+                if (replyCtx.isAction && replyCtx.text) {
+                    const note =
+                        typeof msg === 'object' && (msg.photo || msg.document || msg.video || msg.animation || msg.voice || msg.audio || msg.sticker)
+                            ? msg
+                            : `↪️ на дію «${replyCtx.text}»: ${(msg.caption || msg.text || '').trim() || '(медіа)'}`;
+                    if (typeof note === 'string') {
+                        await appendSupportConversation(api, targetId, '🛡 Адмін', note);
+                    } else {
+                        // Media reply: store media + prefix action context in transcript via string then media
+                        await appendSupportConversation(
+                            api,
+                            targetId,
+                            '🛡 Адмін',
+                            `↪️ на дію «${replyCtx.text}»`
+                        );
+                        await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
+                    }
+                } else {
+                    await appendSupportConversation(api, targetId, '🛡 Адмін', msg);
+                }
+                // ACTIONS: delete only admin reply; keep the original action notification
+                await cleanupScenarioMessages(api, chatId, msg, replyTo, {
+                    keepInstruction: !!replyCtx.isAction
+                });
             } catch (e) {
                 await api.sendMessage(
                     chatId,
