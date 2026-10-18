@@ -1020,7 +1020,7 @@ module.exports = async (req, res) => {
                 };
 
                 try {
-                    // Primary scale: WAQI → US AQI; Open-Meteo → EAQI (same as evening forecast)
+                    // Primary scale: always US AQI (WAQI station or Open-Meteo us_aqi); EAQI only as detail
                     let aqiVal = null;
                     let displayAqi = null;
                     let aqiLabel = 'AQI';

@@ -256,9 +256,9 @@ module.exports = async (req, res) => {
                             const usAqi = cur.us_aqi != null ? Number(cur.us_aqi) : null;
                             aqiData = {
                                 provider: 'open-meteo',
-                                aqi: eaqi != null ? eaqi : usAqi,
-                                aqiLabel: eaqi != null ? 'EAQI' : 'US AQI',
-                                badge: eaqi != null ? badgeFromEaqi(eaqi) : badgeFromUsAqi(usAqi),
+                                aqi: usAqi != null ? usAqi : eaqi,
+                                aqiLabel: usAqi != null ? 'US AQI' : 'EAQI',
+                                badge: usAqi != null ? badgeFromUsAqi(usAqi) : badgeFromEaqi(eaqi),
                                 pm25: cur.pm2_5 != null ? Number(cur.pm2_5) : null,
                                 pm10: cur.pm10 != null ? Number(cur.pm10) : null,
                                 station: null,
@@ -725,10 +725,8 @@ module.exports = async (req, res) => {
                         }
 
                         let advice = '';
-                        const isWaqi = aqiData.provider === 'waqi';
-                        const bad = isWaqi
-                            ? (aqiData.aqi > 150 ? 3 : aqiData.aqi > 100 ? 2 : aqiData.aqi > 50 ? 1 : 0)
-                            : (aqiData.aqi > 80 ? 3 : aqiData.aqi > 60 ? 2 : aqiData.aqi > 40 ? 1 : 0);
+                        // Always US AQI thresholds (50/100/150) — same scale as help & WAQI
+                        const bad = aqiData.aqi > 150 ? 3 : aqiData.aqi > 100 ? 2 : aqiData.aqi > 50 ? 1 : 0;
                         if (bad === 3) {
                             advice = isUk
                                 ? '🔴 Небезпечно для всіх! Зачиніть вікна, увімкніть очищувач повітря та обмежте перебування на вулиці.'
@@ -927,7 +925,16 @@ module.exports = async (req, res) => {
                                     ? `SO₂ до ${aq.so2Max.toFixed(0)} µg/m³`
                                     : `SO₂ up to ${aq.so2Max.toFixed(0)} µg/m³`);
                             }
-                            if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
+                            // US AQI primary (same scale as help); field name eaqi* kept for structure
+                            if (aq.usAqiMax != null && aq.usAqiMax >= 50) {
+                                ev.eaqi = Math.round(aq.usAqiMax);
+                                ev.eaqiBadge = aq.usAqiMax > 150 ? '🔴' : aq.usAqiMax > 100 ? '🟠' : '🟡';
+                                if (!ev.aqIssues.length && aq.pm25Max != null) {
+                                    ev.aqIssues.push(isUk
+                                        ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
+                                        : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
+                                }
+                            } else if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
                                 ev.eaqi = Math.round(aq.eaqiMax);
                                 ev.eaqiBadge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
                                 if (!ev.aqIssues.length && aq.pm25Max != null) {
@@ -991,8 +998,8 @@ module.exports = async (req, res) => {
                             if (ev.eaqi != null) {
                                 const detail = ev.aqIssues.length ? `: ${ev.aqIssues[0]}` : '';
                                 bits.push(isUk
-                                    ? `якість повітря EAQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
-                                    : `air quality EAQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
+                                    ? `якість повітря AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
+                                    : `air quality AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
                             } else if (ev.aqIssues.length) {
                                 bits.push(ev.aqIssues[0]);
                             }
