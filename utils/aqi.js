@@ -3,7 +3,7 @@
  *
  * Rules (same everywhere — alerts, evening forecast, dashboard snap):
  * - WAQI station (≤10 km): US-style AQI, thresholds 50 / 100 / 150
- * - Open-Meteo CAMS: prefer EAQI, thresholds 40 / 60 / 80; fallback US AQI
+ * - Open-Meteo CAMS: prefer US AQI (same scale as WAQI / help); EAQI kept only as extra detail
  *
  * Tier 0 🟢 good · 1 🟡 moderate · 2 🟠 poor · 3 🔴 very poor
  */
@@ -20,7 +20,7 @@ function tierFromUsAqi(v) {
     return 0;
 }
 
-/** European AQI (Open-Meteo european_aqi) breakpoints — aligned with cron-forecast */
+/** European AQI (Open-Meteo european_aqi) — for detail display only */
 function tierFromEaqi(v) {
     if (v == null || Number.isNaN(Number(v))) return 0;
     const n = Number(v);
@@ -44,6 +44,7 @@ function badgeFromEaqi(v) {
 
 /**
  * Pick primary index + tier for decision-making and display.
+ * Always prefer US AQI when available (WAQI or Open-Meteo us_aqi) so help/UI stay on one scale.
  * @param {{ eaqi?: number|null, usAqi?: number|null, waqiAqi?: number|null, provider?: string }} opts
  * @returns {{ aqiVal: number|null, displayAqi: number|null, aqiLabel: string, scale: 'eaqi'|'us'|null, tier: number, badge: string }}
  */
@@ -64,20 +65,7 @@ function resolveAqiPrimary(opts = {}) {
         };
     }
 
-    // Open-Meteo (or unknown): prefer EAQI
-    if (eaqi != null && !Number.isNaN(Number(eaqi))) {
-        const n = Number(eaqi);
-        const tier = tierFromEaqi(n);
-        return {
-            aqiVal: n,
-            displayAqi: Math.round(n),
-            aqiLabel: 'EAQI',
-            scale: 'eaqi',
-            tier,
-            badge: badgeFromTier(tier)
-        };
-    }
-
+    // Open-Meteo (or unknown): prefer US AQI — same scale as WAQI and help text
     if (usAqi != null && !Number.isNaN(Number(usAqi))) {
         const n = Number(usAqi);
         const tier = tierFromUsAqi(n);
@@ -86,6 +74,20 @@ function resolveAqiPrimary(opts = {}) {
             displayAqi: Math.round(n),
             aqiLabel: 'US AQI',
             scale: 'us',
+            tier,
+            badge: badgeFromTier(tier)
+        };
+    }
+
+    // Fallback only if us_aqi missing
+    if (eaqi != null && !Number.isNaN(Number(eaqi))) {
+        const n = Number(eaqi);
+        const tier = tierFromEaqi(n);
+        return {
+            aqiVal: n,
+            displayAqi: Math.round(n),
+            aqiLabel: 'EAQI',
+            scale: 'eaqi',
             tier,
             badge: badgeFromTier(tier)
         };
