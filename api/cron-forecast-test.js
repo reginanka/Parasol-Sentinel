@@ -1216,6 +1216,7 @@ module.exports = async (req, res) => {
                             { text: isUk ? '🌱 Рекомендації' : '🌱 Tips', callback_data: 'agro_tomorrow' }
                         ],
                         [
+                            { text: isUk ? '🍃 Повітря' : '🍃 Air', callback_data: 'air_fc' },
                             { text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }
                         ]
                     ]
@@ -1240,6 +1241,7 @@ module.exports = async (req, res) => {
                             { text: isUk ? '🌱 Рекомендації' : '🌱 Tips', callback_data: 'agro_tomorrow' }
                         ],
                         [
+                            { text: isUk ? '🍃 Повітря' : '🍃 Air', callback_data: 'air_fc' },
                             { text: isUk ? '⚙️ Налаштувати прогноз' : '⚙️ Configure forecast', callback_data: 'forecast_menu' }
                         ]
                     ]
