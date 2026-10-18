@@ -1395,11 +1395,13 @@ module.exports = async (req, res) => {
                         }
                     }
 
-                    // Pin new evening forecast; unpin only yesterday's bot pin (не чіпаємо чужі закріплення)
+                    // Pin new evening forecast; unpin only yesterday's bot pin (не чіпаємо чужі закріплення).
+                    // У групах/супергрупах бот МУСИТЬ бути адміном з can_pin_messages — інакше pin мовчки падає.
                     if (sentMsg && sentMsg.message_id) {
                         const chatId = user.telegramId;
                         const newMsgId = sentMsg.message_id;
                         const prevMsgId = user.lastEveningPinnedMsgId;
+                        const isGroup = !!(user.isGroupChat || (typeof chatId === 'number' && chatId < 0));
 
                         if (prevMsgId && prevMsgId !== newMsgId) {
                             try {
@@ -1410,18 +1412,94 @@ module.exports = async (req, res) => {
                             }
                         }
 
-                        try {
-                            // disable_notification: true — без сповіщення «закріплено» (у приватних і так тихо;
-                            // у групах не шле push/звук; service-повідомлення про pin Telegram часто не створює при true)
-                            await bot.api.pinChatMessage(chatId, newMsgId, {
-                                disable_notification: true
-                            });
-                            await User.updateOne(
-                                { telegramId: chatId },
-                                { $set: { lastEveningPinnedMsgId: newMsgId } }
-                            ).catch((e) => console.error('save lastEveningPinnedMsgId:', e.message));
-                        } catch (pinErr) {
-                            console.error(`pinChatMessage ${chatId}/${newMsgId}:`, pinErr.message);
+                        // У групі: перевірити права до pin (щоб зрозуміти причину, якщо не закріплює)
+                        if (isGroup) {
+                            try {
+                                const me = await bot.api.getMe();
+                                const member = await bot.api.getChatMember(chatId, me.id);
+                                const canPin =
+                                    member.status === 'creator' ||
+                                    (member.status === 'administrator' &&
+                                        (member.can_pin_messages === true ||
+                                            member.can_pin_messages == null)); // null = legacy full admin
+                                if (!canPin) {
+                                    const why =
+                                        member.status !== 'administrator' && member.status !== 'creator'
+                                            ? `статус «${member.status}» (не адмін)`
+                                            : 'немає права can_pin_messages';
+                                    console.error(`pin skip group ${chatId}: ${why}`);
+                                    try {
+                                        await log(
+                                            `⚠️ Pin у групі <code>${chatId}</code> (${escapeHTML(user.city || '')}): ${why}. ` +
+                                            `Зробіть бота адміном і увімкніть «Закріплювати повідомлення».`
+                                        );
+                                    } catch (_) {}
+                                    // не намагаємось pin — все одно впаде
+                                } else {
+                                    try {
+                                        await bot.api.pinChatMessage(chatId, newMsgId, {
+                                            disable_notification: true
+                                        });
+                                        await User.updateOne(
+                                            { telegramId: chatId },
+                                            { $set: { lastEveningPinnedMsgId: newMsgId } }
+                                        ).catch((e) => console.error('save lastEveningPinnedMsgId:', e.message));
+
+                                        // Service msg «прикріплює…» — delete (потрібне право Delete messages)
+                                        for (const delta of [1, 2, 3]) {
+                                            try {
+                                                await bot.api.deleteMessage(chatId, newMsgId + delta);
+                                                break;
+                                            } catch (_) {}
+                                        }
+                                    } catch (pinErr) {
+                                        console.error(`pinChatMessage group ${chatId}/${newMsgId}:`, pinErr.message);
+                                        try {
+                                            await log(
+                                                `❌ pinChatMessage група <code>${chatId}</code>: ${escapeHTML(pinErr.message)}`
+                                            );
+                                        } catch (_) {}
+                                    }
+                                }
+                            } catch (rightsErr) {
+                                // getChatMember failed — все одно пробуємо pin
+                                console.error(`getChatMember ${chatId}:`, rightsErr.message);
+                                try {
+                                    await bot.api.pinChatMessage(chatId, newMsgId, {
+                                        disable_notification: true
+                                    });
+                                    await User.updateOne(
+                                        { telegramId: chatId },
+                                        { $set: { lastEveningPinnedMsgId: newMsgId } }
+                                    ).catch(() => {});
+                                    for (const delta of [1, 2, 3]) {
+                                        try {
+                                            await bot.api.deleteMessage(chatId, newMsgId + delta);
+                                            break;
+                                        } catch (_) {}
+                                    }
+                                } catch (pinErr) {
+                                    console.error(`pinChatMessage group ${chatId}/${newMsgId}:`, pinErr.message);
+                                    try {
+                                        await log(
+                                            `❌ pinChatMessage група <code>${chatId}</code>: ${escapeHTML(pinErr.message)}`
+                                        );
+                                    } catch (_) {}
+                                }
+                            }
+                        } else {
+                            // Приватний чат — pin без спец. прав
+                            try {
+                                await bot.api.pinChatMessage(chatId, newMsgId, {
+                                    disable_notification: true
+                                });
+                                await User.updateOne(
+                                    { telegramId: chatId },
+                                    { $set: { lastEveningPinnedMsgId: newMsgId } }
+                                ).catch((e) => console.error('save lastEveningPinnedMsgId:', e.message));
+                            } catch (pinErr) {
+                                console.error(`pinChatMessage ${chatId}/${newMsgId}:`, pinErr.message);
+                            }
                         }
                     }
 
