@@ -7,10 +7,10 @@ const mongoose = require('mongoose');
 const ErrorLogSchema = new mongoose.Schema({
     source: { type: String, default: 'cron' },
     message: { type: String, required: true },
-    createdAt: { type: Date, default: Date.now, index: true }
+    createdAt: { type: Date, default: Date.now }
 });
 
-// TTL optional — keep ~90 days
+// Single index + TTL (~90 days). Do not also set index: true on the field — duplicate warning.
 ErrorLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
 module.exports = mongoose.models.ErrorLog || mongoose.model('ErrorLog', ErrorLogSchema);
