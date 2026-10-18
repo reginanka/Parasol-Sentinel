@@ -8,7 +8,7 @@ const { incrementUsage } = require('../utils/admin');
 const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
-const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../utils/helpers');
+const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime, fetchWithRetry } = require('../utils/helpers');
 const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
 const { getGeomagLevel } = require('../utils/weather');
 const { resolveAqiPrimary, adviceTier } = require('../utils/aqi');
@@ -331,7 +331,7 @@ module.exports = async (req, res) => {
                     `&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,surface_pressure,weather_code,soil_temperature_0cm,soil_temperature_6cm` +
                     `&timezone=auto&forecast_days=3&past_days=1`;
 
-                const omRes = await axios.get(omUrl, { timeout: 12000 });
+                const omRes = await fetchWithRetry(omUrl, { timeout: 18000 }, { retries: 2, baseDelayMs: 1500 });
                 const om = omRes.data;
                 if (!om || !om.current) {
                     throw new Error('Open-Meteo: empty response');
@@ -790,9 +790,10 @@ module.exports = async (req, res) => {
                 let snapGeomag = null;
                 let snapWaqi = null;
                 try {
-                    const noaaRes = await axios.get(
+                    const noaaRes = await fetchWithRetry(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
-                        { timeout: 8000 }
+                        { timeout: 12000 },
+                        { retries: 2, baseDelayMs: 1200 }
                     );
                     if (noaaRes.data && Array.isArray(noaaRes.data) && noaaRes.data.length > 0) {
                         const now = Date.now();
@@ -1037,9 +1038,10 @@ module.exports = async (req, res) => {
                     const WAQI_TOKEN = process.env.WAQI_TOKEN;
                     if (WAQI_TOKEN) {
                         try {
-                            const waqiRes = await axios.get(
+                            const waqiRes = await fetchWithRetry(
                                 `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
-                                { timeout: 8000 }
+                                { timeout: 12000 },
+                                { retries: 1, baseDelayMs: 1000 }
                             );
                             if (waqiRes.data?.status === 'ok') {
                                 const d = waqiRes.data.data;
@@ -1075,7 +1077,7 @@ module.exports = async (req, res) => {
                             const omUrl =
                                 `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                                 `&current=european_aqi,us_aqi,pm2_5,pm10,dust&timezone=auto`;
-                            const omRes = await axios.get(omUrl, { timeout: 10000 });
+                            const omRes = await fetchWithRetry(omUrl, { timeout: 15000 }, { retries: 1, baseDelayMs: 1000 });
                             const cur = omRes.data?.current || {};
                             usAqiRaw = cur.us_aqi != null ? Number(cur.us_aqi) : null;
                             eaqiRaw = cur.european_aqi != null ? Number(cur.european_aqi) : null;

@@ -10,7 +10,7 @@ const City = require('../models/City');
 const History = require('../models/History');
 const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir, getSoilFrostInfo, frostWarningText, isFrostSeason, getGeomagLevel, fetchMeteoAlarmAlerts } = require('../utils/weather');
-const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr } = require('../utils/helpers');
+const { sleep, formatUrl, generateSignature, escapeHTML, getLocalDateStr, fetchWithRetry } = require('../utils/helpers');
 const { getLunarPhase } = require('../utils/agro');
 const { dayKey, daySetPaths, pruneDaysUnset, mergeHourlyFlat, getDayBaseline } = require('../utils/baseline');
 
@@ -175,7 +175,7 @@ module.exports = async (req, res) => {
         for (const [key, cityInfo] of Object.entries(uniqueCities)) {
             try {
                 // Fetch daily forecast (includes most metrics)
-                const response = await axios.get(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=7`);
+                const response = await fetchWithRetry(`https://api.weatherbit.io/v2.0/forecast/daily?lat=${cityInfo.lat}&lon=${cityInfo.lon}&key=${API_KEY}&days=7`, { timeout: 18000 }, { retries: 2, baseDelayMs: 1500 });
                 const fullResponse = response.data.data;
                 const apiCityName = response.data.city_name || cityInfo.name;
                 const todayData = fullResponse[0];
@@ -212,9 +212,10 @@ module.exports = async (req, res) => {
                     const WAQI_TOKEN = process.env.WAQI_TOKEN;
                     if (WAQI_TOKEN) {
                         try {
-                            const waqiRes = await axios.get(
+                            const waqiRes = await fetchWithRetry(
                                 `https://api.waqi.info/feed/geo:${cityInfo.lat};${cityInfo.lon}/?token=${WAQI_TOKEN}`,
-                                { timeout: 8000 }
+                                { timeout: 12000 },
+                                { retries: 1, baseDelayMs: 1000 }
                             );
                             if (waqiRes.data?.status === 'ok') {
                                 const d = waqiRes.data.data;
@@ -249,7 +250,7 @@ module.exports = async (req, res) => {
                             const omCurUrl =
                                 `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                                 `&current=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,dust&timezone=auto`;
-                            const omCurRes = await axios.get(omCurUrl, { timeout: 10000 });
+                            const omCurRes = await fetchWithRetry(omCurUrl, { timeout: 15000 }, { retries: 1, baseDelayMs: 1000 });
                             const cur = omCurRes.data?.current || {};
                             const eaqi = cur.european_aqi != null ? Number(cur.european_aqi) : null;
                             const usAqi = cur.us_aqi != null ? Number(cur.us_aqi) : null;
@@ -282,7 +283,7 @@ module.exports = async (req, res) => {
                         `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                         `&hourly=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust` +
                         `&timezone=auto&forecast_days=7`;
-                    const aqRes = await axios.get(aqUrl, { timeout: 12000 });
+                    const aqRes = await fetchWithRetry(aqUrl, { timeout: 18000 }, { retries: 2, baseDelayMs: 1500 });
                     const h = aqRes.data?.hourly || {};
                     const times = h.time || [];
                     const pickMax = (arr, i) => {
@@ -365,7 +366,7 @@ module.exports = async (req, res) => {
                         `&hourly=precipitation,soil_temperature_0cm,soil_temperature_6cm` +
                         `&daily=temperature_2m_mean` +
                         `&timezone=auto&forecast_days=7`;
-                    const omRes = await axios.get(omUrl);
+                    const omRes = await fetchWithRetry(omUrl, { timeout: 18000 }, { retries: 2, baseDelayMs: 1500 });
                     if (omRes.data && omRes.data.hourly) {
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
@@ -495,9 +496,10 @@ module.exports = async (req, res) => {
                 // 3-hourly JSON covers ~2–3 days; 27-day outlook fills the rest.
                 const geomagByDate = {};
                 try {
-                    const noaaRes = await axios.get(
+                    const noaaRes = await fetchWithRetry(
                         'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json',
-                        { timeout: 10000 }
+                        { timeout: 12000 },
+                        { retries: 2, baseDelayMs: 1200 }
                     );
                     if (Array.isArray(noaaRes.data)) {
                         for (const r of noaaRes.data) {
@@ -514,9 +516,10 @@ module.exports = async (req, res) => {
                     console.error('NOAA Kp forecast error:', noaaErr.message);
                 }
                 try {
-                    const outlookRes = await axios.get(
+                    const outlookRes = await fetchWithRetry(
                         'https://services.swpc.noaa.gov/text/27-day-outlook.txt',
-                        { timeout: 10000 }
+                        { timeout: 12000 },
+                        { retries: 1, baseDelayMs: 1000 }
                     );
                     const months = {
                         Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
