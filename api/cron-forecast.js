@@ -1500,6 +1500,13 @@ module.exports = async (req, res) => {
                                     { telegramId: chatId },
                                     { $set: { lastEveningPinnedMsgId: newMsgId } }
                                 ).catch((e) => console.error('save lastEveningPinnedMsgId:', e.message));
+                                // Видаляємо системне сповіщення про pin (як у групах)
+                                for (const delta of [1, 2, 3]) {
+                                    try {
+                                        await bot.api.deleteMessage(chatId, newMsgId + delta);
+                                        break;
+                                    } catch (_) {}
+                                }
                             } catch (pinErr) {
                                 console.error(`pinChatMessage ${chatId}/${newMsgId}:`, pinErr.message);
                             }
