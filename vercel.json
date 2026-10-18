@@ -1,5 +1,22 @@
 {
   "version": 2,
+  "functions": {
+    "api/cron-forecast.js": {
+      "maxDuration": 300
+    },
+    "api/cron-check.js": {
+      "maxDuration": 300
+    },
+    "api/cron-check-light.js": {
+      "maxDuration": 300
+    },
+    "api/cron-main.js": {
+      "maxDuration": 300
+    },
+    "api/cron-frost-wb.js": {
+      "maxDuration": 300
+    }
+  },
   "headers": [
     {
       "source": "/api/weather-data",
@@ -21,4 +38,3 @@
     }
   ]
 }
-
