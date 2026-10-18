@@ -11,6 +11,7 @@ const connectDB = require('../utils/db');
 const { getWeatherDesc, getWindDir, getGeomagLevel } = require('../utils/weather');
 const { sleep, escapeHTML, getLocalDateStr, formatLocalDateTime } = require('../utils/helpers');
 const { dayKey, getDayBaseline, daySetPaths, mergeHourlyFlat } = require('../utils/baseline');
+const { resolveAqiPrimary, adviceTier } = require('../utils/aqi');
 
 const API_KEY = process.env.WEATHERBIT_KEY;
 
@@ -1055,14 +1056,19 @@ module.exports = async (req, res) => {
                 };
 
                 try {
-                    let aqiVal = null;      // US-style AQI for tier (WAQI aqi or OM us_aqi)
-                    let displayAqi = null;  // what we show in the message
+                    // Primary scale: WAQI → US AQI; Open-Meteo → EAQI (same as evening forecast)
+                    let aqiVal = null;
+                    let displayAqi = null;
                     let aqiLabel = 'AQI';
+                    let aqiScale = null;
                     let pm25 = null;
                     let pm10 = null;
                     let badge = '🟢';
                     let stationInfo = null;
                     let provider = null;
+                    let waqiRaw = null;
+                    let eaqiRaw = null;
+                    let usAqiRaw = null;
 
                     // 1) WAQI — accept only nearby station
                     const WAQI_TOKEN = process.env.WAQI_TOKEN;
@@ -1080,9 +1086,7 @@ module.exports = async (req, res) => {
                                     distKm = haversineKm(cityInfo.lat, cityInfo.lon, Number(geo[0]), Number(geo[1]));
                                 }
                                 if (distKm != null && distKm <= WAQI_MAX_KM) {
-                                    aqiVal = d.aqi;
-                                    displayAqi = d.aqi;
-                                    aqiLabel = 'AQI';
+                                    waqiRaw = d.aqi != null ? Number(d.aqi) : null;
                                     pm25 = d.iaqi?.pm25?.v ?? null;
                                     pm10 = d.iaqi?.pm10?.v ?? null;
                                     provider = 'waqi';
@@ -1103,24 +1107,15 @@ module.exports = async (req, res) => {
                     }
 
                     // 2) Fallback — Open-Meteo current
-                    if (aqiVal == null) {
+                    if (provider !== 'waqi') {
                         try {
                             const omUrl =
                                 `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
                                 `&current=european_aqi,us_aqi,pm2_5,pm10,dust&timezone=auto`;
                             const omRes = await axios.get(omUrl, { timeout: 10000 });
                             const cur = omRes.data?.current || {};
-                            const usAqi = cur.us_aqi != null ? Number(cur.us_aqi) : null;
-                            const eaqi = cur.european_aqi != null ? Number(cur.european_aqi) : null;
-                            // Tier always on US AQI scale when available
-                            aqiVal = usAqi != null ? usAqi : eaqi;
-                            if (eaqi != null) {
-                                displayAqi = Math.round(eaqi);
-                                aqiLabel = 'EAQI';
-                            } else if (usAqi != null) {
-                                displayAqi = Math.round(usAqi);
-                                aqiLabel = 'US AQI';
-                            }
+                            usAqiRaw = cur.us_aqi != null ? Number(cur.us_aqi) : null;
+                            eaqiRaw = cur.european_aqi != null ? Number(cur.european_aqi) : null;
                             pm25 = cur.pm2_5 != null ? Number(cur.pm2_5) : null;
                             pm10 = cur.pm10 != null ? Number(cur.pm10) : null;
                             provider = 'open-meteo';
@@ -1132,26 +1127,33 @@ module.exports = async (req, res) => {
                                 dominant: null,
                                 distKm: 0,
                                 provider: 'open-meteo',
-                                eaqi,
-                                usAqi
+                                eaqi: eaqiRaw,
+                                usAqi: usAqiRaw
                             };
                         } catch (e) {
                             console.error('Open-Meteo current AQ error in cron-check:', e.message);
                         }
                     }
 
-                    if (aqiVal != null) {
-                        let currentTier = 0;
-                        if (aqiVal > 150) { currentTier = 3; badge = '🔴'; }
-                        else if (aqiVal > 100) { currentTier = 2; badge = '🟠'; }
-                        else if (aqiVal > 50) { currentTier = 1; badge = '🟡'; }
-                        else { badge = '🟢'; }
+                    const primary = resolveAqiPrimary({
+                        eaqi: eaqiRaw,
+                        usAqi: usAqiRaw,
+                        waqiAqi: waqiRaw,
+                        provider
+                    });
+                    aqiVal = primary.aqiVal;
+                    displayAqi = primary.displayAqi;
+                    aqiLabel = primary.aqiLabel;
+                    aqiScale = primary.scale;
+                    badge = primary.badge;
+                    const currentTier = primary.tier;
 
-                        // For OM-only display with EAQI, still tier by us_aqi above
+                    if (aqiVal != null) {
                         snapWaqi = {
                             aqi: displayAqi != null ? displayAqi : aqiVal,
                             aqiBadge: badge,
                             aqiLabel,
+                            aqiScale,
                             pm25,
                             pm10,
                             pm1: null,
@@ -1164,7 +1166,7 @@ module.exports = async (req, res) => {
                         // Always persist current state so next check has correct baseline
                         await City.findOneAndUpdate(
                             { externalId: key },
-                            { $set: { "lastAqiAlert": { date: todayStr, tier: currentTier, aqi: aqiVal } } }
+                            { $set: { "lastAqiAlert": { date: todayStr, tier: currentTier, aqi: aqiVal, scale: aqiScale } } }
                         );
 
                         if (currentTier > lastAqiTier && currentTier >= 1) {
@@ -1181,15 +1183,16 @@ module.exports = async (req, res) => {
                                 if (pm10 != null && pm10 > 50) issues.push(isUk ? 'PM10 (великий пил)' : 'PM10 (coarse dust)');
 
                                 let advice = '';
-                                if (aqiVal > 150) {
+                                const adv = adviceTier(aqiVal, aqiScale);
+                                if (adv === 3) {
                                     advice = isUk
                                         ? '🔴 Небезпечно! Зачиніть вікна, увімкніть очищувачі повітря та утримайтесь від виходу на вулицю.'
                                         : '🔴 Dangerous air quality! Close windows, turn on air purifiers, and refrain from going outside.';
-                                } else if (aqiVal > 100) {
+                                } else if (adv === 2) {
                                     advice = isUk
                                         ? '🟠 Шкідливо для чутливих груп! Високий рівень пилу/смогу. Рекомендуємо зачинити вікна.'
                                         : '🟠 Unhealthy for sensitive groups! High dust/smog level. We recommend closing windows.';
-                                } else if (aqiVal > 50) {
+                                } else if (adv === 1) {
                                     advice = isUk
                                         ? '🟡 Повітря помірно забруднене. Чутливим людям варто бути обережними.'
                                         : '🟡 Moderate air pollution. Sensitive individuals should take precautions.';
