@@ -1,10 +1,60 @@
 const crypto = require('crypto');
+const axios = require('axios');
 
 /**
  * Standard sleep/delay function for throttling.
  * @param {number} ms - Milliseconds to sleep.
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * axios.get with retries for transient network / timeout errors.
+ * Keeps total wait reasonable so Vercel maxDuration is not exhausted.
+ *
+ * @param {string} url
+ * @param {object} [config] - axios config (timeout, headers, …)
+ * @param {object} [opts]
+ * @param {number} [opts.retries=2] - extra attempts after the first
+ * @param {number} [opts.baseDelayMs=1500] - delay before 1st retry (doubles each time)
+ * @param {number} [opts.timeout=18000] - default per-request timeout (ms)
+ */
+const fetchWithRetry = async (url, config = {}, opts = {}) => {
+    const retries = opts.retries != null ? opts.retries : 2;
+    const baseDelayMs = opts.baseDelayMs != null ? opts.baseDelayMs : 1500;
+    const timeout = config.timeout != null ? config.timeout : (opts.timeout != null ? opts.timeout : 18000);
+    const finalConfig = { ...config, timeout };
+
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await axios.get(url, finalConfig);
+        } catch (err) {
+            lastErr = err;
+            const code = err.code || '';
+            const msg = (err.message || '').toLowerCase();
+            const status = err.response?.status;
+            const retriable =
+                code === 'ECONNABORTED' ||
+                code === 'ETIMEDOUT' ||
+                code === 'ECONNRESET' ||
+                code === 'ENOTFOUND' ||
+                code === 'EAI_AGAIN' ||
+                msg.includes('timeout') ||
+                status === 429 ||
+                status === 502 ||
+                status === 503 ||
+                status === 504;
+
+            if (!retriable || attempt === retries) break;
+            const delay = baseDelayMs * Math.pow(2, attempt);
+            console.warn(
+                `[fetchWithRetry] attempt ${attempt + 1}/${retries + 1} failed (${err.message}); retry in ${delay}ms`
+            );
+            await sleep(delay);
+        }
+    }
+    throw lastErr;
+};
 
 /**
  * Truncate long strings for logging/UI.
@@ -131,6 +181,7 @@ const formatLocalDateTime = (date, timezone = 'Europe/Kyiv', lang = 'uk') => {
 
 module.exports = {
     sleep,
+    fetchWithRetry,
     truncate,
     formatUrl,
     generateSignature,
