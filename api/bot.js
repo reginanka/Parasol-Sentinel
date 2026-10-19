@@ -2928,7 +2928,10 @@ bot.on("callback_query:data", async (ctx) => {
             const url =
                 `https://air-quality-api.open-meteo.com/v1/air-quality` +
                 `?latitude=${user.lat}&longitude=${user.lon}` +
-                `&current=european_aqi,us_aqi,pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,dust,ammonia,aerosol_optical_depth` +
+                `&current=european_aqi,us_aqi,pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,dust,` +
+                `ammonia,aerosol_optical_depth,carbon_dioxide,methane,` +
+                `alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen,uv_index,` +
+                `pm10_wildfires,total_elementary_carbon,residential_elementary_carbon` +
                 `&timezone=auto`;
 
             const aqRes = await axios.get(url, { timeout: 12000 });
@@ -2940,42 +2943,46 @@ bot.on("callback_query:data", async (ctx) => {
             const n = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
             const fmt = (v, dig = 1) => {
                 if (v == null) return '—';
-                return Number.isInteger(v) ? String(v) : v.toFixed(dig);
+                if (Number.isInteger(v)) return String(v);
+                return v.toFixed(dig);
             };
 
-            const badgeEaqi = (v) => {
-                if (v == null) return '⚪';
-                if (v > 100) return '🟣';
-                if (v > 80) return '🔴';
-                if (v > 60) return '🟠';
-                if (v > 40) return '🟡';
-                return '🟢';
-            };
-            const badgeUs = (v) => {
-                if (v == null) return '⚪';
-                if (v > 200) return '🟣';
-                if (v > 150) return '🔴';
-                if (v > 100) return '🟠';
-                if (v > 50) return '🟡';
-                return '🟢';
-            };
+            // —— scales ——
             const levelEaqi = (v) => {
-                if (v == null) return isUk ? 'немає даних' : 'n/a';
-                if (v > 100) return isUk ? 'екстремально погано' : 'extremely poor';
-                if (v > 80) return isUk ? 'дуже погано' : 'very poor';
-                if (v > 60) return isUk ? 'погано' : 'poor';
-                if (v > 40) return isUk ? 'помірно' : 'moderate';
-                if (v > 20) return isUk ? 'задовільно' : 'fair';
-                return isUk ? 'добре' : 'good';
+                if (v == null) return null;
+                if (v > 100) return { key: 'extreme', badge: '🟣', uk: 'екстремально погано', en: 'extremely poor' };
+                if (v > 80) return { key: 'vpoor', badge: '🔴', uk: 'дуже погано', en: 'very poor' };
+                if (v > 60) return { key: 'poor', badge: '🟠', uk: 'погано', en: 'poor' };
+                if (v > 40) return { key: 'moderate', badge: '🟡', uk: 'помірно', en: 'moderate' };
+                if (v > 20) return { key: 'fair', badge: '🟡', uk: 'задовільно', en: 'fair' };
+                return { key: 'good', badge: '🟢', uk: 'добре', en: 'good' };
             };
             const levelUs = (v) => {
-                if (v == null) return isUk ? 'немає даних' : 'n/a';
-                if (v > 200) return isUk ? 'дуже шкідливо' : 'very unhealthy';
-                if (v > 150) return isUk ? 'шкідливо' : 'unhealthy';
-                if (v > 100) return isUk ? 'шкідливо для чутливих' : 'unhealthy for sensitive';
-                if (v > 50) return isUk ? 'помірно' : 'moderate';
-                return isUk ? 'добре' : 'good';
+                if (v == null) return null;
+                if (v > 200) return { key: 'vunhealthy', badge: '🟣', uk: 'дуже шкідливо', en: 'very unhealthy' };
+                if (v > 150) return { key: 'unhealthy', badge: '🔴', uk: 'шкідливо', en: 'unhealthy' };
+                if (v > 100) return { key: 'sensitive', badge: '🟠', uk: 'шкідливо для чутливих', en: 'unhealthy for sensitive' };
+                if (v > 50) return { key: 'moderate', badge: '🟡', uk: 'помірно', en: 'moderate' };
+                return { key: 'good', badge: '🟢', uk: 'добре', en: 'good' };
             };
+            const L = (obj) => (obj ? (isUk ? obj.uk : obj.en) : (isUk ? 'немає даних' : 'n/a'));
+            // status cell: always human level for indices; for pollutants: добре / увага / завищено
+            const statusIndex = (lv, warnFrom) => {
+                if (!lv) return '—';
+                const warn = ['moderate', 'fair', 'poor', 'vpoor', 'extreme', 'sensitive', 'unhealthy', 'vunhealthy'].includes(lv.key)
+                    && !(lv.key === 'fair' && warnFrom === 'us'); // fair EAQI = attention, not "elevated danger"
+                if (lv.key === 'good') return `✅ ${L(lv)}`;
+                if (lv.key === 'fair') return `🟡 ${L(lv)}`;
+                return `⚠️ ${L(lv)}`;
+            };
+            const statusPoll = (tier) => {
+                // tier: 0 ok, 1 attention, 2 elevated, 3 high
+                if (tier >= 3) return isUk ? '🔴 високо' : '🔴 high';
+                if (tier >= 2) return isUk ? '⚠️ завищено' : '⚠️ elevated';
+                if (tier >= 1) return isUk ? '🟡 увага' : '🟡 watch';
+                return isUk ? '✅ норма' : '✅ ok';
+            };
+            const badgeTier = (tier) => (tier >= 3 ? '🔴' : tier >= 2 ? '🟠' : tier >= 1 ? '🟡' : '🟢');
 
             const eaqi = n(cur.european_aqi);
             const usAqi = n(cur.us_aqi);
@@ -2988,180 +2995,297 @@ bot.on("callback_query:data", async (ctx) => {
             const dust = n(cur.dust);
             const nh3 = n(cur.ammonia);
             const aod = n(cur.aerosol_optical_depth);
+            const co2 = n(cur.carbon_dioxide);
+            const ch4 = n(cur.methane);
+            const uv = n(cur.uv_index);
+            const wildfire = n(cur.pm10_wildfires);
+            const ecTotal = n(cur.total_elementary_carbon);
+            const ecRes = n(cur.residential_elementary_carbon);
+            const pollen = {
+                grass: n(cur.grass_pollen),
+                birch: n(cur.birch_pollen),
+                alder: n(cur.alder_pollen),
+                mugwort: n(cur.mugwort_pollen),
+                olive: n(cur.olive_pollen),
+                ragweed: n(cur.ragweed_pollen)
+            };
 
-            const elevated = [];
-            if (pm25 != null && pm25 > 25) elevated.push('PM2.5');
-            if (pm10 != null && pm10 > 50) elevated.push('PM10');
-            if (no2 != null && no2 > 40) elevated.push('NO₂');
-            if (o3 != null && o3 > 100) elevated.push('O₃');
-            if (so2 != null && so2 > 20) elevated.push('SO₂');
-            if (co != null && co > 4000) elevated.push('CO');
-            if (dust != null && dust > 50) elevated.push(isUk ? 'пил' : 'dust');
+            // tier helpers (0/1/2/3) — attention uses stricter WHO-ish bands
+            const tierPm25 = (v) => v == null ? 0 : v > 75 ? 3 : v > 25 ? 2 : v > 12 ? 1 : 0;
+            const tierPm10 = (v) => v == null ? 0 : v > 100 ? 3 : v > 50 ? 2 : v > 30 ? 1 : 0;
+            const tierNo2 = (v) => v == null ? 0 : v > 100 ? 3 : v > 40 ? 2 : v > 25 ? 1 : 0;
+            const tierO3 = (v) => v == null ? 0 : v > 160 ? 3 : v > 100 ? 2 : v > 80 ? 1 : 0;
+            const tierSo2 = (v) => v == null ? 0 : v > 50 ? 3 : v > 20 ? 2 : v > 10 ? 1 : 0;
+            const tierCo = (v) => v == null ? 0 : v > 10000 ? 3 : v > 4000 ? 2 : v > 2000 ? 1 : 0;
+            const tierDust = (v) => v == null ? 0 : v > 100 ? 3 : v > 50 ? 2 : v > 20 ? 1 : 0;
+            const tierNh3 = (v) => v == null ? 0 : v > 50 ? 3 : v > 20 ? 2 : v > 10 ? 1 : 0;
+            const tierAod = (v) => v == null ? 0 : v > 1 ? 3 : v > 0.5 ? 2 : v > 0.25 ? 1 : 0;
+            const tierCo2 = (v) => v == null ? 0 : v > 500 ? 3 : v > 450 ? 2 : v > 430 ? 1 : 0;
+            const tierCh4 = (v) => v == null ? 0 : v > 3000 ? 3 : v > 2000 ? 2 : v > 1400 ? 1 : 0;
+            const tierUv = (v) => v == null ? 0 : v > 10 ? 3 : v > 7 ? 2 : v > 5 ? 1 : 0;
+            const tierFire = (v) => v == null ? 0 : v > 80 ? 3 : v > 40 ? 2 : v > 15 ? 1 : 0;
+            const tierEc = (v) => v == null ? 0 : v > 6 ? 3 : v > 3 ? 2 : v > 1.5 ? 1 : 0;
+            const tierEcRes = (v) => v == null ? 0 : v > 3 ? 3 : v > 1.5 ? 2 : v > 0.8 ? 1 : 0;
+            const tierPollen = (v, thr) => v == null ? 0 : v >= thr * 2 ? 3 : v >= thr ? 2 : v >= thr * 0.5 ? 1 : 0;
 
+            const tPm25 = tierPm25(pm25);
+            const tPm10 = tierPm10(pm10);
+            const tNo2 = tierNo2(no2);
+            const tO3 = tierO3(o3);
+            const tSo2 = tierSo2(so2);
+            const tCo = tierCo(co);
+            const tDust = tierDust(dust);
+            const tNh3 = tierNh3(nh3);
+            const tAod = tierAod(aod);
+            const tCo2 = tierCo2(co2);
+            const tCh4 = tierCh4(ch4);
+            const tUv = tierUv(uv);
+            const tFire = tierFire(wildfire);
+            const tEc = tierEc(ecTotal);
+            const tEcR = tierEcRes(ecRes);
+
+            const pollenMeta = [
+                { key: 'birch', thr: 50, uk: 'береза', en: 'birch' },
+                { key: 'alder', thr: 50, uk: 'вільха', en: 'alder' },
+                { key: 'grass', thr: 50, uk: 'трави', en: 'grass' },
+                { key: 'mugwort', thr: 40, uk: 'полин', en: 'mugwort' },
+                { key: 'olive', thr: 50, uk: 'оливка', en: 'olive' },
+                { key: 'ragweed', thr: 40, uk: 'амброзія', en: 'ragweed' }
+            ];
+            const pollenActive = [];
+            for (const pm of pollenMeta) {
+                const v = pollen[pm.key];
+                const tier = tierPollen(v, pm.thr);
+                if (v == null) continue;
+                pollenActive.push({ ...pm, v, tier, name: isUk ? pm.uk : pm.en });
+            }
+
+            const lvUs = levelUs(usAqi);
+            const lvEa = levelEaqi(eaqi);
+
+            // —— narrative analysis ——
+            const findings = []; // { severity 0-3, title, impact, tip }
+            const add = (severity, title, impact, tip) => {
+                if (severity <= 0) return;
+                findings.push({ severity, title, impact, tip });
+            };
+
+            add(tPm25,
+                'PM2.5',
+                isUk
+                    ? 'Дрібний пил проникає глибоко в легені й може потрапляти в кров; чутливі — кашель, задишка, гірше самопочуття.'
+                    : 'Fine particles reach deep into lungs and blood; sensitive people may get cough, shortness of breath.',
+                isUk
+                    ? 'Коротше на вулиці, вікна в пік смогу зачинені, за можливості — очищувач / FFP2.'
+                    : 'Shorter outdoor time, close windows at peak smog, purifier / FFP2 if possible.'
+            );
+            add(tPm10,
+                'PM10',
+                isUk ? 'Грубий пил подразнює ніс, горло й верхні дихальні шляхи.' : 'Coarse dust irritates nose, throat and upper airways.',
+                isUk ? 'Обмежте довгі прогулянки; після вітру з пилом — промийте обличчя/нос.' : 'Limit long walks; after dusty wind, rinse face/nose.'
+            );
+            add(tO3,
+                isUk ? 'Озон (O₃)' : 'Ozone (O₃)',
+                isUk ? 'Приземний озон (літній смог) дратує легені, особливо при навантаженні вдень.' : 'Ground-level ozone irritates lungs, worse with midday exercise.',
+                isUk ? 'Тренування — вранці/ввечері; в обід краще в приміщенні.' : 'Work out morning/evening; avoid midday outdoor effort.'
+            );
+            add(tNo2,
+                'NO₂',
+                isUk ? 'Типово трафік і опалення; подразнює бронхи, гірше при астмі.' : 'Often traffic and heating; irritates bronchi, worse with asthma.',
+                isUk ? 'Менше часу біля жвавих доріг; провітрюйте з боку двору.' : 'Less time by busy roads; ventilate from courtyard side.'
+            );
+            add(tSo2,
+                'SO₂',
+                isUk ? 'Промисловість/вугілля; різке подразнення дихання.' : 'Industry/coal; sharp respiratory irritation.',
+                isUk ? 'Уникайте зон біля джерел викидів; при симптомах — у приміщення.' : 'Avoid emission sources; go indoors if symptoms.'
+            );
+            add(tCo,
+                'CO',
+                isUk ? 'Неповне згоряння; зменшує перенос кисню кровʼю.' : 'Incomplete combustion; reduces blood oxygen transport.',
+                isUk ? 'Не залишайтесь у гаражах/біля холостого ходу; провітрювання.' : 'Avoid idling/garages; ventilate.'
+            );
+            add(tDust,
+                isUk ? 'Мінеральний пил' : 'Mineral dust',
+                isUk ? 'Піщані/пилові хмари; сухі очі, кашель, гірша видимість.' : 'Sand/dust plumes; dry eyes, cough, lower visibility.',
+                isUk ? 'Окуляри, менше на вулиці, зачиніть вікна.' : 'Glasses, less outdoor time, close windows.'
+            );
+            add(tFire,
+                isUk ? 'Дим пожеж' : 'Wildfire smoke',
+                isUk ? 'Дистанційний дим лісових/степових пожеж — часто небезпечніший за звичайний міський пил.' : 'Transported wildfire smoke is often worse than ordinary urban dust.',
+                isUk ? 'Вікна зачинені, FFP2, очищувач, без інтенсивних тренувань надворі.' : 'Windows closed, FFP2, purifier, no hard outdoor workouts.'
+            );
+            add(tEc,
+                isUk ? 'Сажа (black carbon)' : 'Black carbon',
+                isUk ? 'Дрібна сажа від дизеля, опалення, пожеж — навантаження на легені й судини.' : 'Fine soot from diesel, heating, fires — stress on lungs and vessels.',
+                isUk ? 'Обійти жваві дороги в годину пік; вдома — менше спалювання.' : 'Avoid busy roads at peak; less burning at home.'
+            );
+            add(tEcR,
+                isUk ? 'Сажа опалення' : 'Heating soot',
+                isUk ? 'Маркер житлового опалення (дрова, вугілля, пічки).' : 'Marker of residential heating (wood, coal, stoves).',
+                isUk ? 'Увечері в сезон опалення — коротше провітрювання з вулиці.' : 'In heating season, shorter outdoor ventilation in the evening.'
+            );
+            add(tNh3,
+                'NH₃',
+                isUk ? 'Аміак (агро, ферми); подразник слизових.' : 'Ammonia (farms); mucosal irritant.',
+                isUk ? 'Зачиніть вікна при різкому запаху; алергікам — обережніше.' : 'Close windows if strong smell; allergy-prone be cautious.'
+            );
+            add(tAod,
+                'AOD',
+                isUk ? 'Каламутність атмосфери (імла, дим, пил) — не газ, а «непрозорість».' : 'Atmospheric haze (smoke/dust) — opacity, not a gas.',
+                isUk ? 'При високому AOD очікуйте гіршу видимість і можливий дискомфорт дихання.' : 'High AOD → poorer visibility and possible breathing discomfort.'
+            );
+            add(tUv,
+                'UV',
+                isUk ? 'Ультрафіолет — опіки шкіри, навантаження на очі; для рослин — ризик опіку листа.' : 'UV — skin burns, eye strain; plants risk leaf scorch.',
+                isUk ? 'SPF, капелюх, тінь 11:00–16:00.' : 'SPF, hat, shade 11:00–16:00.'
+            );
+            for (const pa of pollenActive) {
+                if (pa.tier <= 0) continue;
+                add(pa.tier,
+                    isUk ? `Пилок: ${pa.name}` : `Pollen: ${pa.name}`,
+                    isUk
+                        ? `Алергени пилку (${pa.name}). Нежить, свербіж очей, гірше при астмі.`
+                        : `Pollen allergens (${pa.name}). Runny nose, itchy eyes, worse with asthma.`,
+                    isUk
+                        ? 'Антигістамін за потреби, вікна вранці зачинені, після вулиці — зміна одягу/душ.'
+                        : 'Antihistamine if needed, morning windows closed, change clothes/shower after outdoors.'
+                );
+            }
+
+            findings.sort((a, b) => b.severity - a.severity);
+
+            // overall advice from indices + findings
             const mainIdx = usAqi != null ? usAqi : eaqi;
-            const mainBadge = usAqi != null ? badgeUs(usAqi) : badgeEaqi(eaqi);
-            let advice = '';
+            const mainBadge = (lvUs || lvEa)?.badge || '🟢';
+            let headline = '';
             if (mainIdx != null && mainIdx > 150) {
-                advice = isUk
-                    ? '🔴 Небезпечно для всіх. Зачиніть вікна, очищувач повітря, мінімум на вулиці.'
-                    : '🔴 Unhealthy for everyone. Close windows, use purifier, limit outdoor time.';
+                headline = isUk
+                    ? '🔴 Повітря шкідливе для всіх. Мінімум на вулиці, вікна, очищувач.'
+                    : '🔴 Unhealthy for everyone. Minimize outdoors, windows, purifier.';
             } else if (mainIdx != null && mainIdx > 100) {
-                advice = isUk
-                    ? '🟠 Шкідливо для чутливих груп (діти, астма, літні). Краще провітрювати коротко.'
-                    : '🟠 Unhealthy for sensitive groups. Prefer short ventilation.';
+                headline = isUk
+                    ? '🟠 Шкідливо для чутливих (діти, астма, літні). Коротке провітрювання.'
+                    : '🟠 Unhealthy for sensitive groups. Short ventilation only.';
             } else if (mainIdx != null && mainIdx > 50) {
-                advice = isUk
-                    ? '🟡 Прийнятно, але чутливим варто обмежити тривалі прогулянки.'
-                    : '🟡 Acceptable; sensitive people should limit long outdoor activity.';
-            } else if (elevated.length) {
-                advice = isUk
-                    ? `⚠️ Індекс загалом нормальний, але підвищено: ${elevated.join(', ')}.`
-                    : `⚠️ Overall index OK, but elevated: ${elevated.join(', ')}.`;
+                headline = isUk
+                    ? '🟡 Помірно: для більшості ок, чутливим — коротші прогулянки без інтенсивних навантажень.'
+                    : '🟡 Moderate: OK for most; sensitive — shorter walks, no hard outdoor effort.';
+            } else if ((lvEa && lvEa.key === 'fair') || findings.some(f => f.severity >= 1)) {
+                headline = isUk
+                    ? '🟡 Загалом прийнятно (задовільно), але є нюанси — див. аналіз нижче.'
+                    : '🟡 Overall acceptable (fair), but see analysis below.';
             } else {
-                advice = isUk
+                headline = isUk
                     ? '🟢 Повітря в нормі для більшості людей.'
                     : '🟢 Air quality is fine for most people.';
             }
 
+            // what is driving the picture
+            const drivers = [];
+            if (tPm25 >= 1) drivers.push(`PM2.5 ${fmt(pm25)} µg/m³`);
+            if (tPm10 >= 1) drivers.push(`PM10 ${fmt(pm10)}`);
+            if (tO3 >= 1) drivers.push(`O₃ ${fmt(o3)}`);
+            if (tNo2 >= 1) drivers.push(`NO₂ ${fmt(no2)}`);
+            if (tFire >= 1) drivers.push(isUk ? `дим пожеж ${fmt(wildfire)}` : `wildfire ${fmt(wildfire)}`);
+            if (tEc >= 1) drivers.push(isUk ? `сажа ${fmt(ecTotal, 2)}` : `BC ${fmt(ecTotal, 2)}`);
+            for (const pa of pollenActive) {
+                if (pa.tier >= 1) drivers.push(isUk ? `пилок (${pa.name})` : `pollen (${pa.name})`);
+            }
+
+            // ГОЛОВНЕ: лише те, що не «добре» (задовільно і гірше / увага+)
             const summaryBits = [];
-            if (usAqi != null) summaryBits.push(`US AQI ${fmt(usAqi, 0)} (${levelUs(usAqi)})`);
-            if (eaqi != null) summaryBits.push(`EAQI ${fmt(eaqi, 0)} (${levelEaqi(eaqi)})`);
-            if (pm25 != null) summaryBits.push(`PM2.5 ${fmt(pm25)} µg/m³`);
-            if (pm10 != null) summaryBits.push(`PM10 ${fmt(pm10)} µg/m³`);
+            if (lvUs && lvUs.key !== 'good') {
+                summaryBits.push(`US AQI ${fmt(usAqi, 0)} (${L(lvUs)})`);
+            }
+            if (lvEa && lvEa.key !== 'good') {
+                summaryBits.push(`EAQI ${fmt(eaqi, 0)} (${L(lvEa)})`);
+            }
+            if (tPm25 >= 1) summaryBits.push(`PM2.5 ${fmt(pm25)} µg/m³`);
+            if (tPm10 >= 1) summaryBits.push(`PM10 ${fmt(pm10)} µg/m³`);
 
-            const rows = [
-                {
-                    name: 'US AQI',
-                    val: fmt(usAqi, 0),
-                    unit: '',
-                    badge: badgeUs(usAqi),
-                    meaning: isUk
-                        ? 'Американський індекс (0–500). >50 — помірно, >100 — шкідливо для чутливих, >150 — для всіх.'
-                        : 'US index (0–500). >50 moderate, >100 unhealthy for sensitive, >150 for everyone.',
-                    high: usAqi != null && usAqi > 50
-                },
-                {
-                    name: 'EAQI',
-                    val: fmt(eaqi, 0),
-                    unit: '',
-                    badge: badgeEaqi(eaqi),
-                    meaning: isUk
-                        ? 'Європейський індекс (макс. по забрудниках). 0–20 добре, 20–40 задовільно, 40–60 помірно, 60+ погано.'
-                        : 'European index (max of pollutants). 0–20 good, 20–40 fair, 40–60 moderate, 60+ poor.',
-                    high: eaqi != null && eaqi > 40
-                },
-                {
-                    name: 'PM2.5',
-                    val: fmt(pm25),
-                    unit: 'µg/m³',
-                    badge: pm25 == null ? '⚪' : (pm25 > 75 ? '🔴' : pm25 > 25 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Дрібний пил (<2.5 µm). Проникає в легені й кров. WHO добова орієнтир ~15–25; >25 — підвищено.'
-                        : 'Fine particles (<2.5 µm). Reach lungs/blood. WHO daily guide ~15–25; >25 elevated.',
-                    high: pm25 != null && pm25 > 25
-                },
-                {
-                    name: 'PM10',
-                    val: fmt(pm10),
-                    unit: 'µg/m³',
-                    badge: pm10 == null ? '⚪' : (pm10 > 100 ? '🔴' : pm10 > 50 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Грубий пил (<10 µm). Подразнює дихальні шляхи. >50 — підвищено.'
-                        : 'Coarse dust (<10 µm). Irritates airways. >50 elevated.',
-                    high: pm10 != null && pm10 > 50
-                },
-                {
-                    name: 'NO₂',
-                    val: fmt(no2),
-                    unit: 'µg/m³',
-                    badge: no2 == null ? '⚪' : (no2 > 100 ? '🔴' : no2 > 40 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Діоксид азоту (трафік, опалення). Подразнює бронхи. >40 — підвищено.'
-                        : 'Nitrogen dioxide (traffic, heating). Irritates bronchi. >40 elevated.',
-                    high: no2 != null && no2 > 40
-                },
-                {
-                    name: 'O₃',
-                    val: fmt(o3),
-                    unit: 'µg/m³',
-                    badge: o3 == null ? '⚪' : (o3 > 160 ? '🔴' : o3 > 100 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Озон (приземний, «літній смог»). Дратує легені, особливо вдень. >100 — підвищено.'
-                        : 'Ground-level ozone (summer smog). Irritates lungs, worse midday. >100 elevated.',
-                    high: o3 != null && o3 > 100
-                },
-                {
-                    name: 'SO₂',
-                    val: fmt(so2),
-                    unit: 'µg/m³',
-                    badge: so2 == null ? '⚪' : (so2 > 50 ? '🔴' : so2 > 20 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Діоксид сірки (промисловість, вугілля). Подразнення дихання. >20 — підвищено.'
-                        : 'Sulphur dioxide (industry, coal). Respiratory irritation. >20 elevated.',
-                    high: so2 != null && so2 > 20
-                },
-                {
-                    name: 'CO',
-                    val: fmt(co, 0),
-                    unit: 'µg/m³',
-                    badge: co == null ? '⚪' : (co > 10000 ? '🔴' : co > 4000 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Монооксид вуглецю (неповне згоряння). Знижує перенос кисню кровʼю. >4000 — підвищено.'
-                        : 'Carbon monoxide (incomplete combustion). Reduces blood oxygen. >4000 elevated.',
-                    high: co != null && co > 4000
-                },
-                {
-                    name: isUk ? 'Пил (dust)' : 'Dust',
-                    val: fmt(dust),
-                    unit: 'µg/m³',
-                    badge: dust == null ? '⚪' : (dust > 100 ? '🔴' : dust > 50 ? '🟡' : '🟢'),
-                    meaning: isUk
-                        ? 'Мінеральний/пустельний пил у моделі CAMS. >50 — помітне підвищення.'
-                        : 'Mineral/desert dust in CAMS model. >50 noticeable elevation.',
-                    high: dust != null && dust > 50
-                }
+            // tables
+            const mainRows = [
+                { name: 'US AQI', val: fmt(usAqi, 0), unit: '', badge: lvUs?.badge || '⚪', status: statusIndex(lvUs, 'us'),
+                  meaning: isUk
+                    ? 'Американський індекс 0–500. 0–50 добре, 51–100 помірно, 101–150 шкідливо для чутливих, 151+ для всіх.'
+                    : 'US index 0–500. 0–50 good, 51–100 moderate, 101–150 unhealthy for sensitive, 151+ everyone.' },
+                { name: 'EAQI', val: fmt(eaqi, 0), unit: '', badge: lvEa?.badge || '⚪', status: statusIndex(lvEa, 'ea'),
+                  meaning: isUk
+                    ? 'Європейський індекс: 0–20 добре, 20–40 задовільно, 40–60 помірно, 60–80 погано, 80+ дуже погано.'
+                    : 'European index: 0–20 good, 20–40 fair, 40–60 moderate, 60–80 poor, 80+ very poor.' },
+                { name: 'PM2.5', val: fmt(pm25), unit: 'µg/m³', badge: badgeTier(tPm25), status: statusPoll(tPm25),
+                  meaning: isUk ? 'Дрібний пил. Увага з ~12, завищено >25 µg/m³.' : 'Fine particles. Watch ~12, elevated >25 µg/m³.' },
+                { name: 'PM10', val: fmt(pm10), unit: 'µg/m³', badge: badgeTier(tPm10), status: statusPoll(tPm10),
+                  meaning: isUk ? 'Грубий пил. Увага з ~30, завищено >50.' : 'Coarse dust. Watch ~30, elevated >50.' }
             ];
-            if (nh3 != null) {
-                rows.push({
-                    name: 'NH₃',
-                    val: fmt(nh3),
-                    unit: 'µg/m³',
-                    badge: nh3 > 20 ? '🟡' : '🟢',
-                    meaning: isUk
-                        ? 'Аміак (переважно Європа, сільське господарство). Подразник слизових.'
-                        : 'Ammonia (mainly Europe, agriculture). Mucosal irritant.',
-                    high: nh3 > 20
-                });
-            }
-            if (aod != null) {
-                rows.push({
-                    name: 'AOD',
-                    val: fmt(aod, 3),
-                    unit: '',
-                    badge: aod > 0.5 ? '🟡' : '🟢',
-                    meaning: isUk
-                        ? 'Оптична товщина аерозолів (задимлення/пилова імла). >0.5 — помітна каламутність.'
-                        : 'Aerosol optical depth (haze/smoke). >0.5 noticeable murkiness.',
-                    high: aod > 0.5
+
+            const extRows = [
+                { name: 'NO₂', val: fmt(no2), unit: 'µg/m³', badge: badgeTier(tNo2), status: statusPoll(tNo2),
+                  meaning: isUk ? 'Трафік/опалення. Увага >25, завищено >40.' : 'Traffic/heating. Watch >25, elevated >40.' },
+                { name: 'O₃', val: fmt(o3), unit: 'µg/m³', badge: badgeTier(tO3), status: statusPoll(tO3),
+                  meaning: isUk ? 'Приземний озон. Увага >80, завищено >100.' : 'Ground ozone. Watch >80, elevated >100.' },
+                { name: 'SO₂', val: fmt(so2), unit: 'µg/m³', badge: badgeTier(tSo2), status: statusPoll(tSo2),
+                  meaning: isUk ? 'Промисловість. Увага >10, завищено >20.' : 'Industry. Watch >10, elevated >20.' },
+                { name: 'CO', val: fmt(co, 0), unit: 'µg/m³', badge: badgeTier(tCo), status: statusPoll(tCo),
+                  meaning: isUk ? 'Неповне згоряння. Завищено >4000.' : 'Incomplete combustion. Elevated >4000.' },
+                { name: isUk ? 'Пил (dust)' : 'Dust', val: fmt(dust), unit: 'µg/m³', badge: badgeTier(tDust), status: statusPoll(tDust),
+                  meaning: isUk ? 'Мінеральний пил CAMS.' : 'Mineral dust CAMS.' },
+                { name: 'NH₃', val: fmt(nh3), unit: 'µg/m³', badge: badgeTier(tNh3), status: statusPoll(tNh3),
+                  meaning: isUk ? 'Аміак (агро, Європа).' : 'Ammonia (agriculture, Europe).' },
+                { name: 'AOD', val: fmt(aod, 3), unit: '', badge: badgeTier(tAod), status: statusPoll(tAod),
+                  meaning: isUk ? 'Каламутність (імла/дим).' : 'Haze opacity (smoke/dust).' },
+                { name: 'CO₂', val: fmt(co2, 0), unit: 'ppm', badge: badgeTier(tCo2), status: statusPoll(tCo2),
+                  meaning: isUk ? 'Фоновий CO₂ (не AQI-забрудник у класичному сенсі).' : 'Background CO₂ (not a classic AQI pollutant).' },
+                { name: 'CH₄', val: fmt(ch4, 0), unit: 'µg/m³', badge: badgeTier(tCh4), status: statusPoll(tCh4),
+                  meaning: isUk ? 'Метан біля поверхні.' : 'Methane near surface.' },
+                { name: 'UV', val: fmt(uv, 1), unit: '', badge: badgeTier(tUv), status: statusPoll(tUv),
+                  meaning: isUk ? 'UV CAMS (з хмарами).' : 'UV CAMS (with clouds).' },
+                { name: isUk ? 'Пил пожеж' : 'Wildfire PM', val: fmt(wildfire, 1), unit: 'µg/m³', badge: badgeTier(tFire), status: statusPoll(tFire),
+                  meaning: isUk ? 'PM10 від диму пожеж.' : 'PM10 from wildfire smoke.' },
+                { name: isUk ? 'Сажа (EC)' : 'Black carbon', val: fmt(ecTotal, 2), unit: 'µg/m³', badge: badgeTier(tEc), status: statusPoll(tEc),
+                  meaning: isUk ? 'Елементарний вуглець — сажа.' : 'Elemental carbon — soot.' },
+                { name: isUk ? 'Сажа опалення' : 'BC heating', val: fmt(ecRes, 2), unit: 'µg/m³', badge: badgeTier(tEcR), status: statusPoll(tEcR),
+                  meaning: isUk ? 'Сажа від житлового опалення.' : 'Soot from residential heating.' }
+            ];
+            for (const pa of pollenActive) {
+                extRows.push({
+                    name: isUk ? `Пилок (${pa.name})` : `Pollen (${pa.name})`,
+                    val: fmt(pa.v, 0),
+                    unit: isUk ? 'зерн/м³' : 'grains/m³',
+                    badge: badgeTier(pa.tier),
+                    status: statusPoll(pa.tier),
+                    meaning: isUk ? 'CAMS, Європа, лише в сезон.' : 'CAMS, Europe, in season only.'
                 });
             }
 
-            let table = `<table bordered striped compact>
+            const renderTable = (title, rows) => {
+                let html = `<h3>${title}</h3><table bordered striped compact>
 <tr><th>${isUk ? 'Метрика' : 'Metric'}</th><th>${isUk ? 'Значення' : 'Value'}</th><th>${isUk ? 'Статус' : 'Status'}</th></tr>`;
-            for (const r of rows) {
-                const status = r.high
-                    ? (isUk ? '⚠️ завищено' : '⚠️ elevated')
-                    : (isUk ? '✅ норма' : '✅ ok');
-                table += `<tr>
+                for (const r of rows) {
+                    html += `<tr>
 <td><b>${r.badge} ${r.name}</b></td>
 <td align="center">${r.val}${r.unit ? ' ' + r.unit : ''}</td>
-<td align="center">${status}</td>
+<td align="center">${r.status}</td>
 </tr>`;
-            }
-            table += `</table>`;
+                }
+                return html + `</table>`;
+            };
 
-            let meanings = `<details><summary>${isUk ? 'ℹ️ Що означає кожна метрика' : 'ℹ️ What each metric means'}</summary><ul>`;
-            for (const r of rows) {
+            let analysisHtml = '';
+            if (findings.length) {
+                analysisHtml += `<h3>${isUk ? '🔎 На що звернути увагу' : '🔎 What to watch'}</h3><ul>`;
+                for (const f of findings.slice(0, 8)) {
+                    analysisHtml += `<li><b>${f.title}</b> — ${f.impact} <i>${isUk ? 'Що робити:' : 'What to do:'} ${f.tip}</i></li>`;
+                }
+                analysisHtml += `</ul>`;
+            } else {
+                analysisHtml += `<p>${isUk
+                    ? 'Окремих перевищень по газах, пилку, диму чи сажі зараз не видно — орієнтуйтесь на індекси вище.'
+                    : 'No notable spikes in gases, pollen, smoke or soot right now — use the indices above.'}</p>`;
+            }
+
+            let meanings = `<details><summary>${isUk ? 'ℹ️ Довідка по метриках' : 'ℹ️ Metric reference'}</summary><ul>`;
+            for (const r of [...mainRows, ...extRows]) {
                 meanings += `<li><b>${r.name}:</b> ${r.meaning}</li>`;
             }
             meanings += `</ul></details>`;
@@ -3179,14 +3303,37 @@ bot.on("callback_query:data", async (ctx) => {
             })();
 
             const sourceLine = isUk
-                ? `ℹ️ Джерело: Open-Meteo · CAMS (модель), оновлено ${nowLocal}. Це модельний «зараз», не дані конкретної станції.`
-                : `ℹ️ Source: Open-Meteo · CAMS (model), updated ${nowLocal}. Modelled “now”, not a ground station.`;
+                ? `ℹ️ Open-Meteo · CAMS (модель), оновлено ${nowLocal}. Не станція. Пилок — Європа в сезон.`
+                : `ℹ️ Open-Meteo · CAMS (model), updated ${nowLocal}. Not a station. Pollen — Europe in season.`;
 
             let body = `<h1>${dict[userLang].airForecastTitle}</h1>`;
             body += `<blockquote><b>${isUk ? 'ГОЛОВНЕ' : 'SUMMARY'}:</b><br>`;
-            body += `${mainBadge} ${summaryBits.join(' · ')}<br>${advice}`;
+            // Коротко: бейдж + заголовок; деталі — лише якщо є незадовільні метрики
+            if (summaryBits.length || drivers.length) {
+                const line = summaryBits.length
+                    ? `${mainBadge} ${summaryBits.join(' · ')}`
+                    : mainBadge;
+                body += `${line}<br>${headline}`;
+                // drivers без дублікатів того, що вже в summaryBits
+                const extra = drivers.filter((d) => {
+                    const low = d.toLowerCase();
+                    return !summaryBits.some((s) => {
+                        const sl = s.toLowerCase();
+                        if (low.startsWith('pm2.5') && sl.includes('pm2.5')) return true;
+                        if (low.startsWith('pm10') && sl.includes('pm10')) return true;
+                        return false;
+                    });
+                });
+                if (extra.length) {
+                    body += `<br>${isUk ? 'Що ще' : 'Also'}: <b>${extra.join(', ')}</b>`;
+                }
+            } else {
+                body += `${mainBadge} ${headline}`;
+            }
             body += `</blockquote>`;
-            body += table;
+            body += analysisHtml;
+            body += renderTable(isUk ? '🍃 Основні' : '🍃 Main', mainRows);
+            body += renderTable(isUk ? '🔬 Розширені' : '🔬 Extended', extRows);
             body += meanings;
             body += `<footer>${sourceLine}</footer>`;
 

@@ -418,7 +418,10 @@ module.exports = async (req, res) => {
         try {
             const aqUrl =
                 `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}` +
-                `&hourly=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust` +
+                `&hourly=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust,` +
+                `ammonia,aerosol_optical_depth,carbon_dioxide,methane,` +
+                `alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen,uv_index,` +
+                `pm10_wildfires,total_elementary_carbon,residential_elementary_carbon` +
                 `&timezone=auto&forecast_days=7`;
             const aqRes = await axios.get(aqUrl, { timeout: 12000 });
             const h = aqRes.data?.hourly || {};
@@ -433,7 +436,10 @@ module.exports = async (req, res) => {
                     omAqByDate[dStr] = {
                         eaqiMax: null, usAqiMax: null,
                         pm25Max: null, pm10Max: null,
-                        no2Max: null, o3Max: null, so2Max: null, coMax: null, dustMax: null
+                        no2Max: null, o3Max: null, so2Max: null, coMax: null, dustMax: null,
+                        nh3Max: null, aodMax: null, co2Max: null, ch4Max: null, uvAqMax: null,
+                        alderMax: null, birchMax: null, grassMax: null, mugwortMax: null, oliveMax: null, ragweedMax: null,
+                        wildfireMax: null, ecTotalMax: null, ecResMax: null
                     };
                 }
                 const row = omAqByDate[dStr];
@@ -450,6 +456,20 @@ module.exports = async (req, res) => {
                 bump('so2Max', pickMax(h.sulphur_dioxide, i));
                 bump('coMax', pickMax(h.carbon_monoxide, i));
                 bump('dustMax', pickMax(h.dust, i));
+                bump('nh3Max', pickMax(h.ammonia, i));
+                bump('aodMax', pickMax(h.aerosol_optical_depth, i));
+                bump('co2Max', pickMax(h.carbon_dioxide, i));
+                bump('ch4Max', pickMax(h.methane, i));
+                bump('uvAqMax', pickMax(h.uv_index, i));
+                bump('alderMax', pickMax(h.alder_pollen, i));
+                bump('birchMax', pickMax(h.birch_pollen, i));
+                bump('grassMax', pickMax(h.grass_pollen, i));
+                bump('mugwortMax', pickMax(h.mugwort_pollen, i));
+                bump('oliveMax', pickMax(h.olive_pollen, i));
+                bump('ragweedMax', pickMax(h.ragweed_pollen, i));
+                bump('wildfireMax', pickMax(h.pm10_wildfires, i));
+                bump('ecTotalMax', pickMax(h.total_elementary_carbon, i));
+                bump('ecResMax', pickMax(h.residential_elementary_carbon, i));
             }
         } catch (e) {
             console.error('Test forecast Open-Meteo AQ error:', e.message);
@@ -695,22 +715,72 @@ module.exports = async (req, res) => {
                 }
                 if (aq.no2Max != null && aq.no2Max >= 40) {
                     ev.aqIssues.push(isUk
-                        ? `NO₂ до ${aq.no2Max.toFixed(0)} µg/m³`
-                        : `NO₂ up to ${aq.no2Max.toFixed(0)} µg/m³`);
+                        ? `NO₂ (трафік/опалення) до ${aq.no2Max.toFixed(0)} µg/m³`
+                        : `NO₂ (traffic/heating) up to ${aq.no2Max.toFixed(0)} µg/m³`);
                 }
                 if (aq.o3Max != null && aq.o3Max >= 100) {
                     ev.aqIssues.push(isUk
-                        ? `озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³`
-                        : `ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³`);
+                        ? `озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³ — краще без інтенсивних тренувань удень`
+                        : `ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³ — avoid hard midday workouts`);
                 }
                 if (aq.so2Max != null && aq.so2Max >= 30) {
                     ev.aqIssues.push(isUk
                         ? `SO₂ до ${aq.so2Max.toFixed(0)} µg/m³`
                         : `SO₂ up to ${aq.so2Max.toFixed(0)} µg/m³`);
                 }
+                if (aq.wildfireMax != null && aq.wildfireMax >= 15) {
+                    ev.aqIssues.push(isUk
+                        ? `можливий дим пожеж (PM) до ${aq.wildfireMax.toFixed(0)} µg/m³ — вікна, FFP2`
+                        : `possible wildfire smoke (PM) up to ${aq.wildfireMax.toFixed(0)} µg/m³ — windows, FFP2`);
+                }
+                if (aq.ecTotalMax != null && aq.ecTotalMax >= 1.5) {
+                    ev.aqIssues.push(isUk
+                        ? `сажа (black carbon) до ${aq.ecTotalMax.toFixed(1)} µg/m³ — дизель/опалення/пожежі`
+                        : `black carbon up to ${aq.ecTotalMax.toFixed(1)} µg/m³ — diesel/heating/fires`);
+                }
+                if (aq.ecResMax != null && aq.ecResMax >= 0.8) {
+                    ev.aqIssues.push(isUk
+                        ? `сажа опалення до ${aq.ecResMax.toFixed(1)} µg/m³`
+                        : `heating soot up to ${aq.ecResMax.toFixed(1)} µg/m³`);
+                }
+                if (aq.nh3Max != null && aq.nh3Max >= 10) {
+                    ev.aqIssues.push(isUk
+                        ? `аміак NH₃ до ${aq.nh3Max.toFixed(0)} µg/m³ (агро)`
+                        : `ammonia NH₃ up to ${aq.nh3Max.toFixed(0)} µg/m³ (agriculture)`);
+                }
+                if (aq.aodMax != null && aq.aodMax >= 0.25) {
+                    ev.aqIssues.push(isUk
+                        ? `каламутність AOD ${aq.aodMax.toFixed(2)} — імла/дим`
+                        : `haze AOD ${aq.aodMax.toFixed(2)} — smoke/dust`);
+                }
+                // Пилок по видах (Європа, сезон)
+                const pollenTips = [
+                    ['birchMax', 30, isUk ? 'пилок берези' : 'birch pollen'],
+                    ['alderMax', 30, isUk ? 'пилок вільхи' : 'alder pollen'],
+                    ['grassMax', 30, isUk ? 'пилок трав' : 'grass pollen'],
+                    ['mugwortMax', 20, isUk ? 'пилок полину' : 'mugwort pollen'],
+                    ['oliveMax', 30, isUk ? 'пилок оливки' : 'olive pollen'],
+                    ['ragweedMax', 20, isUk ? 'пилок амброзії' : 'ragweed pollen']
+                ];
+                for (const [key, thr, label] of pollenTips) {
+                    const v = aq[key];
+                    if (v != null && v >= thr) {
+                        ev.aqIssues.push(isUk
+                            ? `${label} до ${Math.round(v)} зерн/м³ — алергікам обережно`
+                            : `${label} up to ${Math.round(v)} grains/m³ — caution if allergic`);
+                    }
+                }
                 if (aq.usAqiMax != null && aq.usAqiMax >= 50) {
                     ev.eaqi = Math.round(aq.usAqiMax);
                     ev.eaqiBadge = aq.usAqiMax > 150 ? '🔴' : aq.usAqiMax > 100 ? '🟠' : '🟡';
+                    if (!ev.aqIssues.length && aq.pm25Max != null) {
+                        ev.aqIssues.push(isUk
+                            ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
+                            : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
+                    }
+                } else if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
+                    ev.eaqi = Math.round(aq.eaqiMax);
+                    ev.eaqiBadge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
                     if (!ev.aqIssues.length && aq.pm25Max != null) {
                         ev.aqIssues.push(isUk
                             ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
@@ -778,12 +848,12 @@ module.exports = async (req, res) => {
                 if (ev.geomagLabel) bits.push(ev.geomagLabel);
                 if (ev.highPress) bits.push(isUk ? 'високий тиск 🔴' : 'high pressure 🔴');
                 if (ev.eaqi != null) {
-                    const detail = ev.aqIssues.length ? `: ${ev.aqIssues[0]}` : '';
+                    const detail = ev.aqIssues.length ? `: ${ev.aqIssues.slice(0, 3).join('; ')}` : '';
                     bits.push(isUk
                         ? `якість повітря AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
                         : `air quality AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
                 } else if (ev.aqIssues.length) {
-                    bits.push(ev.aqIssues[0]);
+                    bits.push(ev.aqIssues.slice(0, 3).join('; '));
                 }
                 nearLines.push(`${labelDay} — ${bits.join(', ')}`);
             }
@@ -855,9 +925,27 @@ module.exports = async (req, res) => {
                 : `High pressure 🔴: ${groupPress.join(', ')}.`);
         }
         if (groupAq.length) {
+            // Зібрати типи проблем з далеких днів для точнішого формулювання
+            const farAqKinds = new Set();
+            far.forEach((ev) => {
+                for (const s of (ev.aqIssues || [])) {
+                    const x = String(s).toLowerCase();
+                    if (x.includes('pm2.5') || x.includes('смог') || x.includes('smog')) farAqKinds.add('PM2.5');
+                    else if (x.includes('pm10') || x.includes('пил') || x.includes('dust')) farAqKinds.add(isUk ? 'пил' : 'dust');
+                    else if (x.includes('o₃') || x.includes('o3') || x.includes('озон') || x.includes('ozone')) farAqKinds.add('O₃');
+                    else if (x.includes('no₂') || x.includes('no2')) farAqKinds.add('NO₂');
+                    else if (x.includes('пожеж') || x.includes('wildfire') || x.includes('дим')) farAqKinds.add(isUk ? 'дим пожеж' : 'wildfire smoke');
+                    else if (x.includes('сажа') || x.includes('black carbon') || x.includes('soot')) farAqKinds.add(isUk ? 'сажа' : 'soot');
+                    else if (x.includes('пилк') || x.includes('pollen')) farAqKinds.add(isUk ? 'пилок' : 'pollen');
+                    else if (x.includes('nh₃') || x.includes('nh3') || x.includes('аміак') || x.includes('ammonia')) farAqKinds.add('NH₃');
+                }
+            });
+            const kindsStr = farAqKinds.size
+                ? [...farAqKinds].join(', ')
+                : (isUk ? 'погіршення якості повітря' : 'air quality decline');
             farLines.push(isUk
-                ? `Якість повітря — можливий дрібний пил/смог PM2.5: ${groupAq.join(', ')}.`
-                : `Air quality — possible fine dust/smog PM2.5: ${groupAq.join(', ')}.`);
+                ? `Якість повітря (${kindsStr}): ${groupAq.join(', ')}.`
+                : `Air quality (${kindsStr}): ${groupAq.join(', ')}.`);
         }
         if (groupFrost.length) {
             farLines.push(isUk
@@ -1107,7 +1195,21 @@ module.exports = async (req, res) => {
                 o3Max:    [80, 120, 160, 200],
                 so2Max:   [20, 40, 100, 200],
                 coMax:    [2000, 4000, 10000, 20000],
-                dustMax:  [15, 40, 80, 150]
+                dustMax:  [15, 40, 80, 150],
+                nh3Max:   [10, 20, 50, 100],
+                aodMax:   [0.2, 0.5, 1.0, 2.0],
+                co2Max:   [420, 450, 500, 600],
+                ch4Max:   [1200, 2000, 3000, 5000],
+                uvAqMax:  [2, 5, 7, 10],
+                grassMax:   [30, 50, 100, 200],
+                birchMax:   [30, 50, 100, 200],
+                alderMax:   [30, 50, 100, 200],
+                mugwortMax: [20, 40, 80, 150],
+                oliveMax:   [30, 50, 100, 200],
+                ragweedMax: [20, 40, 80, 150],
+                wildfireMax: [15, 40, 80, 150],
+                ecTotalMax:  [1, 3, 6, 10],
+                ecResMax:    [0.5, 1.5, 3, 6]
             };
             const b = bands[key] || [25, 50, 100, 200];
             if (n <= b[0]) return '🟢';
@@ -1125,20 +1227,34 @@ module.exports = async (req, res) => {
             return `<td align="center" valign="middle">${badge}<br>${n}</td>`;
         };
 
-        // Основне: EAQI, US AQI, PM2.5, PM10
+        // Основне: індекси + PM
         const aqRowsMain = [
             ['eaqiMax', isUk ? 'EAQI<br><small>OM max</small>' : 'EAQI<br><small>OM max</small>', 0],
             ['usAqiMax', isUk ? 'US AQI<br><small>OM max</small>' : 'US AQI<br><small>OM max</small>', 0],
             ['pm25Max', 'PM2.5<br><small>µg/m³</small>', 1],
             ['pm10Max', 'PM10<br><small>µg/m³</small>', 1]
         ];
-        // Розширене: NO2, O3, SO2, CO, dust
+        // Розширене: гази, аерозолі, пилок (Європа), UV CAMS
         const aqRowsExt = [
             ['no2Max', 'NO₂<br><small>µg/m³</small>', 1],
             ['o3Max', 'O₃<br><small>µg/m³</small>', 1],
             ['so2Max', 'SO₂<br><small>µg/m³</small>', 1],
             ['coMax', 'CO<br><small>µg/m³</small>', 0],
-            ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1]
+            ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1],
+            ['nh3Max', 'NH₃<br><small>µg/m³</small>', 1],
+            ['aodMax', 'AOD<br><small>550 nm</small>', 3],
+            ['co2Max', 'CO₂<br><small>ppm</small>', 0],
+            ['ch4Max', isUk ? 'CH₄<br><small>метан</small>' : 'CH₄<br><small>methane</small>', 0],
+            ['uvAqMax', 'UV<br><small>CAMS</small>', 1],
+            ['grassMax', isUk ? 'Пилок<br><small>трави</small>' : 'Pollen<br><small>grass</small>', 0],
+            ['birchMax', isUk ? 'Пилок<br><small>береза</small>' : 'Pollen<br><small>birch</small>', 0],
+            ['alderMax', isUk ? 'Пилок<br><small>вільха</small>' : 'Pollen<br><small>alder</small>', 0],
+            ['mugwortMax', isUk ? 'Пилок<br><small>полин</small>' : 'Pollen<br><small>mugwort</small>', 0],
+            ['oliveMax', isUk ? 'Пилок<br><small>оливка</small>' : 'Pollen<br><small>olive</small>', 0],
+            ['ragweedMax', isUk ? 'Пилок<br><small>амброзія</small>' : 'Pollen<br><small>ragweed</small>', 0],
+            ['wildfireMax', isUk ? 'Пил пожеж<br><small>PM10</small>' : 'Wildfire<br><small>PM10</small>', 1],
+            ['ecTotalMax', isUk ? 'Сажа<br><small>EC total</small>' : 'Black carbon<br><small>EC total</small>', 2],
+            ['ecResMax', isUk ? 'Сажа опален.<br><small>EC res</small>' : 'BC heating<br><small>EC res</small>', 2]
         ];
         const aqRows = [
             ...(hasAqiMain ? aqRowsMain : []),
