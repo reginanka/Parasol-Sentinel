@@ -3056,7 +3056,8 @@ bot.on("callback_query:data", async (ctx) => {
             for (const pm of pollenMeta) {
                 const v = pollen[pm.key];
                 const tier = tierPollen(v, pm.thr);
-                if (v == null) continue;
+                // null або 0 поза сезоном — не показуємо рядок
+                if (v == null || v <= 0) continue;
                 pollenActive.push({ ...pm, v, tier, name: isUk ? pm.uk : pm.en });
             }
 
@@ -3064,91 +3065,113 @@ bot.on("callback_query:data", async (ctx) => {
             const lvEa = levelEaqi(eaqi);
 
             // —— narrative analysis ——
-            const findings = []; // { severity 0-3, title, impact, tip }
-            const add = (severity, title, impact, tip) => {
+            // Кожна метрика: норма, що означає завищення, вплив, порада
+            const findings = []; // { severity, title, valueStr, norm, meaning, impact, tip }
+            const addF = (severity, title, valueStr, norm, meaning, impact, tip) => {
                 if (severity <= 0) return;
-                findings.push({ severity, title, impact, tip });
+                findings.push({ severity, title, valueStr, norm, meaning, impact, tip });
             };
 
-            add(tPm25,
-                'PM2.5',
-                isUk
-                    ? 'Дрібний пил проникає глибоко в легені й може потрапляти в кров; чутливі — кашель, задишка, гірше самопочуття.'
-                    : 'Fine particles reach deep into lungs and blood; sensitive people may get cough, shortness of breath.',
-                isUk
-                    ? 'Коротше на вулиці, вікна в пік смогу зачинені, за можливості — очищувач / FFP2.'
-                    : 'Shorter outdoor time, close windows at peak smog, purifier / FFP2 if possible.'
+            addF(tPm25, 'PM2.5', `${fmt(pm25)} µg/m³`,
+                isUk ? 'орієнтир: до ~12 «спокійно», >25 — завищено' : 'guide: up to ~12 calm, >25 elevated',
+                isUk ? 'Дрібний пил (менше 2.5 µm) — суміш смогу, диму, вихлопу.' : 'Fine particles (<2.5 µm) — smog, smoke, exhaust mix.',
+                isUk ? 'Проникає глибоко в легені й може потрапляти в кров; чутливі — кашель, задишка.' : 'Reaches deep into lungs and blood; sensitive people may cough or feel short of breath.',
+                isUk ? 'Коротше на вулиці, у пік — вікна, за можливості очищувач / FFP2.' : 'Shorter outdoors; at peak close windows; purifier / FFP2 if possible.'
             );
-            add(tPm10,
-                'PM10',
-                isUk ? 'Грубий пил подразнює ніс, горло й верхні дихальні шляхи.' : 'Coarse dust irritates nose, throat and upper airways.',
-                isUk ? 'Обмежте довгі прогулянки; після вітру з пилом — промийте обличчя/нос.' : 'Limit long walks; after dusty wind, rinse face/nose.'
+            addF(tPm10, 'PM10', `${fmt(pm10)} µg/m³`,
+                isUk ? 'орієнтир: до ~30 спокійно, >50 — завищено' : 'guide: up to ~30 calm, >50 elevated',
+                isUk ? 'Грубий пил (до 10 µm) — дорожній пил, ґрунт, будівництво.' : 'Coarse dust (up to 10 µm) — road dust, soil, construction.',
+                isUk ? 'Подразнює ніс, горло, верхні дихальні шляхи.' : 'Irritates nose, throat, upper airways.',
+                isUk ? 'Обмежте довгі прогулянки; після пилового вітру — промийте обличчя/нос.' : 'Limit long walks; rinse face/nose after dusty wind.'
             );
-            add(tO3,
-                isUk ? 'Озон (O₃)' : 'Ozone (O₃)',
-                isUk ? 'Приземний озон (літній смог) дратує легені, особливо при навантаженні вдень.' : 'Ground-level ozone irritates lungs, worse with midday exercise.',
-                isUk ? 'Тренування — вранці/ввечері; в обід краще в приміщенні.' : 'Work out morning/evening; avoid midday outdoor effort.'
+            addF(tO3, isUk ? 'Озон (O₃)' : 'Ozone (O₃)', `${fmt(o3)} µg/m³`,
+                isUk ? 'орієнтир: до ~80 спокійно, >100 — завищено' : 'guide: up to ~80 calm, >100 elevated',
+                isUk ? 'Приземний озон («літній смог») утворюється з вихлопу під сонцем, не той озон у стратосфері.' : 'Ground-level ozone (summer smog) from traffic + sun — not the stratospheric ozone layer.',
+                isUk ? 'Дратує легені, особливо при навантаженні вдень.' : 'Irritates lungs, especially with midday exercise.',
+                isUk ? 'Тренування — вранці чи ввечері; в обід краще в приміщенні.' : 'Work out morning/evening; avoid midday outdoor effort.'
             );
-            add(tNo2,
-                'NO₂',
-                isUk ? 'Типово трафік і опалення; подразнює бронхи, гірше при астмі.' : 'Often traffic and heating; irritates bronchi, worse with asthma.',
-                isUk ? 'Менше часу біля жвавих доріг; провітрюйте з боку двору.' : 'Less time by busy roads; ventilate from courtyard side.'
+            addF(tNo2, 'NO₂', `${fmt(no2)} µg/m³`,
+                isUk ? 'орієнтир: до ~25 спокійно, >40 — завищено' : 'guide: up to ~25 calm, >40 elevated',
+                isUk ? 'Діоксид азоту — переважно вихлоп авто й опалення.' : 'Nitrogen dioxide — mostly traffic and heating.',
+                isUk ? 'Подразнює бронхи; людям з астмою важче дихати.' : 'Irritates bronchi; harder for people with asthma.',
+                isUk ? 'Менше часу біля жвавих доріг; провітрюйте з боку двору.' : 'Less time by busy roads; ventilate from the courtyard side.'
             );
-            add(tSo2,
-                'SO₂',
-                isUk ? 'Промисловість/вугілля; різке подразнення дихання.' : 'Industry/coal; sharp respiratory irritation.',
+            addF(tSo2, 'SO₂', `${fmt(so2)} µg/m³`,
+                isUk ? 'орієнтир: до ~10 спокійно, >20 — завищено' : 'guide: up to ~10 calm, >20 elevated',
+                isUk ? 'Діоксид сірки — промисловість, вугілля, мазут.' : 'Sulphur dioxide — industry, coal, heavy fuel.',
+                isUk ? 'Різке подразнення дихальних шляхів.' : 'Sharp respiratory irritation.',
                 isUk ? 'Уникайте зон біля джерел викидів; при симптомах — у приміщення.' : 'Avoid emission sources; go indoors if symptoms.'
             );
-            add(tCo,
-                'CO',
-                isUk ? 'Неповне згоряння; зменшує перенос кисню кровʼю.' : 'Incomplete combustion; reduces blood oxygen transport.',
-                isUk ? 'Не залишайтесь у гаражах/біля холостого ходу; провітрювання.' : 'Avoid idling/garages; ventilate.'
+            addF(tCo, 'CO', `${fmt(co, 0)} µg/m³`,
+                isUk ? 'орієнтир: зазвичай сотні µg/m³; >4000 — завищено' : 'guide: usually hundreds µg/m³; >4000 elevated',
+                isUk ? 'Монооксид вуглецю — неповне згоряння (вихлоп, пічки, генератори).' : 'Carbon monoxide — incomplete combustion (exhaust, stoves, generators).',
+                isUk ? 'Зменшує перенос кисню кровʼю; небезпечно у закритих приміщеннях.' : 'Reduces blood oxygen; dangerous in closed spaces.',
+                isUk ? 'Не залишайтесь у гаражі з працюючим двигуном; провітрюйте.' : 'Do not stay in a garage with engine on; ventilate.'
             );
-            add(tDust,
-                isUk ? 'Мінеральний пил' : 'Mineral dust',
-                isUk ? 'Піщані/пилові хмари; сухі очі, кашель, гірша видимість.' : 'Sand/dust plumes; dry eyes, cough, lower visibility.',
+            addF(tDust, isUk ? 'Мінеральний пил' : 'Mineral dust', `${fmt(dust)} µg/m³`,
+                isUk ? 'орієнтир: до ~20 спокійно, >50 — завищено' : 'guide: up to ~20 calm, >50 elevated',
+                isUk ? 'Пісок і ґрунт, підняті вітром (у т.ч. далекі пустельні хмари), не «міський смог».' : 'Sand and soil lofted by wind (incl. distant desert plumes), not urban smog.',
+                isUk ? 'Сухі очі, кашель, гірша видимість.' : 'Dry eyes, cough, poorer visibility.',
                 isUk ? 'Окуляри, менше на вулиці, зачиніть вікна.' : 'Glasses, less outdoor time, close windows.'
             );
-            add(tFire,
-                isUk ? 'Дим пожеж' : 'Wildfire smoke',
-                isUk ? 'Дистанційний дим лісових/степових пожеж — часто небезпечніший за звичайний міський пил.' : 'Transported wildfire smoke is often worse than ordinary urban dust.',
-                isUk ? 'Вікна зачинені, FFP2, очищувач, без інтенсивних тренувань надворі.' : 'Windows closed, FFP2, purifier, no hard outdoor workouts.'
+            addF(tFire, isUk ? 'Дим пожеж' : 'Wildfire smoke', `${fmt(wildfire, 1)} µg/m³`,
+                isUk ? 'орієнтир: до ~15 майже немає диму, >40 — помітно' : 'guide: up to ~15 little smoke, >40 noticeable',
+                isUk ? 'Частка пилу, яку модель відносить до лісових/степових пожеж (іноді за сотні км).' : 'Dust fraction the model links to wildfires (sometimes hundreds of km away).',
+                isUk ? 'Дим пожеж часто небезпечніший за звичайний міський пил.' : 'Wildfire smoke is often worse than ordinary urban dust.',
+                isUk ? 'Вікна, FFP2, очищувач; без інтенсивних тренувань надворі.' : 'Windows, FFP2, purifier; no hard outdoor workouts.'
             );
-            add(tEc,
-                isUk ? 'Сажа (black carbon)' : 'Black carbon',
-                isUk ? 'Дрібна сажа від дизеля, опалення, пожеж — навантаження на легені й судини.' : 'Fine soot from diesel, heating, fires — stress on lungs and vessels.',
-                isUk ? 'Обійти жваві дороги в годину пік; вдома — менше спалювання.' : 'Avoid busy roads at peak; less burning at home.'
+            addF(tEc, isUk ? 'Сажа (black carbon)' : 'Black carbon', `${fmt(ecTotal, 2)} µg/m³`,
+                isUk ? 'орієнтир: до ~1.5 спокійно, >3 — завищено' : 'guide: up to ~1.5 calm, >3 elevated',
+                isUk ? '«Чорна» сажа: дизель, пічки, пожежі — дуже дрібні частинки вуглецю.' : 'Black soot: diesel, stoves, fires — very fine carbon particles.',
+                isUk ? 'Додаткове навантаження на легені й судини.' : 'Extra stress on lungs and blood vessels.',
+                isUk ? 'Обійти жваві дороги в годину пік; вдома менше спалювати.' : 'Avoid busy roads at peak; burn less at home.'
             );
-            add(tEcR,
-                isUk ? 'Сажа опалення' : 'Heating soot',
-                isUk ? 'Маркер житлового опалення (дрова, вугілля, пічки).' : 'Marker of residential heating (wood, coal, stoves).',
-                isUk ? 'Увечері в сезон опалення — коротше провітрювання з вулиці.' : 'In heating season, shorter outdoor ventilation in the evening.'
+            addF(tEcR, isUk ? 'Сажа опалення' : 'Heating soot', `${fmt(ecRes, 2)} µg/m³`,
+                isUk ? 'орієнтир: до ~0.8 спокійно, >1.5 — завищено' : 'guide: up to ~0.8 calm, >1.5 elevated',
+                isUk ? 'Сажа переважно від житлового опалення (дрова, вугілля, пічки), не від заводу «взагалі».' : 'Soot mainly from home heating (wood, coal, stoves), not “industry in general”.',
+                isUk ? 'У сезон опалення ввечері повітря біля приватного сектору може бути гіршим.' : 'In heating season evenings, air near private houses can be worse.',
+                isUk ? 'Коротше провітрювання з вулиці ввечері; FFP2 при довгій прогулянці.' : 'Shorter evening ventilation from street; FFP2 on long walks.'
             );
-            add(tNh3,
-                'NH₃',
-                isUk ? 'Аміак (агро, ферми); подразник слизових.' : 'Ammonia (farms); mucosal irritant.',
+            addF(tNh3, 'NH₃', `${fmt(nh3)} µg/m³`,
+                isUk ? 'орієнтир: до ~10 спокійно, >20 — завищено' : 'guide: up to ~10 calm, >20 elevated',
+                isUk ? 'Аміак — здебільшого сільське господарство (ферми, добрива), у моделі переважно Європа.' : 'Ammonia — mostly farming (livestock, fertilizer); model mainly Europe.',
+                isUk ? 'Подразнює очі й дихальні шляхи при високих рівнях / різкому запаху.' : 'Irritates eyes and airways at high levels or strong smell.',
                 isUk ? 'Зачиніть вікна при різкому запаху; алергікам — обережніше.' : 'Close windows if strong smell; allergy-prone be cautious.'
             );
-            add(tAod,
-                'AOD',
-                isUk ? 'Каламутність атмосфери (імла, дим, пил) — не газ, а «непрозорість».' : 'Atmospheric haze (smoke/dust) — opacity, not a gas.',
-                isUk ? 'При високому AOD очікуйте гіршу видимість і можливий дискомфорт дихання.' : 'High AOD → poorer visibility and possible breathing discomfort.'
+            addF(tAod, 'AOD', fmt(aod, 3),
+                isUk ? 'орієнтир: до ~0.25 чисте небо, >0.5 — помітна імла' : 'guide: up to ~0.25 clear, >0.5 noticeable haze',
+                isUk ? 'Оптична товщина аерозолів — наскільки повітря «мутне» через пил, дим, смог (не окремий газ).' : 'Aerosol optical depth — how hazy the air is from dust/smoke/smog (not a single gas).',
+                isUk ? 'Гірша видимість і часто той самий дискомфорт, що й від пилу/диму.' : 'Poorer visibility and often the same discomfort as dust/smoke.',
+                isUk ? 'Орієнтуйтесь також на PM і «пил пожеж»; при високому AOD менше навантаження надворі.' : 'Also check PM and wildfire dust; high AOD → less outdoor exertion.'
             );
-            add(tUv,
-                'UV',
-                isUk ? 'Ультрафіолет — опіки шкіри, навантаження на очі; для рослин — ризик опіку листа.' : 'UV — skin burns, eye strain; plants risk leaf scorch.',
+            addF(tUv, 'UV', fmt(uv, 1),
+                isUk ? '0–2 низький, 3–5 помірний, 6–7 високий, 8+ дуже високий' : '0–2 low, 3–5 moderate, 6–7 high, 8+ very high',
+                isUk ? 'Ультрафіолет з урахуванням хмар (CAMS), не «радіація» в сенсі аварії.' : 'Ultraviolet with clouds (CAMS) — not nuclear radiation.',
+                isUk ? 'Опіки шкіри, навантаження на очі; для рослин — ризик опіку листа.' : 'Skin burns, eye strain; plants risk leaf scorch.',
                 isUk ? 'SPF, капелюх, тінь 11:00–16:00.' : 'SPF, hat, shade 11:00–16:00.'
+            );
+            // CO2/CH4 — рідко «забруднення для здоровʼя» на рівні AQI; лише якщо сильно
+            addF(tCo2 >= 2 ? tCo2 : 0, 'CO₂', `${fmt(co2, 0)} ppm`,
+                isUk ? 'глобальний фон ~420 ppm; місто часто 430–460 — це не «газ у кімнаті»' : 'global background ~420 ppm; cities often 430–460 — not indoor room CO₂',
+                isUk ? 'Вуглекислий газ у відкритому повітрі — кліматичний/фоновий показник, не класичний AQI-забрудник.' : 'Outdoor CO₂ is a climate/background indicator, not a classic AQI pollutant.',
+                isUk ? 'На вулиці майже не впливає на самопочуття так, як PM чи озон.' : 'Outdoors it rarely affects how you feel like PM or ozone do.',
+                isUk ? 'Не плутайте з CO₂ у погано провітреній кімнаті — тут модель зовнішнього повітря.' : 'Do not confuse with CO₂ in a stuffy room — this is outdoor model air.'
+            );
+            addF(tCh4 >= 2 ? tCh4 : 0, 'CH₄', `${fmt(ch4, 0)} µg/m³`,
+                isUk ? 'типовий фон сотні–тисячі µg/m³; різкий стрибок — локальне джерело' : 'typical background hundreds–thousands µg/m³; sharp jump — local source',
+                isUk ? 'Метан біля поверхні — звалища, газ, агро; слабко повʼязаний із «чим дихати зараз».' : 'Surface methane — landfills, gas, farming; weakly tied to “what to breathe now”.',
+                isUk ? 'Для прогулянки менш релевантний, ніж PM, озон чи пилок.' : 'Less relevant for a walk than PM, ozone or pollen.',
+                isUk ? 'Дивіться на PM/AQI; метан — радше довідково.' : 'Rely on PM/AQI; methane is mostly informational.'
             );
             for (const pa of pollenActive) {
                 if (pa.tier <= 0) continue;
-                add(pa.tier,
+                addF(pa.tier,
                     isUk ? `Пилок: ${pa.name}` : `Pollen: ${pa.name}`,
-                    isUk
-                        ? `Алергени пилку (${pa.name}). Нежить, свербіж очей, гірше при астмі.`
-                        : `Pollen allergens (${pa.name}). Runny nose, itchy eyes, worse with asthma.`,
-                    isUk
-                        ? 'Антигістамін за потреби, вікна вранці зачинені, після вулиці — зміна одягу/душ.'
-                        : 'Antihistamine if needed, morning windows closed, change clothes/shower after outdoors.'
+                    `${fmt(pa.v, 0)} ${isUk ? 'зерн/м³' : 'grains/m³'}`,
+                    isUk ? 'залежить від виду; умовно «увага» від ~половини сезонного порогу' : 'species-dependent; “watch” from ~half the seasonal threshold',
+                    isUk ? `Алергенний пилок (${pa.name}) у повітрі за моделлю CAMS.` : `Allergenic pollen (${pa.name}) in air per CAMS model.`,
+                    isUk ? 'Нежить, свербіж очей, гірше при астмі / сінній лихоманці.' : 'Runny nose, itchy eyes; worse with asthma / hay fever.',
+                    isUk ? 'Антигістамін за потреби, вікна вранці, після вулиці — зміна одягу/душ.' : 'Antihistamine if needed, morning windows closed, change clothes/shower after outdoors.'
                 );
             }
 
@@ -3207,45 +3230,45 @@ bot.on("callback_query:data", async (ctx) => {
             const mainRows = [
                 { name: 'US AQI', val: fmt(usAqi, 0), unit: '', badge: lvUs?.badge || '⚪', status: statusIndex(lvUs, 'us'),
                   meaning: isUk
-                    ? 'Американський індекс 0–500. 0–50 добре, 51–100 помірно, 101–150 шкідливо для чутливих, 151+ для всіх.'
-                    : 'US index 0–500. 0–50 good, 51–100 moderate, 101–150 unhealthy for sensitive, 151+ everyone.' },
+                    ? 'Зведений індекс якості повітря (США): враховує кілька забрудників і показує найгірший. 0–50 добре, 51–100 помірно (чутливим обережніше), 101–150 шкідливо для чутливих, 151+ — для всіх.'
+                    : 'Combined US air index: several pollutants, reports the worst. 0–50 good, 51–100 moderate, 101–150 unhealthy for sensitive, 151+ everyone.' },
                 { name: 'EAQI', val: fmt(eaqi, 0), unit: '', badge: lvEa?.badge || '⚪', status: statusIndex(lvEa, 'ea'),
                   meaning: isUk
-                    ? 'Європейський індекс: 0–20 добре, 20–40 задовільно, 40–60 помірно, 60–80 погано, 80+ дуже погано.'
-                    : 'European index: 0–20 good, 20–40 fair, 40–60 moderate, 60–80 poor, 80+ very poor.' },
+                    ? 'Європейський індекс: максимум серед підіндексів (пил, озон, NO₂…). 0–20 добре, 20–40 задовільно, 40–60 помірно, 60–80 погано, 80+ дуже погано.'
+                    : 'European index: max of sub-indices (dust, ozone, NO₂…). 0–20 good, 20–40 fair, 40–60 moderate, 60–80 poor, 80+ very poor.' },
                 { name: 'PM2.5', val: fmt(pm25), unit: 'µg/m³', badge: badgeTier(tPm25), status: statusPoll(tPm25),
-                  meaning: isUk ? 'Дрібний пил. Увага з ~12, завищено >25 µg/m³.' : 'Fine particles. Watch ~12, elevated >25 µg/m³.' },
+                  meaning: isUk ? 'Найшкідливіший «звичайний» пил: смог, дим, вихлоп. Увага з ~12, завищено >25 µg/m³.' : 'Most harmful common dust: smog, smoke, exhaust. Watch ~12, elevated >25 µg/m³.' },
                 { name: 'PM10', val: fmt(pm10), unit: 'µg/m³', badge: badgeTier(tPm10), status: statusPoll(tPm10),
-                  meaning: isUk ? 'Грубий пил. Увага з ~30, завищено >50.' : 'Coarse dust. Watch ~30, elevated >50.' }
+                  meaning: isUk ? 'Більші частинки: дорога, ґрунт, будівництво. Увага з ~30, завищено >50 µg/m³.' : 'Larger particles: roads, soil, construction. Watch ~30, elevated >50 µg/m³.' }
             ];
 
             const extRows = [
                 { name: 'NO₂', val: fmt(no2), unit: 'µg/m³', badge: badgeTier(tNo2), status: statusPoll(tNo2),
-                  meaning: isUk ? 'Трафік/опалення. Увага >25, завищено >40.' : 'Traffic/heating. Watch >25, elevated >40.' },
+                  meaning: isUk ? 'Газ від машин і котлів; подразнює бронхи. Увага >25, завищено >40 µg/m³.' : 'Gas from cars and boilers; irritates bronchi. Watch >25, elevated >40 µg/m³.' },
                 { name: 'O₃', val: fmt(o3), unit: 'µg/m³', badge: badgeTier(tO3), status: statusPoll(tO3),
-                  meaning: isUk ? 'Приземний озон. Увага >80, завищено >100.' : 'Ground ozone. Watch >80, elevated >100.' },
+                  meaning: isUk ? '«Літній смог» з вихлопу під сонцем (не озоновий шар). Увага >80, завищено >100 µg/m³.' : 'Summer smog from traffic + sun (not the ozone layer). Watch >80, elevated >100 µg/m³.' },
                 { name: 'SO₂', val: fmt(so2), unit: 'µg/m³', badge: badgeTier(tSo2), status: statusPoll(tSo2),
-                  meaning: isUk ? 'Промисловість. Увага >10, завищено >20.' : 'Industry. Watch >10, elevated >20.' },
+                  meaning: isUk ? 'Газ від промисловості й вугілля; різко дратує дихання. Увага >10, завищено >20 µg/m³.' : 'Industry/coal gas; sharp airway irritation. Watch >10, elevated >20 µg/m³.' },
                 { name: 'CO', val: fmt(co, 0), unit: 'µg/m³', badge: badgeTier(tCo), status: statusPoll(tCo),
-                  meaning: isUk ? 'Неповне згоряння. Завищено >4000.' : 'Incomplete combustion. Elevated >4000.' },
+                  meaning: isUk ? 'Від неповного згоряння (вихлоп, пічки); у закритому просторі небезпечний. Завищено >4000 µg/m³.' : 'Incomplete combustion (exhaust, stoves); dangerous indoors. Elevated >4000 µg/m³.' },
                 { name: isUk ? 'Пил (dust)' : 'Dust', val: fmt(dust), unit: 'µg/m³', badge: badgeTier(tDust), status: statusPoll(tDust),
-                  meaning: isUk ? 'Мінеральний пил CAMS.' : 'Mineral dust CAMS.' },
+                  meaning: isUk ? 'Пісок/ґрунт, піднятий вітром (іноді з далеких пустель), не міський смог.' : 'Sand/soil lofted by wind (sometimes from distant deserts), not urban smog.' },
                 { name: 'NH₃', val: fmt(nh3), unit: 'µg/m³', badge: badgeTier(tNh3), status: statusPoll(tNh3),
-                  meaning: isUk ? 'Аміак (агро, Європа).' : 'Ammonia (agriculture, Europe).' },
+                  meaning: isUk ? 'З ферм і добрив; при високому рівні подразнює очі й дихання (модель — переважно Європа).' : 'From farms and fertilizer; at high levels irritates eyes/airways (model mainly Europe).' },
                 { name: 'AOD', val: fmt(aod, 3), unit: '', badge: badgeTier(tAod), status: statusPoll(tAod),
-                  meaning: isUk ? 'Каламутність (імла/дим).' : 'Haze opacity (smoke/dust).' },
+                  meaning: isUk ? 'Наскільки повітря «мутне» через аерозолі (пил, дим, смог). Не газ, а показник імли.' : 'How hazy the air is from aerosols (dust, smoke, smog). Not a gas — a haze measure.' },
                 { name: 'CO₂', val: fmt(co2, 0), unit: 'ppm', badge: badgeTier(tCo2), status: statusPoll(tCo2),
-                  meaning: isUk ? 'Фоновий CO₂ (не AQI-забрудник у класичному сенсі).' : 'Background CO₂ (not a classic AQI pollutant).' },
+                  meaning: isUk ? 'Вуглекислий газ надворі (клімат/фон). Не плутати з CO₂ у задушливій кімнаті; на прогулянку майже не впливає.' : 'Outdoor CO₂ (climate/background). Not room CO₂; rarely matters for a walk.' },
                 { name: 'CH₄', val: fmt(ch4, 0), unit: 'µg/m³', badge: badgeTier(tCh4), status: statusPoll(tCh4),
-                  meaning: isUk ? 'Метан біля поверхні.' : 'Methane near surface.' },
+                  meaning: isUk ? 'Метан (звалища, газ, агро). Довідково; для «чим дихати зараз» важливіші PM і озон.' : 'Methane (landfills, gas, farming). Informational; PM and ozone matter more for breathing now.' },
                 { name: 'UV', val: fmt(uv, 1), unit: '', badge: badgeTier(tUv), status: statusPoll(tUv),
-                  meaning: isUk ? 'UV CAMS (з хмарами).' : 'UV CAMS (with clouds).' },
+                  meaning: isUk ? 'Ультрафіолет з урахуванням хмар. Ризик опіків шкіри; не «радіація» від аварії.' : 'Ultraviolet with clouds. Skin-burn risk; not nuclear radiation.' },
                 { name: isUk ? 'Пил пожеж' : 'Wildfire PM', val: fmt(wildfire, 1), unit: 'µg/m³', badge: badgeTier(tFire), status: statusPoll(tFire),
-                  meaning: isUk ? 'PM10 від диму пожеж.' : 'PM10 from wildfire smoke.' },
+                  meaning: isUk ? 'Оцінка пилу саме від лісових/степових пожеж (дим може йти здалеку).' : 'Dust estimate from wildfires (smoke can travel far).' },
                 { name: isUk ? 'Сажа (EC)' : 'Black carbon', val: fmt(ecTotal, 2), unit: 'µg/m³', badge: badgeTier(tEc), status: statusPoll(tEc),
-                  meaning: isUk ? 'Елементарний вуглець — сажа.' : 'Elemental carbon — soot.' },
+                  meaning: isUk ? 'Чорна сажа (дизель, пічки, пожежі) — дрібні частинки, погані для легень і судин.' : 'Black soot (diesel, stoves, fires) — fine particles, hard on lungs and vessels.' },
                 { name: isUk ? 'Сажа опалення' : 'BC heating', val: fmt(ecRes, 2), unit: 'µg/m³', badge: badgeTier(tEcR), status: statusPoll(tEcR),
-                  meaning: isUk ? 'Сажа від житлового опалення.' : 'Soot from residential heating.' }
+                  meaning: isUk ? 'Сажа саме від домівок (дрова, вугілля, пічки), часто сильніша ввечері в сезон опалення.' : 'Soot from homes (wood, coal, stoves), often stronger on heating-season evenings.' }
             ];
             for (const pa of pollenActive) {
                 extRows.push({
@@ -3254,7 +3277,7 @@ bot.on("callback_query:data", async (ctx) => {
                     unit: isUk ? 'зерн/м³' : 'grains/m³',
                     badge: badgeTier(pa.tier),
                     status: statusPoll(pa.tier),
-                    meaning: isUk ? 'CAMS, Європа, лише в сезон.' : 'CAMS, Europe, in season only.'
+                    meaning: isUk ? 'Алергенний пилок цього виду (модель CAMS, Європа, у сезон). Може давати нежить і свербіж очей.' : 'Allergenic pollen of this type (CAMS, Europe, in season). May cause runny nose and itchy eyes.'
                 });
             }
 
@@ -3273,15 +3296,19 @@ bot.on("callback_query:data", async (ctx) => {
 
             let analysisHtml = '';
             if (findings.length) {
-                analysisHtml += `<h3>${isUk ? '🔎 На що звернути увагу' : '🔎 What to watch'}</h3><ul>`;
+                analysisHtml += `<h3>${isUk ? '🔎 На що звернути увагу' : '🔎 What to watch'}</h3>`;
                 for (const f of findings.slice(0, 8)) {
-                    analysisHtml += `<li><b>${f.title}</b> — ${f.impact} <i>${isUk ? 'Що робити:' : 'What to do:'} ${f.tip}</i></li>`;
+                    const lvl = f.severity >= 3
+                        ? (isUk ? 'високо' : 'high')
+                        : f.severity >= 2
+                            ? (isUk ? 'завищено' : 'elevated')
+                            : (isUk ? 'увага' : 'watch');
+                    analysisHtml += `<p><b>${f.title}</b> — ${f.valueStr} <i>(${lvl})</i><br>`;
+                    analysisHtml += `${isUk ? 'Норма / орієнтир' : 'Normal / guide'}: ${f.norm}<br>`;
+                    analysisHtml += `${isUk ? 'Що це' : 'What it is'}: ${f.meaning}<br>`;
+                    analysisHtml += `${isUk ? 'Вплив' : 'Impact'}: ${f.impact}<br>`;
+                    analysisHtml += `<i>${isUk ? 'Що робити' : 'What to do'}: ${f.tip}</i></p>`;
                 }
-                analysisHtml += `</ul>`;
-            } else {
-                analysisHtml += `<p>${isUk
-                    ? 'Окремих перевищень по газах, пилку, диму чи сажі зараз не видно — орієнтуйтесь на індекси вище.'
-                    : 'No notable spikes in gases, pollen, smoke or soot right now — use the indices above.'}</p>`;
             }
 
             let meanings = `<details><summary>${isUk ? 'ℹ️ Довідка по метриках' : 'ℹ️ Metric reference'}</summary><ul>`;
@@ -3333,7 +3360,9 @@ bot.on("callback_query:data", async (ctx) => {
             body += `</blockquote>`;
             body += analysisHtml;
             body += renderTable(isUk ? '🍃 Основні' : '🍃 Main', mainRows);
-            body += renderTable(isUk ? '🔬 Розширені' : '🔬 Extended', extRows);
+            body += `<details><summary>🔬 ${isUk ? 'Розширені метрики' : 'Extended metrics'}</summary>`;
+            body += renderTable('', extRows);
+            body += `</details>`;
             body += meanings;
             body += `<footer>${sourceLine}</footer>`;
 
