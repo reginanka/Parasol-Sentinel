@@ -919,7 +919,7 @@ module.exports = async (req, res) => {
         if (groupAq.length) {
             // Зібрати типи проблем з далеких днів для точнішого формулювання
             const farAqKinds = new Set();
-            far.forEach((ev) => {
+            farEvents.forEach((ev) => {
                 for (const s of (ev.aqIssues || [])) {
                     const x = String(s).toLowerCase();
                     if (x.includes('pm2.5') || x.includes('смог') || x.includes('smog')) farAqKinds.add('PM2.5');
