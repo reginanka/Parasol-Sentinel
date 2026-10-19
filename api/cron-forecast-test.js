@@ -1172,85 +1172,100 @@ module.exports = async (req, res) => {
             rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн.<br>бурі' : 'Geomag'}</b></td>${cells}</tr>`);
         }
 
-        // --- Open-Meteo Air Quality rows (за опціями aqi_main / aqi_ext) ---
-        // Пороги орієнтовні (WHO/EEA daily): 🟢 добре → 🟡 помірно → 🟠 погано → 🔴 небезпечно
-        if (hasAqiMain || hasAqiExt) {
-        const aqBadgeFor = (key, v) => {
-            if (v == null || Number.isNaN(Number(v))) return '';
-            const n = Number(v);
-            const bands = {
-                eaqiMax:  [20, 40, 60, 80],   // European AQI
-                usAqiMax: [50, 100, 150, 200], // US AQI
-                pm25Max:  [12, 25, 50, 75],
-                pm10Max:  [30, 50, 90, 150],
-                no2Max:   [40, 70, 120, 200],
-                o3Max:    [80, 120, 160, 200],
-                so2Max:   [20, 40, 100, 200],
-                coMax:    [2000, 4000, 10000, 20000],
-                dustMax:  [15, 40, 80, 150],
-                nh3Max:   [10, 20, 50, 100],
-                aodMax:   [0.2, 0.5, 1.0, 2.0],
-                ch4Max:   [1200, 2000, 3000, 5000],
-                grassMax:   [30, 50, 100, 200],
-                birchMax:   [30, 50, 100, 200],
-                alderMax:   [30, 50, 100, 200],
-                mugwortMax: [20, 40, 80, 150],
-                oliveMax:   [30, 50, 100, 200],
-                ragweedMax: [20, 40, 80, 150],
-                wildfireMax: [15, 40, 80, 150],
-                ecTotalMax:  [1, 3, 6, 10],
+        // --- Open-Meteo Air Quality: окремий згортальний блок (не в головній таблиці погоди) ---
+        let aqDetailsHtml = '';
+        {
+            const aqBadgeFor = (key, v) => {
+                if (v == null || Number.isNaN(Number(v))) return '';
+                const n = Number(v);
+                const bands = {
+                    eaqiMax:  [20, 40, 60, 80],
+                    usAqiMax: [50, 100, 150, 200],
+                    pm25Max:  [12, 25, 50, 75],
+                    pm10Max:  [30, 50, 90, 150],
+                    no2Max:   [40, 70, 120, 200],
+                    o3Max:    [80, 120, 160, 200],
+                    so2Max:   [20, 40, 100, 200],
+                    coMax:    [2000, 4000, 10000, 20000],
+                    dustMax:  [15, 40, 80, 150],
+                    nh3Max:   [10, 20, 50, 100],
+                    aodMax:   [0.2, 0.5, 1.0, 2.0],
+                    ch4Max:   [1200, 2000, 3000, 5000],
+                    grassMax:   [30, 50, 100, 200],
+                    birchMax:   [30, 50, 100, 200],
+                    alderMax:   [30, 50, 100, 200],
+                    mugwortMax: [20, 40, 80, 150],
+                    oliveMax:   [30, 50, 100, 200],
+                    ragweedMax: [20, 40, 80, 150],
+                    wildfireMax: [15, 40, 80, 150],
+                    ecTotalMax:  [1, 3, 6, 10]
+                };
+                const b = bands[key] || [25, 50, 100, 200];
+                if (n <= b[0]) return '🟢';
+                if (n <= b[1]) return '🟡';
+                if (n <= b[2]) return '🟠';
+                if (n <= b[3]) return '🔴';
+                return '🟣';
             };
-            const b = bands[key] || [25, 50, 100, 200];
-            if (n <= b[0]) return '🟢';
-            if (n <= b[1]) return '🟡';
-            if (n <= b[2]) return '🟠';
-            if (n <= b[3]) return '🔴';
-            return '🟣';
-        };
-        const aqCell = (day, key, decimals = 0) => {
-            const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
-            const v = omAqByDate[dStr]?.[key];
-            if (v == null) return `<td align="center" valign="middle">—</td>`;
-            const n = decimals > 0 ? Number(v).toFixed(decimals) : String(Math.round(Number(v)));
-            const badge = aqBadgeFor(key, v);
-            return `<td align="center" valign="middle">${badge}<br>${n}</td>`;
-        };
+            const aqCell = (day, key, decimals = 0) => {
+                const dStr = String(day.valid_date || day.datetime || '').slice(0, 10);
+                const v = omAqByDate[dStr]?.[key];
+                if (v == null) return `<td align="center" valign="middle">—</td>`;
+                const n = decimals > 0 ? Number(v).toFixed(decimals) : String(Math.round(Number(v)));
+                const badge = aqBadgeFor(key, v);
+                return `<td align="center" valign="middle">${badge}<br>${n}</td>`;
+            };
 
-        // Основне: індекси + PM
-        const aqRowsMain = [
-            ['eaqiMax', isUk ? 'EAQI<br><small>OM max</small>' : 'EAQI<br><small>OM max</small>', 0],
-            ['usAqiMax', isUk ? 'US AQI<br><small>OM max</small>' : 'US AQI<br><small>OM max</small>', 0],
-            ['pm25Max', 'PM2.5<br><small>µg/m³</small>', 1],
-            ['pm10Max', 'PM10<br><small>µg/m³</small>', 1]
-        ];
-        // Розширене: гази, аерозолі, пилок (Європа), UV CAMS
-        const aqRowsExt = [
-            ['no2Max', 'NO₂<br><small>µg/m³</small>', 1],
-            ['o3Max', 'O₃<br><small>µg/m³</small>', 1],
-            ['so2Max', 'SO₂<br><small>µg/m³</small>', 1],
-            ['coMax', 'CO<br><small>µg/m³</small>', 0],
-            ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1],
-            ['nh3Max', 'NH₃<br><small>µg/m³</small>', 1],
-            ['aodMax', 'AOD<br><small>550 nm</small>', 3],
-            ['ch4Max', isUk ? 'CH₄<br><small>метан</small>' : 'CH₄<br><small>methane</small>', 0],
-            ['grassMax', isUk ? 'Пилок<br><small>трави</small>' : 'Pollen<br><small>grass</small>', 0],
-            ['birchMax', isUk ? 'Пилок<br><small>береза</small>' : 'Pollen<br><small>birch</small>', 0],
-            ['alderMax', isUk ? 'Пилок<br><small>вільха</small>' : 'Pollen<br><small>alder</small>', 0],
-            ['mugwortMax', isUk ? 'Пилок<br><small>полин</small>' : 'Pollen<br><small>mugwort</small>', 0],
-            ['oliveMax', isUk ? 'Пилок<br><small>оливка</small>' : 'Pollen<br><small>olive</small>', 0],
-            ['ragweedMax', isUk ? 'Пилок<br><small>амброзія</small>' : 'Pollen<br><small>ragweed</small>', 0],
-            ['wildfireMax', isUk ? 'Пил пожеж<br><small>PM10</small>' : 'Wildfire<br><small>PM10</small>', 1],
-            ['ecTotalMax', isUk ? 'Сажа<br><small>EC total</small>' : 'Black carbon<br><small>EC total</small>', 2],
-        ];
-        const aqRows = [
-            ...(hasAqiMain ? aqRowsMain : []),
-            ...(hasAqiExt ? aqRowsExt : [])
-        ];
-        for (const [key, label, dec] of aqRows) {
-            const cells = userForecast.map((day) => aqCell(day, key, dec)).join('');
-            rows.push(`<tr><td align="left" valign="middle"><b>🍃 ${label}</b></td>${cells}</tr>`);
+            // Усі метрики повітря в одному блоці (тестовий прогноз)
+            const aqRowsAll = [
+                ['eaqiMax', isUk ? 'EAQI<br><small>OM max</small>' : 'EAQI<br><small>OM max</small>', 0],
+                ['usAqiMax', isUk ? 'US AQI<br><small>OM max</small>' : 'US AQI<br><small>OM max</small>', 0],
+                ['pm25Max', 'PM2.5<br><small>µg/m³</small>', 1],
+                ['pm10Max', 'PM10<br><small>µg/m³</small>', 1],
+                ['no2Max', 'NO₂<br><small>µg/m³</small>', 1],
+                ['o3Max', 'O₃<br><small>µg/m³</small>', 1],
+                ['so2Max', 'SO₂<br><small>µg/m³</small>', 1],
+                ['coMax', 'CO<br><small>µg/m³</small>', 0],
+                ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1],
+                ['nh3Max', 'NH₃<br><small>µg/m³</small>', 1],
+                ['aodMax', 'AOD<br><small>550 nm</small>', 3],
+                ['ch4Max', isUk ? 'CH₄<br><small>метан</small>' : 'CH₄<br><small>methane</small>', 0],
+                ['wildfireMax', isUk ? 'Пил пожеж<br><small>PM10</small>' : 'Wildfire<br><small>PM10</small>', 1],
+                ['ecTotalMax', isUk ? 'Сажа<br><small>black carbon</small>' : 'Black carbon<br><small>EC</small>', 2],
+                ['grassMax', isUk ? 'Пилок<br><small>трави</small>' : 'Pollen<br><small>grass</small>', 0],
+                ['birchMax', isUk ? 'Пилок<br><small>береза</small>' : 'Pollen<br><small>birch</small>', 0],
+                ['alderMax', isUk ? 'Пилок<br><small>вільха</small>' : 'Pollen<br><small>alder</small>', 0],
+                ['mugwortMax', isUk ? 'Пилок<br><small>полин</small>' : 'Pollen<br><small>mugwort</small>', 0],
+                ['oliveMax', isUk ? 'Пилок<br><small>оливка</small>' : 'Pollen<br><small>olive</small>', 0],
+                ['ragweedMax', isUk ? 'Пилок<br><small>амброзія</small>' : 'Pollen<br><small>ragweed</small>', 0]
+            ];
+
+            const aqBodyRows = aqRowsAll.map(([key, label, dec]) => {
+                const cells = userForecast.map((day) => aqCell(day, key, dec)).join('');
+                return `<tr><td align="left" valign="middle"><b>${label}</b></td>${cells}</tr>`;
+            }).join('\n');
+
+            const aqTitle = isUk ? '🍃 Якість повітря' : '🍃 Air quality';
+            const aqHint = isUk
+                ? 'макс. за добу · Open-Meteo CAMS · натисни, щоб розгорнути'
+                : 'daily max · Open-Meteo CAMS · tap to expand';
+
+            aqDetailsHtml = `
+<details>
+<summary><b>${aqTitle}</b> <small>${aqHint}</small></summary>
+<table bordered striped>
+  <thead>
+    <tr>
+      <th width="80" align="left" valign="middle">${isUk ? 'Метрика' : 'Metric'}</th>
+      ${dayHeaders}
+    </tr>
+  </thead>
+  <tbody>
+    ${aqBodyRows}
+  </tbody>
+</table>
+</details>`.trim();
         }
-        } // end hasAqiMain || hasAqiExt
 
         const tableHtml = `
 <table bordered striped>
@@ -1300,6 +1315,10 @@ module.exports = async (req, res) => {
         }
 
         fullHtml += tableHtml;
+
+        if (aqDetailsHtml) {
+            fullHtml += '\n\n' + aqDetailsHtml;
+        }
 
         // ========== 6. Відправка Rich Message ==========
         try {
