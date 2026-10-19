@@ -1245,14 +1245,13 @@ module.exports = async (req, res) => {
                 return `<tr><td align="left" valign="middle"><b>${label}</b></td>${cells}</tr>`;
             }).join('\n');
 
-            const aqTitle = isUk ? '🍃 Якість повітря' : '🍃 Air quality';
-            const aqHint = isUk
-                ? 'макс. за добу · Open-Meteo CAMS · натисни, щоб розгорнути'
-                : 'daily max · Open-Meteo CAMS · tap to expand';
+            const aqSummary = isUk
+                ? '🍃 Якість повітря ‖ натисни, щоб розгорнути'
+                : '🍃 Air quality ‖ tap to expand';
 
             aqDetailsHtml = `
 <details>
-<summary><b>${aqTitle}</b> <small>${aqHint}</small></summary>
+<summary><b>${aqSummary}</b></summary>
 <table bordered striped>
   <thead>
     <tr>
