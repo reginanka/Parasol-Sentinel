@@ -1207,7 +1207,7 @@ module.exports = async (req, res) => {
                                     aqiVal: displayAqi != null ? displayAqi : aqiVal,
                                     badge, pm25, pm10, advice, station: stationInfo, aqiLabel
                                 });
-                                alerts.push({ userId: user.telegramId, html, lang });
+                                alerts.push({ userId: user.telegramId, html, lang, type: 'air' });
                             }
                             alertTriggered = true;
                         } else if (currentTier === 0 && lastAqiTier > 0) {
@@ -1222,7 +1222,7 @@ module.exports = async (req, res) => {
                                     aqiVal: displayAqi != null ? displayAqi : aqiVal,
                                     station: stationInfo, aqiLabel
                                 });
-                                alerts.push({ userId: user.telegramId, html, lang });
+                                alerts.push({ userId: user.telegramId, html, lang, type: 'air' });
                             }
                             alertTriggered = true;
                         }
@@ -1235,10 +1235,11 @@ module.exports = async (req, res) => {
 // --- SENDING ALERTS (Rich Messages) ---
                 const uniqueAlerts = {}; // prevent duplicate messages to same user
                 for (const a of alerts) {
-                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false, hasWeather: false };
+                    if (!uniqueAlerts[a.userId]) uniqueAlerts[a.userId] = { parts: [], lang: a.lang || 'uk', hasGeomag: false, hasWeather: false, hasAir: false };
                     if (a.html) uniqueAlerts[a.userId].parts.push(a.html);
                     if (a.type === 'geomag') uniqueAlerts[a.userId].hasGeomag = true;
                     if (a.type === 'weather') uniqueAlerts[a.userId].hasWeather = true;
+                    if (a.type === 'air') uniqueAlerts[a.userId].hasAir = true;
                 }
 
                 for (const userId of Object.keys(uniqueAlerts)) {
@@ -1263,6 +1264,10 @@ module.exports = async (req, res) => {
                     }
                     if (uniqueAlerts[userId].hasGeomag) {
                         rows.push([{ text: geomagBtnText, callback_data: 'geomag_fc' }]);
+                    }
+                    if (uniqueAlerts[userId].hasAir) {
+                        const airBtnText = userLang === 'uk' ? '🍃 Якість повітря' : '🍃 Air quality';
+                        rows.push([{ text: airBtnText, callback_data: 'air_fc' }]);
                     }
                     rows.push([{ text: btnText, callback_data: 'alert_settings|new' }]);
                     try {
