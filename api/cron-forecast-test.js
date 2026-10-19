@@ -792,9 +792,10 @@ module.exports = async (req, res) => {
             const c = Number(code);
             return c === 800 || c === 801 || c === 802;
         };
+        // AQ окремо під таблицею — не змішуємо з «Парасоль рекомендує»
         const hasHazard = (ev) =>
             ev.precip > 0 || ev.gust >= 7 || ev.highPress || ev.uvLabel || ev.frostLabel ||
-            ev.geomagLabel || ev.eaqi != null || (ev.aqIssues && ev.aqIssues.length);
+            ev.geomagLabel;
 
         // --- Текст «близьких» днів ---
         const fmtShort = (d) => d.toLocaleDateString(isUk ? 'uk-UA' : 'en-GB', {
@@ -839,15 +840,42 @@ module.exports = async (req, res) => {
                 if (ev.uvLabel) bits.push(ev.uvLabel);
                 if (ev.geomagLabel) bits.push(ev.geomagLabel);
                 if (ev.highPress) bits.push(isUk ? 'високий тиск 🔴' : 'high pressure 🔴');
-                if (ev.eaqi != null) {
-                    const detail = ev.aqIssues.length ? `: ${ev.aqIssues.slice(0, 3).join('; ')}` : '';
-                    bits.push(isUk
-                        ? `якість повітря AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
-                        : `air quality AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
-                } else if (ev.aqIssues.length) {
-                    bits.push(ev.aqIssues.slice(0, 3).join('; '));
-                }
+                // AQ аналіз винесено під головну таблицю в окремий <blockquote>
                 nearLines.push(`${labelDay} — ${bits.join(', ')}`);
+            }
+        });
+
+        // --- Короткий аналіз якості повітря (перші 3 дні) — під таблицею ---
+        const aqNearLines = [];
+        nearEvents.forEach((ev, idx) => {
+            if (ev.eaqi == null && !(ev.aqIssues && ev.aqIssues.length)) return;
+            const shortDate = fmtShort(ev.dateObj);
+            let labelDay;
+            if (idx === 0) {
+                labelDay = isUk ? `Завтра (${shortDate})` : `Tomorrow (${shortDate})`;
+            } else if (idx === 1) {
+                labelDay = isUk ? `Післязавтра (${shortDate})` : `Day after tomorrow (${shortDate})`;
+            } else {
+                labelDay = isUk
+                    ? `${ev.dayName.charAt(0).toUpperCase() + ev.dayName.slice(1)} (${shortDate})`
+                    : `${ev.dayName.charAt(0).toUpperCase() + ev.dayName.slice(1)} (${shortDate})`;
+            }
+            const detail = ev.aqIssues.length
+                ? `: ${ev.aqIssues.slice(0, 5).join(', ')}`
+                : '';
+            if (ev.eaqi != null) {
+                // Перший день — компактніше «AQI N 🟡: ...», решта — з «якість повітря»
+                if (idx === 0) {
+                    aqNearLines.push(isUk
+                        ? `${labelDay} — AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
+                        : `${labelDay} — AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
+                } else {
+                    aqNearLines.push(isUk
+                        ? `${labelDay} — якість повітря AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
+                        : `${labelDay} — air quality AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
+                }
+            } else {
+                aqNearLines.push(`${labelDay} — ${ev.aqIssues.slice(0, 5).join(', ')}`);
             }
         });
 
@@ -855,7 +883,6 @@ module.exports = async (req, res) => {
         const groupPrecip = [];
         const groupWind = [];
         const groupPress = []; // consecutive ranges by dayName
-        const groupAq = [];
         const groupUv = [];
         const groupFrost = [];
         const groupGeomag = [];
@@ -887,13 +914,7 @@ module.exports = async (req, res) => {
             } else {
                 flushPress();
             }
-            if (ev.eaqi != null || ev.aqIssues.length) {
-                if (ev.aqIssues.some(x => x.includes('PM2.5') || x.includes('пил') || x.includes('dust') || x.includes('smog'))) {
-                    groupAq.push(dayLabel);
-                } else {
-                    groupAq.push(dayLabel);
-                }
-            }
+            // AQ не групуємо тут — аналіз під головною таблицею
             if (ev.uvLabel) groupUv.push(`${dayLabel} (${ev.uvLabel})`);
             if (ev.frostLabel) groupFrost.push(dayLabel);
             if (ev.geomagLabel) groupGeomag.push(`${dayLabel}: ${ev.geomagLabel}`);
@@ -916,29 +937,7 @@ module.exports = async (req, res) => {
                 ? `Високий тиск 🔴: ${groupPress.join(', ')}.`
                 : `High pressure 🔴: ${groupPress.join(', ')}.`);
         }
-        if (groupAq.length) {
-            // Зібрати типи проблем з далеких днів для точнішого формулювання
-            const farAqKinds = new Set();
-            farEvents.forEach((ev) => {
-                for (const s of (ev.aqIssues || [])) {
-                    const x = String(s).toLowerCase();
-                    if (x.includes('pm2.5') || x.includes('смог') || x.includes('smog')) farAqKinds.add('PM2.5');
-                    else if (x.includes('pm10') || x.includes('пил') || x.includes('dust')) farAqKinds.add(isUk ? 'пил' : 'dust');
-                    else if (x.includes('o₃') || x.includes('o3') || x.includes('озон') || x.includes('ozone')) farAqKinds.add('O₃');
-                    else if (x.includes('no₂') || x.includes('no2')) farAqKinds.add('NO₂');
-                    else if (x.includes('пожеж') || x.includes('wildfire') || x.includes('дим')) farAqKinds.add(isUk ? 'дим пожеж' : 'wildfire smoke');
-                    else if (x.includes('сажа') || x.includes('black carbon') || x.includes('soot')) farAqKinds.add(isUk ? 'сажа' : 'soot');
-                    else if (x.includes('пилк') || x.includes('pollen')) farAqKinds.add(isUk ? 'пилок' : 'pollen');
-                    else if (x.includes('nh₃') || x.includes('nh3') || x.includes('аміак') || x.includes('ammonia')) farAqKinds.add('NH₃');
-                }
-            });
-            const kindsStr = farAqKinds.size
-                ? [...farAqKinds].join(', ')
-                : (isUk ? 'погіршення якості повітря' : 'air quality decline');
-            farLines.push(isUk
-                ? `Якість повітря (${kindsStr}): ${groupAq.join(', ')}.`
-                : `Air quality (${kindsStr}): ${groupAq.join(', ')}.`);
-        }
+        // AQ аналіз винесено під головну таблицю (blockquote) — не дублюємо в «Парасоль»
         if (groupFrost.length) {
             farLines.push(isUk
                 ? `Заморозки на ґрунті: ${groupFrost.join(', ')}.`
@@ -1314,6 +1313,12 @@ module.exports = async (req, res) => {
         }
 
         fullHtml += tableHtml;
+
+        // Короткий аналіз метрик якості повітря (перші 3 дні) — під головною таблицею, над детальною таблицею AQ
+        if (aqNearLines.length) {
+            const aqBlockHtml = aqNearLines.map(l => escapeHTML(l)).join('<br>');
+            fullHtml += `\n\n<blockquote>${aqBlockHtml}</blockquote>`;
+        }
 
         if (aqDetailsHtml) {
             fullHtml += '\n\n' + aqDetailsHtml;
