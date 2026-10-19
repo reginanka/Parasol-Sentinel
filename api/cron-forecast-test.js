@@ -692,60 +692,82 @@ module.exports = async (req, res) => {
                 else ev.uvLabel = isUk ? `високий УФ (${uvR}) 🟠` : `high UV (${uvR}) 🟠`;
             }
 
-            // AQ tips — ЗАВЖДИ (не залежить від налаштувань таблиці)
+            // AQ tips — ЗАВЖДИ. Пороги = початок 🟡 з таблиці метрик (щоб опис збігався з бейджами)
             const aq = omAqByDate[dStrSoil];
             if (aq) {
-                if (aq.pm25Max != null && aq.pm25Max >= 12) {
+                // PM2.5: 🟡 з 12
+                if (aq.pm25Max != null && aq.pm25Max > 12) {
                     ev.aqIssues.push(isUk
                         ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
                         : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
                 }
+                // PM10: 🟡 з 30 (у таблиці); трохи раніше згадуємо з 25
                 if (aq.pm10Max != null && aq.pm10Max >= 25) {
                     ev.aqIssues.push(isUk
                         ? `великий пил PM10 до ${aq.pm10Max.toFixed(0)} µg/m³`
                         : `coarse dust PM10 up to ${aq.pm10Max.toFixed(0)} µg/m³`);
                 }
+                // Dust: 🟡 з 15
                 if (aq.dustMax != null && aq.dustMax >= 15) {
                     ev.aqIssues.push(isUk
                         ? `пилова хмара (dust) до ${aq.dustMax.toFixed(0)} µg/m³`
                         : `dust plume up to ${aq.dustMax.toFixed(0)} µg/m³`);
                 }
-                if (aq.no2Max != null && aq.no2Max >= 40) {
+                // NO₂: 🟡 з 40
+                if (aq.no2Max != null && aq.no2Max > 40) {
                     ev.aqIssues.push(isUk
                         ? `NO₂ (трафік/опалення) до ${aq.no2Max.toFixed(0)} µg/m³`
                         : `NO₂ (traffic/heating) up to ${aq.no2Max.toFixed(0)} µg/m³`);
                 }
-                if (aq.o3Max != null && aq.o3Max >= 100) {
+                // O₃: 🟡 з 80
+                if (aq.o3Max != null && aq.o3Max > 80) {
                     ev.aqIssues.push(isUk
-                        ? `озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³ — краще без інтенсивних тренувань удень`
-                        : `ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³ — avoid hard midday workouts`);
+                        ? `озон O₃ до ${aq.o3Max.toFixed(0)} µg/m³`
+                        : `ozone O₃ up to ${aq.o3Max.toFixed(0)} µg/m³`);
                 }
-                if (aq.so2Max != null && aq.so2Max >= 30) {
+                // SO₂: 🟡 з 20
+                if (aq.so2Max != null && aq.so2Max > 20) {
                     ev.aqIssues.push(isUk
                         ? `SO₂ до ${aq.so2Max.toFixed(0)} µg/m³`
                         : `SO₂ up to ${aq.so2Max.toFixed(0)} µg/m³`);
                 }
+                // Wildfire PM: 🟡 з 15
                 if (aq.wildfireMax != null && aq.wildfireMax >= 15) {
                     ev.aqIssues.push(isUk
-                        ? `можливий дим пожеж (PM) до ${aq.wildfireMax.toFixed(0)} µg/m³ — вікна, FFP2`
-                        : `possible wildfire smoke (PM) up to ${aq.wildfireMax.toFixed(0)} µg/m³ — windows, FFP2`);
+                        ? `пил пожеж до ${aq.wildfireMax.toFixed(0)} µg/m³`
+                        : `wildfire dust up to ${aq.wildfireMax.toFixed(0)} µg/m³`);
                 }
-                if (aq.ecTotalMax != null && aq.ecTotalMax >= 1.5) {
+                // Сажа (black carbon): 🟡 з 1
+                if (aq.ecTotalMax != null && aq.ecTotalMax > 1) {
                     ev.aqIssues.push(isUk
-                        ? `сажа (black carbon) до ${aq.ecTotalMax.toFixed(1)} µg/m³ — дизель/опалення/пожежі`
-                        : `black carbon up to ${aq.ecTotalMax.toFixed(1)} µg/m³ — diesel/heating/fires`);
+                        ? `сажа (black carbon) до ${aq.ecTotalMax.toFixed(1)} µg/m³`
+                        : `black carbon up to ${aq.ecTotalMax.toFixed(1)} µg/m³`);
                 }
-                if (aq.nh3Max != null && aq.nh3Max >= 10) {
+                // NH₃: 🟡 з 10
+                if (aq.nh3Max != null && aq.nh3Max > 10) {
                     ev.aqIssues.push(isUk
-                        ? `аміак NH₃ до ${aq.nh3Max.toFixed(0)} µg/m³ (агро)`
-                        : `ammonia NH₃ up to ${aq.nh3Max.toFixed(0)} µg/m³ (agriculture)`);
+                        ? `аміак NH₃ до ${aq.nh3Max.toFixed(0)} µg/m³`
+                        : `ammonia NH₃ up to ${aq.nh3Max.toFixed(0)} µg/m³`);
                 }
-                if (aq.aodMax != null && aq.aodMax >= 0.25) {
+                // AOD: 🟡 з 0.2
+                if (aq.aodMax != null && aq.aodMax > 0.2) {
                     ev.aqIssues.push(isUk
-                        ? `каламутність AOD ${aq.aodMax.toFixed(2)} — імла/дим`
-                        : `haze AOD ${aq.aodMax.toFixed(2)} — smoke/dust`);
+                        ? `каламутність AOD ${aq.aodMax.toFixed(2)} (імла/дим)`
+                        : `haze AOD ${aq.aodMax.toFixed(2)}`);
                 }
-                // Пилок по видах (Європа, сезон)
+                // CH₄: 🟡 з 1200
+                if (aq.ch4Max != null && aq.ch4Max > 1200) {
+                    ev.aqIssues.push(isUk
+                        ? `метан CH₄ до ${Math.round(aq.ch4Max)}`
+                        : `methane CH₄ up to ${Math.round(aq.ch4Max)}`);
+                }
+                // CO: 🟡 з 2000
+                if (aq.coMax != null && aq.coMax > 2000) {
+                    ev.aqIssues.push(isUk
+                        ? `CO до ${Math.round(aq.coMax)} µg/m³`
+                        : `CO up to ${Math.round(aq.coMax)} µg/m³`);
+                }
+                // Пилок — пороги = початок 🟡 з таблиці
                 const pollenTips = [
                     ['birchMax', 30, isUk ? 'пилок берези' : 'birch pollen'],
                     ['alderMax', 30, isUk ? 'пилок вільхи' : 'alder pollen'],
@@ -758,11 +780,12 @@ module.exports = async (req, res) => {
                     const v = aq[key];
                     if (v != null && v >= thr) {
                         ev.aqIssues.push(isUk
-                            ? `${label} до ${Math.round(v)} зерн/м³ — алергікам обережно`
-                            : `${label} up to ${Math.round(v)} grains/m³ — caution if allergic`);
+                            ? `${label} до ${Math.round(v)} зерн/м³`
+                            : `${label} up to ${Math.round(v)} grains/m³`);
                     }
                 }
-                if (aq.usAqiMax != null && aq.usAqiMax >= 50) {
+                // AQI badge (US AQI preferred)
+                if (aq.usAqiMax != null && aq.usAqiMax > 50) {
                     ev.eaqi = Math.round(aq.usAqiMax);
                     ev.eaqiBadge = aq.usAqiMax > 150 ? '🔴' : aq.usAqiMax > 100 ? '🟠' : '🟡';
                     if (!ev.aqIssues.length && aq.pm25Max != null) {
@@ -770,7 +793,7 @@ module.exports = async (req, res) => {
                             ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
                             : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
                     }
-                } else if (aq.eaqiMax != null && aq.eaqiMax >= 40) {
+                } else if (aq.eaqiMax != null && aq.eaqiMax > 40) {
                     ev.eaqi = Math.round(aq.eaqiMax);
                     ev.eaqiBadge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
                     if (!ev.aqIssues.length && aq.pm25Max != null) {
