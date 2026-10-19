@@ -419,9 +419,9 @@ module.exports = async (req, res) => {
             const aqUrl =
                 `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${user.lat}&longitude=${user.lon}` +
                 `&hourly=european_aqi,us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust,` +
-                `ammonia,aerosol_optical_depth,carbon_dioxide,methane,` +
-                `alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen,uv_index,` +
-                `pm10_wildfires,total_elementary_carbon,residential_elementary_carbon` +
+                `ammonia,aerosol_optical_depth,methane,` +
+                `alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen,` +
+                `pm10_wildfires,total_elementary_carbon` +
                 `&timezone=auto&forecast_days=7`;
             const aqRes = await axios.get(aqUrl, { timeout: 12000 });
             const h = aqRes.data?.hourly || {};
@@ -437,9 +437,9 @@ module.exports = async (req, res) => {
                         eaqiMax: null, usAqiMax: null,
                         pm25Max: null, pm10Max: null,
                         no2Max: null, o3Max: null, so2Max: null, coMax: null, dustMax: null,
-                        nh3Max: null, aodMax: null, co2Max: null, ch4Max: null, uvAqMax: null,
+                        nh3Max: null, aodMax: null, ch4Max: null,
                         alderMax: null, birchMax: null, grassMax: null, mugwortMax: null, oliveMax: null, ragweedMax: null,
-                        wildfireMax: null, ecTotalMax: null, ecResMax: null
+                        wildfireMax: null, ecTotalMax: null
                     };
                 }
                 const row = omAqByDate[dStr];
@@ -458,9 +458,7 @@ module.exports = async (req, res) => {
                 bump('dustMax', pickMax(h.dust, i));
                 bump('nh3Max', pickMax(h.ammonia, i));
                 bump('aodMax', pickMax(h.aerosol_optical_depth, i));
-                bump('co2Max', pickMax(h.carbon_dioxide, i));
                 bump('ch4Max', pickMax(h.methane, i));
-                bump('uvAqMax', pickMax(h.uv_index, i));
                 bump('alderMax', pickMax(h.alder_pollen, i));
                 bump('birchMax', pickMax(h.birch_pollen, i));
                 bump('grassMax', pickMax(h.grass_pollen, i));
@@ -469,7 +467,6 @@ module.exports = async (req, res) => {
                 bump('ragweedMax', pickMax(h.ragweed_pollen, i));
                 bump('wildfireMax', pickMax(h.pm10_wildfires, i));
                 bump('ecTotalMax', pickMax(h.total_elementary_carbon, i));
-                bump('ecResMax', pickMax(h.residential_elementary_carbon, i));
             }
         } catch (e) {
             console.error('Test forecast Open-Meteo AQ error:', e.message);
@@ -737,11 +734,6 @@ module.exports = async (req, res) => {
                     ev.aqIssues.push(isUk
                         ? `сажа (black carbon) до ${aq.ecTotalMax.toFixed(1)} µg/m³ — дизель/опалення/пожежі`
                         : `black carbon up to ${aq.ecTotalMax.toFixed(1)} µg/m³ — diesel/heating/fires`);
-                }
-                if (aq.ecResMax != null && aq.ecResMax >= 0.8) {
-                    ev.aqIssues.push(isUk
-                        ? `сажа опалення до ${aq.ecResMax.toFixed(1)} µg/m³`
-                        : `heating soot up to ${aq.ecResMax.toFixed(1)} µg/m³`);
                 }
                 if (aq.nh3Max != null && aq.nh3Max >= 10) {
                     ev.aqIssues.push(isUk
@@ -1198,9 +1190,7 @@ module.exports = async (req, res) => {
                 dustMax:  [15, 40, 80, 150],
                 nh3Max:   [10, 20, 50, 100],
                 aodMax:   [0.2, 0.5, 1.0, 2.0],
-                co2Max:   [420, 450, 500, 600],
                 ch4Max:   [1200, 2000, 3000, 5000],
-                uvAqMax:  [2, 5, 7, 10],
                 grassMax:   [30, 50, 100, 200],
                 birchMax:   [30, 50, 100, 200],
                 alderMax:   [30, 50, 100, 200],
@@ -1209,7 +1199,6 @@ module.exports = async (req, res) => {
                 ragweedMax: [20, 40, 80, 150],
                 wildfireMax: [15, 40, 80, 150],
                 ecTotalMax:  [1, 3, 6, 10],
-                ecResMax:    [0.5, 1.5, 3, 6]
             };
             const b = bands[key] || [25, 50, 100, 200];
             if (n <= b[0]) return '🟢';
@@ -1243,9 +1232,7 @@ module.exports = async (req, res) => {
             ['dustMax', isUk ? 'Пил<br><small>dust</small>' : 'Dust<br><small>µg/m³</small>', 1],
             ['nh3Max', 'NH₃<br><small>µg/m³</small>', 1],
             ['aodMax', 'AOD<br><small>550 nm</small>', 3],
-            ['co2Max', 'CO₂<br><small>ppm</small>', 0],
             ['ch4Max', isUk ? 'CH₄<br><small>метан</small>' : 'CH₄<br><small>methane</small>', 0],
-            ['uvAqMax', 'UV<br><small>CAMS</small>', 1],
             ['grassMax', isUk ? 'Пилок<br><small>трави</small>' : 'Pollen<br><small>grass</small>', 0],
             ['birchMax', isUk ? 'Пилок<br><small>береза</small>' : 'Pollen<br><small>birch</small>', 0],
             ['alderMax', isUk ? 'Пилок<br><small>вільха</small>' : 'Pollen<br><small>alder</small>', 0],
@@ -1254,7 +1241,6 @@ module.exports = async (req, res) => {
             ['ragweedMax', isUk ? 'Пилок<br><small>амброзія</small>' : 'Pollen<br><small>ragweed</small>', 0],
             ['wildfireMax', isUk ? 'Пил пожеж<br><small>PM10</small>' : 'Wildfire<br><small>PM10</small>', 1],
             ['ecTotalMax', isUk ? 'Сажа<br><small>EC total</small>' : 'Black carbon<br><small>EC total</small>', 2],
-            ['ecResMax', isUk ? 'Сажа опален.<br><small>EC res</small>' : 'BC heating<br><small>EC res</small>', 2]
         ];
         const aqRows = [
             ...(hasAqiMain ? aqRowsMain : []),

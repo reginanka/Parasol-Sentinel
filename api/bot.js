@@ -2929,9 +2929,9 @@ bot.on("callback_query:data", async (ctx) => {
                 `https://air-quality-api.open-meteo.com/v1/air-quality` +
                 `?latitude=${user.lat}&longitude=${user.lon}` +
                 `&current=european_aqi,us_aqi,pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,dust,` +
-                `ammonia,aerosol_optical_depth,carbon_dioxide,methane,` +
-                `alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen,uv_index,` +
-                `pm10_wildfires,total_elementary_carbon,residential_elementary_carbon` +
+                `ammonia,aerosol_optical_depth,methane,` +
+                `alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen,` +
+                `pm10_wildfires,total_elementary_carbon` +
                 `&timezone=auto`;
 
             const aqRes = await axios.get(url, { timeout: 12000 });
@@ -2995,12 +2995,9 @@ bot.on("callback_query:data", async (ctx) => {
             const dust = n(cur.dust);
             const nh3 = n(cur.ammonia);
             const aod = n(cur.aerosol_optical_depth);
-            const co2 = n(cur.carbon_dioxide);
             const ch4 = n(cur.methane);
-            const uv = n(cur.uv_index);
             const wildfire = n(cur.pm10_wildfires);
             const ecTotal = n(cur.total_elementary_carbon);
-            const ecRes = n(cur.residential_elementary_carbon);
             const pollen = {
                 grass: n(cur.grass_pollen),
                 birch: n(cur.birch_pollen),
@@ -3020,12 +3017,9 @@ bot.on("callback_query:data", async (ctx) => {
             const tierDust = (v) => v == null ? 0 : v > 100 ? 3 : v > 50 ? 2 : v > 20 ? 1 : 0;
             const tierNh3 = (v) => v == null ? 0 : v > 50 ? 3 : v > 20 ? 2 : v > 10 ? 1 : 0;
             const tierAod = (v) => v == null ? 0 : v > 1 ? 3 : v > 0.5 ? 2 : v > 0.25 ? 1 : 0;
-            const tierCo2 = (v) => v == null ? 0 : v > 500 ? 3 : v > 450 ? 2 : v > 430 ? 1 : 0;
             const tierCh4 = (v) => v == null ? 0 : v > 3000 ? 3 : v > 2000 ? 2 : v > 1400 ? 1 : 0;
-            const tierUv = (v) => v == null ? 0 : v > 10 ? 3 : v > 7 ? 2 : v > 5 ? 1 : 0;
             const tierFire = (v) => v == null ? 0 : v > 80 ? 3 : v > 40 ? 2 : v > 15 ? 1 : 0;
             const tierEc = (v) => v == null ? 0 : v > 6 ? 3 : v > 3 ? 2 : v > 1.5 ? 1 : 0;
-            const tierEcRes = (v) => v == null ? 0 : v > 3 ? 3 : v > 1.5 ? 2 : v > 0.8 ? 1 : 0;
             const tierPollen = (v, thr) => v == null ? 0 : v >= thr * 2 ? 3 : v >= thr ? 2 : v >= thr * 0.5 ? 1 : 0;
 
             const tPm25 = tierPm25(pm25);
@@ -3037,12 +3031,9 @@ bot.on("callback_query:data", async (ctx) => {
             const tDust = tierDust(dust);
             const tNh3 = tierNh3(nh3);
             const tAod = tierAod(aod);
-            const tCo2 = tierCo2(co2);
             const tCh4 = tierCh4(ch4);
-            const tUv = tierUv(uv);
             const tFire = tierFire(wildfire);
             const tEc = tierEc(ecTotal);
-            const tEcR = tierEcRes(ecRes);
 
             const pollenMeta = [
                 { key: 'birch', thr: 50, uk: 'береза', en: 'birch' },
@@ -3126,12 +3117,6 @@ bot.on("callback_query:data", async (ctx) => {
                 isUk ? 'Додаткове навантаження на легені й судини.' : 'Extra stress on lungs and blood vessels.',
                 isUk ? 'Обійти жваві дороги в годину пік; вдома менше спалювати.' : 'Avoid busy roads at peak; burn less at home.'
             );
-            addF(tEcR, isUk ? 'Сажа опалення' : 'Heating soot', `${fmt(ecRes, 2)} µg/m³`,
-                isUk ? 'орієнтир: до ~0.8 спокійно, >1.5 — завищено' : 'guide: up to ~0.8 calm, >1.5 elevated',
-                isUk ? 'Сажа переважно від житлового опалення (дрова, вугілля, пічки), не від заводу «взагалі».' : 'Soot mainly from home heating (wood, coal, stoves), not “industry in general”.',
-                isUk ? 'У сезон опалення ввечері повітря біля приватного сектору може бути гіршим.' : 'In heating season evenings, air near private houses can be worse.',
-                isUk ? 'Коротше провітрювання з вулиці ввечері; FFP2 при довгій прогулянці.' : 'Shorter evening ventilation from street; FFP2 on long walks.'
-            );
             addF(tNh3, 'NH₃', `${fmt(nh3)} µg/m³`,
                 isUk ? 'орієнтир: до ~10 спокійно, >20 — завищено' : 'guide: up to ~10 calm, >20 elevated',
                 isUk ? 'Аміак — здебільшого сільське господарство (ферми, добрива), у моделі переважно Європа.' : 'Ammonia — mostly farming (livestock, fertilizer); model mainly Europe.',
@@ -3143,19 +3128,6 @@ bot.on("callback_query:data", async (ctx) => {
                 isUk ? 'Оптична товщина аерозолів — наскільки повітря «мутне» через пил, дим, смог (не окремий газ).' : 'Aerosol optical depth — how hazy the air is from dust/smoke/smog (not a single gas).',
                 isUk ? 'Гірша видимість і часто той самий дискомфорт, що й від пилу/диму.' : 'Poorer visibility and often the same discomfort as dust/smoke.',
                 isUk ? 'Орієнтуйтесь також на PM і «пил пожеж»; при високому AOD менше навантаження надворі.' : 'Also check PM and wildfire dust; high AOD → less outdoor exertion.'
-            );
-            addF(tUv, 'UV', fmt(uv, 1),
-                isUk ? '0–2 низький, 3–5 помірний, 6–7 високий, 8+ дуже високий' : '0–2 low, 3–5 moderate, 6–7 high, 8+ very high',
-                isUk ? 'Ультрафіолет з урахуванням хмар (CAMS), не «радіація» в сенсі аварії.' : 'Ultraviolet with clouds (CAMS) — not nuclear radiation.',
-                isUk ? 'Опіки шкіри, навантаження на очі; для рослин — ризик опіку листа.' : 'Skin burns, eye strain; plants risk leaf scorch.',
-                isUk ? 'SPF, капелюх, тінь 11:00–16:00.' : 'SPF, hat, shade 11:00–16:00.'
-            );
-            // CO2/CH4 — рідко «забруднення для здоровʼя» на рівні AQI; лише якщо сильно
-            addF(tCo2 >= 2 ? tCo2 : 0, 'CO₂', `${fmt(co2, 0)} ppm`,
-                isUk ? 'глобальний фон ~420 ppm; місто часто 430–460 — це не «газ у кімнаті»' : 'global background ~420 ppm; cities often 430–460 — not indoor room CO₂',
-                isUk ? 'Вуглекислий газ у відкритому повітрі — кліматичний/фоновий показник, не класичний AQI-забрудник.' : 'Outdoor CO₂ is a climate/background indicator, not a classic AQI pollutant.',
-                isUk ? 'На вулиці майже не впливає на самопочуття так, як PM чи озон.' : 'Outdoors it rarely affects how you feel like PM or ozone do.',
-                isUk ? 'Не плутайте з CO₂ у погано провітреній кімнаті — тут модель зовнішнього повітря.' : 'Do not confuse with CO₂ in a stuffy room — this is outdoor model air.'
             );
             addF(tCh4 >= 2 ? tCh4 : 0, 'CH₄', `${fmt(ch4, 0)} µg/m³`,
                 isUk ? 'типовий фон сотні–тисячі µg/m³; різкий стрибок — локальне джерело' : 'typical background hundreds–thousands µg/m³; sharp jump — local source',
@@ -3257,18 +3229,12 @@ bot.on("callback_query:data", async (ctx) => {
                   meaning: isUk ? 'З ферм і добрив; при високому рівні подразнює очі й дихання (модель — переважно Європа).' : 'From farms and fertilizer; at high levels irritates eyes/airways (model mainly Europe).' },
                 { name: 'AOD', val: fmt(aod, 3), unit: '', badge: badgeTier(tAod), status: statusPoll(tAod),
                   meaning: isUk ? 'Наскільки повітря «мутне» через аерозолі (пил, дим, смог). Не газ, а показник імли.' : 'How hazy the air is from aerosols (dust, smoke, smog). Not a gas — a haze measure.' },
-                { name: 'CO₂', val: fmt(co2, 0), unit: 'ppm', badge: badgeTier(tCo2), status: statusPoll(tCo2),
-                  meaning: isUk ? 'Вуглекислий газ надворі (клімат/фон). Не плутати з CO₂ у задушливій кімнаті; на прогулянку майже не впливає.' : 'Outdoor CO₂ (climate/background). Not room CO₂; rarely matters for a walk.' },
                 { name: 'CH₄', val: fmt(ch4, 0), unit: 'µg/m³', badge: badgeTier(tCh4), status: statusPoll(tCh4),
                   meaning: isUk ? 'Метан (звалища, газ, агро). Довідково; для «чим дихати зараз» важливіші PM і озон.' : 'Methane (landfills, gas, farming). Informational; PM and ozone matter more for breathing now.' },
-                { name: 'UV', val: fmt(uv, 1), unit: '', badge: badgeTier(tUv), status: statusPoll(tUv),
-                  meaning: isUk ? 'Ультрафіолет з урахуванням хмар. Ризик опіків шкіри; не «радіація» від аварії.' : 'Ultraviolet with clouds. Skin-burn risk; not nuclear radiation.' },
                 { name: isUk ? 'Пил пожеж' : 'Wildfire PM', val: fmt(wildfire, 1), unit: 'µg/m³', badge: badgeTier(tFire), status: statusPoll(tFire),
                   meaning: isUk ? 'Оцінка пилу саме від лісових/степових пожеж (дим може йти здалеку).' : 'Dust estimate from wildfires (smoke can travel far).' },
                 { name: isUk ? 'Сажа (EC)' : 'Black carbon', val: fmt(ecTotal, 2), unit: 'µg/m³', badge: badgeTier(tEc), status: statusPoll(tEc),
                   meaning: isUk ? 'Чорна сажа (дизель, пічки, пожежі) — дрібні частинки, погані для легень і судин.' : 'Black soot (diesel, stoves, fires) — fine particles, hard on lungs and vessels.' },
-                { name: isUk ? 'Сажа опалення' : 'BC heating', val: fmt(ecRes, 2), unit: 'µg/m³', badge: badgeTier(tEcR), status: statusPoll(tEcR),
-                  meaning: isUk ? 'Сажа саме від домівок (дрова, вугілля, пічки), часто сильніша ввечері в сезон опалення.' : 'Soot from homes (wood, coal, stoves), often stronger on heating-season evenings.' }
             ];
             for (const pa of pollenActive) {
                 extRows.push({
