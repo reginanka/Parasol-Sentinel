@@ -895,10 +895,9 @@ module.exports = async (req, res) => {
             }
         });
 
-        // --- Короткий аналіз якості повітря (перші 3 дні) — під таблицею ---
-        const aqNearLines = [];
-        nearEvents.forEach((ev, idx) => {
-            if (ev.eaqi == null && !(ev.aqIssues && ev.aqIssues.length)) return;
+        // --- Аналіз AQ: завтра (+ порада в <cite>), 2–3 день окремим блоком без спільної поради ---
+        const formatAqDayLine = (ev, idx) => {
+            if (ev.eaqi == null && !(ev.aqIssues && ev.aqIssues.length)) return null;
             const shortDate = fmtShort(ev.dateObj);
             let labelDay;
             if (idx === 0) {
@@ -913,7 +912,6 @@ module.exports = async (req, res) => {
             const detail = ev.aqIssues.length
                 ? `: ${ev.aqIssues.slice(0, 5).join(', ')}`
                 : '';
-            // Індекси: US і/або EAQI (EAQI з «задовільно» >20)
             const idxBits = [];
             if (ev.usAqi != null && ev.usAqi > 50) {
                 idxBits.push(`US AQI ${ev.usAqi} ${ev.usAqiBadge}`);
@@ -925,37 +923,42 @@ module.exports = async (req, res) => {
             }
             if (idxBits.length) {
                 const prefix = idx === 0
-                    ? (isUk ? `${labelDay} — ` : `${labelDay} — `)
+                    ? `${labelDay} — `
                     : (isUk ? `${labelDay} — якість повітря ` : `${labelDay} — air quality `);
-                aqNearLines.push(`${prefix}${idxBits.join(' · ')}${detail}`);
-            } else if (ev.aqIssues.length) {
-                aqNearLines.push(`${labelDay} — ${ev.aqIssues.slice(0, 5).join(', ')}`);
+                return `${prefix}${idxBits.join(' · ')}${detail}`;
             }
+            if (ev.aqIssues.length) return `${labelDay} — ${ev.aqIssues.slice(0, 5).join(', ')}`;
+            return null;
+        };
+
+        let aqTomorrowLine = null;
+        const aqLaterLines = [];
+        nearEvents.forEach((ev, idx) => {
+            const line = formatAqDayLine(ev, idx);
+            if (!line) return;
+            if (idx === 0) aqTomorrowLine = line;
+            else aqLaterLines.push(line);
         });
 
-        // Практична підказка для користувача (що робити з цим повітрям)
+        // Порада лише на ЗАВТРА
         let aqCiteText = '';
-        if (aqNearLines.length) {
-            const worstUs = Math.max(0, ...nearEvents.map(e => e.usAqi || 0));
-            const worstEu = Math.max(0, ...nearEvents.map(e => e.euAqi || 0));
-            const worstAqi = Math.max(0, ...nearEvents.map(e => e.eaqi || 0));
-            const allIssues = nearEvents.flatMap(e => e.aqIssues || []).join(' ').toLowerCase();
+        const tomEv = nearEvents[0];
+        if (tomEv && (aqTomorrowLine || (tomEv.aqIssues && tomEv.aqIssues.length))) {
+            const worstUs = tomEv.usAqi || 0;
+            const worstEu = tomEv.euAqi || 0;
+            const allIssues = (tomEv.aqIssues || []).join(' ').toLowerCase();
             const hasPollen = /пилок|pollen/.test(allIssues);
             const hasDustOrPm = /пил|pm2\.5|pm10|dust|смог|smog|сажа|black carbon|пожеж|wildfire/.test(allIssues);
             const hasAod = /aod|каламутн|імла|haze/.test(allIssues);
             const hasOzone = /озон|o₃|o3|ozone/.test(allIssues);
             const hasMethane = /метан|ch₄|ch4|methane/.test(allIssues);
             const hasNo2 = /no₂|no2|азот/.test(allIssues);
-            const maxCh4 = Math.max(0, ...nearEvents.map(e => {
-                const dStr = e.dateObj instanceof Date
-                    ? `${e.dateObj.getFullYear()}-${String(e.dateObj.getMonth() + 1).padStart(2, '0')}-${String(e.dateObj.getDate()).padStart(2, '0')}`
-                    : '';
-                return omAqByDate[dStr]?.ch4Max || 0;
-            }));
+            const dStrTom = tomEv.dateObj instanceof Date
+                ? `${tomEv.dateObj.getFullYear()}-${String(tomEv.dateObj.getMonth() + 1).padStart(2, '0')}-${String(tomEv.dateObj.getDate()).padStart(2, '0')}`
+                : '';
+            const maxCh4 = omAqByDate[dStrTom]?.ch4Max || 0;
 
-            // База за US AQI + EAQI + окремі поради по метриках
             const parts = [];
-
             if (worstUs > 150 || worstEu > 80) {
                 parts.push(isUk
                     ? '🔴 Повітря шкідливе: залишайтесь вдома, вікна зачиніть, за можливості увімкніть очищувач. Надворі — маска FFP2.'
@@ -969,7 +972,6 @@ module.exports = async (req, res) => {
                     ? '🟡 Помірне забруднення: для більшості безпечно, але чутливим людям краще скоротити довгі прогулянки.'
                     : '🟡 Moderate: fine for most people; sensitive groups may want shorter outdoor time.');
             } else if (worstEu > 20) {
-                // EAQI «задовільно» (20–40) без підвищеного US
                 parts.push(isUk
                     ? '🟡 Якість повітря задовільна (EAQI): для більшості ок; чутливим краще не перенавантажуватись довгими прогулянками.'
                     : '🟡 Fair air quality (EAQI): fine for most; sensitive groups may prefer lighter outdoor activity.');
@@ -980,7 +982,6 @@ module.exports = async (req, res) => {
                     ? 'Пилок: алергікам слідкувати за симптомами; після прогулянки — змінити одяг і помити обличчя.'
                     : 'Pollen: allergy sufferers — watch symptoms; change clothes and wash face after being outside.');
             }
-            // Пил/смог і імла (AOD) — одна порада, без дублювання «провітрювати…»
             if (hasDustOrPm && hasAod) {
                 parts.push(isUk
                     ? 'Пил/смог і імла: видимість гірша — зменште навантаження надворі; провітрювати після дощу або пізно ввечері; при сильному смогу — вікна зачинити.'
@@ -1468,13 +1469,16 @@ module.exports = async (req, res) => {
 
         fullHtml += tableHtml;
 
-        // Короткий аналіз метрик якості повітря (перші 3 дні) — під головною таблицею, над детальною таблицею AQ
-        if (aqNearLines.length) {
-            const aqBlockHtml = aqNearLines.map(l => escapeHTML(l)).join('<br>');
+        // AQ: завтра + порада; 2–3 день окремим блоком без спільної поради
+        if (aqTomorrowLine) {
             const citePart = aqCiteText
                 ? `<br><cite>${escapeHTML(aqCiteText)}</cite>`
                 : '';
-            fullHtml += `\n\n<blockquote>${aqBlockHtml}${citePart}</blockquote>`;
+            fullHtml += `\n\n<blockquote>${escapeHTML(aqTomorrowLine)}${citePart}</blockquote>`;
+        }
+        if (aqLaterLines.length) {
+            const laterHtml = aqLaterLines.map(l => escapeHTML(l)).join('<br>');
+            fullHtml += `\n\n<blockquote>${laterHtml}</blockquote>`;
         }
 
         if (aqDetailsHtml) {
