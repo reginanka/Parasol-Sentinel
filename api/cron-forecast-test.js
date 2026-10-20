@@ -790,19 +790,40 @@ module.exports = async (req, res) => {
                         ? `${label} ${level} (до ${Math.round(v)} зерн/м³)`
                         : `${label} ${level} (up to ${Math.round(v)} grains/m³)`);
                 }
-                // AQI badge (US AQI preferred)
-                if (aq.usAqiMax != null && aq.usAqiMax > 50) {
-                    ev.eaqi = Math.round(aq.usAqiMax);
-                    ev.eaqiBadge = aq.usAqiMax > 150 ? '🔴' : aq.usAqiMax > 100 ? '🟠' : '🟡';
-                    if (!ev.aqIssues.length && aq.pm25Max != null) {
-                        ev.aqIssues.push(isUk
-                            ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
-                            : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
+                // US AQI + EAQI — враховуємо обидва
+                // US: текст з >50; EAQI: з >20 («задовільно» і гірше)
+                const us = aq.usAqiMax != null ? Number(aq.usAqiMax) : null;
+                const eu = aq.eaqiMax != null ? Number(aq.eaqiMax) : null;
+                if (us != null && !Number.isNaN(us)) {
+                    ev.usAqi = Math.round(us);
+                    ev.usAqiBadge = us > 150 ? '🔴' : us > 100 ? '🟠' : us > 50 ? '🟡' : '🟢';
+                }
+                if (eu != null && !Number.isNaN(eu)) {
+                    ev.euAqi = Math.round(eu);
+                    // 0–20 добре, 20–40 задовільно, 40–60 помірно, 60–80 погано, 80+ дуже погано
+                    ev.euAqiBadge = eu > 80 ? '🔴' : eu > 60 ? '🟠' : eu > 20 ? '🟡' : '🟢';
+                    ev.euAqiLabel = eu > 80
+                        ? (isUk ? 'дуже погано' : 'very poor')
+                        : eu > 60
+                            ? (isUk ? 'погано' : 'poor')
+                            : eu > 40
+                                ? (isUk ? 'помірно' : 'moderate')
+                                : eu > 20
+                                    ? (isUk ? 'задовільно' : 'fair')
+                                    : (isUk ? 'добре' : 'good');
+                }
+                const usElev = us != null && us > 50;
+                const euElev = eu != null && eu > 20;
+                if (usElev || euElev) {
+                    // якір для worstAqi / cite (US якщо elevated, інакше умовний бал з EAQI)
+                    if (usElev) {
+                        ev.eaqi = Math.round(us);
+                        ev.eaqiBadge = ev.usAqiBadge;
+                    } else {
+                        ev.eaqi = eu > 80 ? 160 : eu > 60 ? 120 : eu > 40 ? 70 : 55;
+                        ev.eaqiBadge = ev.euAqiBadge;
                     }
-                } else if (aq.eaqiMax != null && aq.eaqiMax > 40) {
-                    ev.eaqi = Math.round(aq.eaqiMax);
-                    ev.eaqiBadge = aq.eaqiMax > 80 ? '🔴' : aq.eaqiMax > 60 ? '🟠' : '🟡';
-                    if (!ev.aqIssues.length && aq.pm25Max != null) {
+                    if (!ev.aqIssues.length && aq.pm25Max != null && (usElev || (eu != null && eu > 40))) {
                         ev.aqIssues.push(isUk
                             ? `дрібний пил/смог PM2.5 до ${aq.pm25Max.toFixed(0)} µg/m³`
                             : `fine dust/smog PM2.5 up to ${aq.pm25Max.toFixed(0)} µg/m³`);
@@ -892,18 +913,22 @@ module.exports = async (req, res) => {
             const detail = ev.aqIssues.length
                 ? `: ${ev.aqIssues.slice(0, 5).join(', ')}`
                 : '';
-            if (ev.eaqi != null) {
-                // Перший день — компактніше «AQI N 🟡: ...», решта — з «якість повітря»
-                if (idx === 0) {
-                    aqNearLines.push(isUk
-                        ? `${labelDay} — AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
-                        : `${labelDay} — AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
-                } else {
-                    aqNearLines.push(isUk
-                        ? `${labelDay} — якість повітря AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`
-                        : `${labelDay} — air quality AQI ${ev.eaqi} ${ev.eaqiBadge}${detail}`);
-                }
-            } else {
+            // Індекси: US і/або EAQI (EAQI з «задовільно» >20)
+            const idxBits = [];
+            if (ev.usAqi != null && ev.usAqi > 50) {
+                idxBits.push(`US AQI ${ev.usAqi} ${ev.usAqiBadge}`);
+            }
+            if (ev.euAqi != null && ev.euAqi > 20) {
+                idxBits.push(isUk
+                    ? `EAQI ${ev.euAqi} ${ev.euAqiBadge} (${ev.euAqiLabel})`
+                    : `EAQI ${ev.euAqi} ${ev.euAqiBadge} (${ev.euAqiLabel})`);
+            }
+            if (idxBits.length) {
+                const prefix = idx === 0
+                    ? (isUk ? `${labelDay} — ` : `${labelDay} — `)
+                    : (isUk ? `${labelDay} — якість повітря ` : `${labelDay} — air quality `);
+                aqNearLines.push(`${prefix}${idxBits.join(' · ')}${detail}`);
+            } else if (ev.aqIssues.length) {
                 aqNearLines.push(`${labelDay} — ${ev.aqIssues.slice(0, 5).join(', ')}`);
             }
         });
@@ -911,6 +936,8 @@ module.exports = async (req, res) => {
         // Практична підказка для користувача (що робити з цим повітрям)
         let aqCiteText = '';
         if (aqNearLines.length) {
+            const worstUs = Math.max(0, ...nearEvents.map(e => e.usAqi || 0));
+            const worstEu = Math.max(0, ...nearEvents.map(e => e.euAqi || 0));
             const worstAqi = Math.max(0, ...nearEvents.map(e => e.eaqi || 0));
             const allIssues = nearEvents.flatMap(e => e.aqIssues || []).join(' ').toLowerCase();
             const hasPollen = /пилок|pollen/.test(allIssues);
@@ -926,21 +953,26 @@ module.exports = async (req, res) => {
                 return omAqByDate[dStr]?.ch4Max || 0;
             }));
 
-            // База за AQI + окремі поради по метриках (можна кілька одночасно)
+            // База за US AQI + EAQI + окремі поради по метриках
             const parts = [];
 
-            if (worstAqi > 150) {
+            if (worstUs > 150 || worstEu > 80) {
                 parts.push(isUk
                     ? '🔴 Повітря шкідливе: залишайтесь вдома, вікна зачиніть, за можливості увімкніть очищувач. Надворі — маска FFP2.'
                     : '🔴 Unhealthy air: stay indoors, close windows, use a purifier if you have one. Outdoors — FFP2 mask.');
-            } else if (worstAqi > 100) {
+            } else if (worstUs > 100 || worstEu > 60) {
                 parts.push(isUk
                     ? '🟠 Нездорове для чутливих: астматикам, дітям і літнім краще обмежити час надворі; вікна зачиняти в пік забруднення.'
                     : '🟠 Unhealthy for sensitive groups: limit outdoor time if you have asthma/children/elderly; keep windows closed during peak pollution.');
-            } else if (worstAqi > 50) {
+            } else if (worstUs > 50 || worstEu > 40) {
                 parts.push(isUk
                     ? '🟡 Помірне забруднення: для більшості безпечно, але чутливим людям краще скоротити довгі прогулянки.'
                     : '🟡 Moderate: fine for most people; sensitive groups may want shorter outdoor time.');
+            } else if (worstEu > 20) {
+                // EAQI «задовільно» (20–40) без підвищеного US
+                parts.push(isUk
+                    ? '🟡 Якість повітря задовільна (EAQI): для більшості ок; чутливим краще не перенавантажуватись довгими прогулянками.'
+                    : '🟡 Fair air quality (EAQI): fine for most; sensitive groups may prefer lighter outdoor activity.');
             }
 
             if (hasPollen) {
