@@ -942,12 +942,16 @@ module.exports = async (req, res) => {
                     ? 'Пилок: алергікам слідкувати за симптомами; після прогулянки — змінити одяг і помити обличчя.'
                     : 'Pollen: allergy sufferers — watch symptoms; change clothes and wash face after being outside.');
             }
-            if (hasDustOrPm) {
+            // Пил/смог і імла (AOD) — одна порада, без дублювання «провітрювати…»
+            if (hasDustOrPm && hasAod) {
+                parts.push(isUk
+                    ? 'Пил/смог і імла: видимість гірша — зменште навантаження надворі; провітрювати після дощу або пізно ввечері; при сильному смогу — вікна зачинити.'
+                    : 'Dust/smog and haze: poorer visibility — ease outdoor exertion; air rooms after rain or late evening; if heavy smog — keep windows closed.');
+            } else if (hasDustOrPm) {
                 parts.push(isUk
                     ? 'Пил/смог: провітрювати краще після дощу або пізно ввечері/вночі; при сильному смогу — вікна зачинити.'
                     : 'Dust/smog: air rooms after rain or late evening/night; if heavy smog — keep windows closed.');
-            }
-            if (hasAod) {
+            } else if (hasAod) {
                 parts.push(isUk
                     ? 'Імла (каламутність): видимість гірша — зменште навантаження надворі; провітрювати після дощу або ввечері.'
                     : 'Haze: poorer visibility — ease outdoor exertion; air rooms after rain or in the evening.');
