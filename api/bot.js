@@ -3017,7 +3017,8 @@ bot.on("callback_query:data", async (ctx) => {
             const tierDust = (v) => v == null ? 0 : v > 100 ? 3 : v > 50 ? 2 : v > 20 ? 1 : 0;
             const tierNh3 = (v) => v == null ? 0 : v > 50 ? 3 : v > 20 ? 2 : v > 10 ? 1 : 0;
             const tierAod = (v) => v == null ? 0 : v > 1 ? 3 : v > 0.5 ? 2 : v > 0.25 ? 1 : 0;
-            const tierCh4 = (v) => v == null ? 0 : v > 3000 ? 3 : v > 2000 ? 2 : v > 1400 ? 1 : 0;
+            // CH₄ µg/m³: фон ≈1300–1400; «увага» лише помітно вище фону
+            const tierCh4 = (v) => v == null ? 0 : v > 4000 ? 3 : v > 2500 ? 2 : v > 1800 ? 1 : 0;
             const tierFire = (v) => v == null ? 0 : v > 80 ? 3 : v > 40 ? 2 : v > 15 ? 1 : 0;
             const tierEc = (v) => v == null ? 0 : v > 6 ? 3 : v > 3 ? 2 : v > 1.5 ? 1 : 0;
             const tierPollen = (v, thr) => v == null ? 0 : v >= thr * 2 ? 3 : v >= thr ? 2 : v >= thr * 0.5 ? 1 : 0;
