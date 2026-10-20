@@ -1315,9 +1315,10 @@ module.exports = async (req, res) => {
             rows.push(`<tr><td align="left" valign="middle"><b>🧲 ${isUk ? 'Магн.<br>бурі' : 'Geomag'}</b></td>${cells}</tr>`);
         }
 
-        // --- Open-Meteo Air Quality: окремий згортальний блок (не в головній таблиці погоди) ---
+        // --- Open-Meteo Air Quality: згортальний блок лише за опціями aqi_main / aqi_ext ---
+        // Summary (blockquote) вище — завжди по всіх метриках; таблиця — лише вибране
         let aqDetailsHtml = '';
-        {
+        if (hasAqiMain || hasAqiExt) {
             const aqBadgeFor = (key, v) => {
                 if (v == null || Number.isNaN(Number(v))) return '';
                 const n = Number(v);
@@ -1333,9 +1334,7 @@ module.exports = async (req, res) => {
                     dustMax:  [15, 40, 80, 150],
                     nh3Max:   [10, 20, 50, 100],
                     aodMax:   [0.2, 0.5, 1.0, 2.0],
-                    // CH₄ µg/m³: фон ~1300–1400; 🟡 лише помітно вище фону
                     ch4Max:   [1800, 2500, 4000, 6000],
-                    // Пилок: 🟢 до помірного, 🟡 помірний, 🟠 високий, 🔴 дуже високий
                     grassMax:   [20, 50, 150, 300],
                     birchMax:   [11, 70, 250, 500],
                     alderMax:   [11, 70, 250, 500],
@@ -1361,12 +1360,15 @@ module.exports = async (req, res) => {
                 return `<td align="center" valign="middle">${badge}<br>${n}</td>`;
             };
 
-            // Усі метрики повітря в одному блоці (тестовий прогноз)
-            const aqRowsAll = [
-                ['eaqiMax', isUk ? 'EAQI<br><small>OM max</small>' : 'EAQI<br><small>OM max</small>', 0],
-                ['usAqiMax', isUk ? 'US AQI<br><small>OM max</small>' : 'US AQI<br><small>OM max</small>', 0],
+            // Основні (як у prod cron-forecast.js)
+            const aqRowsMain = [
+                ['eaqiMax', 'EAQI<br><small>OM max</small>', 0],
+                ['usAqiMax', 'US AQI<br><small>OM max</small>', 0],
                 ['pm25Max', 'PM2.5<br><small>µg/m³</small>', 1],
-                ['pm10Max', 'PM10<br><small>µg/m³</small>', 1],
+                ['pm10Max', 'PM10<br><small>µg/m³</small>', 1]
+            ];
+            // Розширені: prod + тестові (AOD, CH₄, пилок, сажа, пожежі…)
+            const aqRowsExt = [
                 ['no2Max', 'NO₂<br><small>µg/m³</small>', 1],
                 ['o3Max', 'O₃<br><small>µg/m³</small>', 1],
                 ['so2Max', 'SO₂<br><small>µg/m³</small>', 1],
@@ -1384,17 +1386,22 @@ module.exports = async (req, res) => {
                 ['oliveMax', isUk ? 'Пилок<br><small>оливка</small>' : 'Pollen<br><small>olive</small>', 0],
                 ['ragweedMax', isUk ? 'Пилок<br><small>амброзія</small>' : 'Pollen<br><small>ragweed</small>', 0]
             ];
+            const aqRows = [
+                ...(hasAqiMain ? aqRowsMain : []),
+                ...(hasAqiExt ? aqRowsExt : [])
+            ];
 
-            const aqBodyRows = aqRowsAll.map(([key, label, dec]) => {
-                const cells = userForecast.map((day) => aqCell(day, key, dec)).join('');
-                return `<tr><td align="left" valign="middle"><b>${label}</b></td>${cells}</tr>`;
-            }).join('\n');
+            if (aqRows.length) {
+                const aqBodyRows = aqRows.map(([key, label, dec]) => {
+                    const cells = userForecast.map((day) => aqCell(day, key, dec)).join('');
+                    return `<tr><td align="left" valign="middle"><b>${label}</b></td>${cells}</tr>`;
+                }).join('\n');
 
-            const aqSummary = isUk
-                ? '🍃 Якість повітря ‖ натисни, щоб розгорнути'
-                : '🍃 Air quality ‖ tap to expand';
+                const aqSummary = isUk
+                    ? '🍃 Якість повітря ‖ натисни, щоб розгорнути'
+                    : '🍃 Air quality ‖ tap to expand';
 
-            aqDetailsHtml = `
+                aqDetailsHtml = `
 <details>
 <summary><b>${aqSummary}</b></summary>
 <table bordered striped>
@@ -1409,6 +1416,7 @@ module.exports = async (req, res) => {
   </tbody>
 </table>
 </details>`.trim();
+            }
         }
 
         const tableHtml = `
