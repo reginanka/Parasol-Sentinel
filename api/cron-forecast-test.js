@@ -1478,7 +1478,7 @@ module.exports = async (req, res) => {
         }
         if (aqLaterLines.length) {
             const laterHtml = aqLaterLines.map(l => escapeHTML(l)).join('<br>');
-            fullHtml += `\n\n<blockquote>${laterHtml}</blockquote>`;
+            fullHtml += `\n\n<footer>${laterHtml}</footer>`;
         }
 
         if (aqDetailsHtml) {
