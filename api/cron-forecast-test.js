@@ -767,22 +767,28 @@ module.exports = async (req, res) => {
                         ? `CO до ${Math.round(aq.coMax)} µg/m³`
                         : `CO up to ${Math.round(aq.coMax)} µg/m³`);
                 }
-                // Пилок — пороги = початок 🟡 з таблиці
+                // Пилок: з «помірного» (MeteoSwiss / EAACI), зерн/м³
                 const pollenTips = [
-                    ['birchMax', 30, isUk ? 'пилок берези' : 'birch pollen'],
-                    ['alderMax', 30, isUk ? 'пилок вільхи' : 'alder pollen'],
-                    ['grassMax', 30, isUk ? 'пилок трав' : 'grass pollen'],
-                    ['mugwortMax', 20, isUk ? 'пилок полину' : 'mugwort pollen'],
-                    ['oliveMax', 30, isUk ? 'пилок оливки' : 'olive pollen'],
-                    ['ragweedMax', 20, isUk ? 'пилок амброзії' : 'ragweed pollen']
+                    // [key, modStart, highStart, veryHigh, labelUk, labelEn]
+                    ['birchMax', 11, 70, 250, 'пилок берези', 'birch pollen'],
+                    ['alderMax', 11, 70, 250, 'пилок вільхи', 'alder pollen'],
+                    ['grassMax', 20, 50, 150, 'пилок трав', 'grass pollen'],
+                    ['mugwortMax', 6, 15, 50, 'пилок полину', 'mugwort pollen'],
+                    ['oliveMax', 11, 50, 200, 'пилок оливки', 'olive pollen'],
+                    ['ragweedMax', 6, 11, 40, 'пилок амброзії', 'ragweed pollen']
                 ];
-                for (const [key, thr, label] of pollenTips) {
+                for (const [key, modT, highT, vhT, labelUk, labelEn] of pollenTips) {
                     const v = aq[key];
-                    if (v != null && v >= thr) {
-                        ev.aqIssues.push(isUk
-                            ? `${label} до ${Math.round(v)} зерн/м³`
-                            : `${label} up to ${Math.round(v)} grains/m³`);
-                    }
+                    if (v == null || v < modT) continue;
+                    const label = isUk ? labelUk : labelEn;
+                    const level = v >= vhT
+                        ? (isUk ? 'дуже високий' : 'very high')
+                        : v >= highT
+                            ? (isUk ? 'високий' : 'high')
+                            : (isUk ? 'помірний' : 'moderate');
+                    ev.aqIssues.push(isUk
+                        ? `${label} ${level} (до ${Math.round(v)} зерн/м³)`
+                        : `${label} ${level} (up to ${Math.round(v)} grains/m³)`);
                 }
                 // AQI badge (US AQI preferred)
                 if (aq.usAqiMax != null && aq.usAqiMax > 50) {
@@ -1297,12 +1303,13 @@ module.exports = async (req, res) => {
                     aodMax:   [0.2, 0.5, 1.0, 2.0],
                     // CH₄ µg/m³: фон ~1300–1400; 🟡 лише помітно вище фону
                     ch4Max:   [1800, 2500, 4000, 6000],
-                    grassMax:   [30, 50, 100, 200],
-                    birchMax:   [30, 50, 100, 200],
-                    alderMax:   [30, 50, 100, 200],
-                    mugwortMax: [20, 40, 80, 150],
-                    oliveMax:   [30, 50, 100, 200],
-                    ragweedMax: [20, 40, 80, 150],
+                    // Пилок: 🟢 до помірного, 🟡 помірний, 🟠 високий, 🔴 дуже високий
+                    grassMax:   [20, 50, 150, 300],
+                    birchMax:   [11, 70, 250, 500],
+                    alderMax:   [11, 70, 250, 500],
+                    mugwortMax: [6, 15, 50, 100],
+                    oliveMax:   [11, 50, 200, 400],
+                    ragweedMax: [6, 11, 40, 80],
                     wildfireMax: [15, 40, 80, 150],
                     ecTotalMax:  [1, 3, 6, 10]
                 };

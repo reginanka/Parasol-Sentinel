@@ -3021,7 +3021,31 @@ bot.on("callback_query:data", async (ctx) => {
             const tierCh4 = (v) => v == null ? 0 : v > 4000 ? 3 : v > 2500 ? 2 : v > 1800 ? 1 : 0;
             const tierFire = (v) => v == null ? 0 : v > 80 ? 3 : v > 40 ? 2 : v > 15 ? 1 : 0;
             const tierEc = (v) => v == null ? 0 : v > 6 ? 3 : v > 3 ? 2 : v > 1.5 ? 1 : 0;
-            const tierPollen = (v, thr) => v == null ? 0 : v >= thr * 2 ? 3 : v >= thr ? 2 : v >= thr * 0.5 ? 1 : 0;
+            // Пилок зерн/м³: low / moderate / high / very high (MeteoSwiss / EAACI)
+            // bands: [modStart, highStart, veryHighStart]
+            const pollenBands = {
+                birch:   [11, 70, 250],
+                alder:   [11, 70, 250],
+                grass:   [20, 50, 150],
+                mugwort: [6, 15, 50],
+                olive:   [11, 50, 200],
+                ragweed: [6, 11, 40]
+            };
+            const tierPollen = (v, key) => {
+                if (v == null || Number.isNaN(Number(v))) return 0;
+                const n = Number(v);
+                const b = pollenBands[key] || [20, 50, 150];
+                if (n >= b[2]) return 3;
+                if (n >= b[1]) return 2;
+                if (n >= b[0]) return 1;
+                return 0;
+            };
+            const statusPollen = (tier) => {
+                if (tier >= 3) return isUk ? '🔴 дуже високий' : '🔴 very high';
+                if (tier >= 2) return isUk ? '🟠 високий' : '🟠 high';
+                if (tier >= 1) return isUk ? '🟡 помірний' : '🟡 moderate';
+                return isUk ? '🟢 низький' : '🟢 low';
+            };
 
             const tPm25 = tierPm25(pm25);
             const tPm10 = tierPm10(pm10);
@@ -3036,21 +3060,25 @@ bot.on("callback_query:data", async (ctx) => {
             const tFire = tierFire(wildfire);
             const tEc = tierEc(ecTotal);
 
+            // Усі 6 видів завжди в таблиці (навіть 0)
             const pollenMeta = [
-                { key: 'birch', thr: 50, uk: 'береза', en: 'birch' },
-                { key: 'alder', thr: 50, uk: 'вільха', en: 'alder' },
-                { key: 'grass', thr: 50, uk: 'трави', en: 'grass' },
-                { key: 'mugwort', thr: 40, uk: 'полин', en: 'mugwort' },
-                { key: 'olive', thr: 50, uk: 'оливка', en: 'olive' },
-                { key: 'ragweed', thr: 40, uk: 'амброзія', en: 'ragweed' }
+                { key: 'birch', uk: 'береза', en: 'birch' },
+                { key: 'alder', uk: 'вільха', en: 'alder' },
+                { key: 'grass', uk: 'трави', en: 'grass' },
+                { key: 'mugwort', uk: 'полин', en: 'mugwort' },
+                { key: 'olive', uk: 'оливка', en: 'olive' },
+                { key: 'ragweed', uk: 'амброзія', en: 'ragweed' }
             ];
             const pollenActive = [];
             for (const pm of pollenMeta) {
                 const v = pollen[pm.key];
-                const tier = tierPollen(v, pm.thr);
-                // null або 0 поза сезоном — не показуємо рядок
-                if (v == null || v <= 0) continue;
-                pollenActive.push({ ...pm, v, tier, name: isUk ? pm.uk : pm.en });
+                const tier = tierPollen(v, pm.key);
+                pollenActive.push({
+                    ...pm,
+                    v: v == null ? null : v,
+                    tier,
+                    name: isUk ? pm.uk : pm.en
+                });
             }
 
             const lvUs = levelUs(usAqi);
@@ -3137,14 +3165,25 @@ bot.on("callback_query:data", async (ctx) => {
                 isUk ? 'Дивіться на PM/AQI; метан — радше довідково.' : 'Rely on PM/AQI; methane is mostly informational.'
             );
             for (const pa of pollenActive) {
-                if (pa.tier <= 0) continue;
+                if (pa.tier <= 0) continue; // поради лише з помірного
+                const b = pollenBands[pa.key] || [20, 50, 150];
+                const levelUk = pa.tier >= 3 ? 'дуже високий' : pa.tier >= 2 ? 'високий' : 'помірний';
+                const levelEn = pa.tier >= 3 ? 'very high' : pa.tier >= 2 ? 'high' : 'moderate';
+                const tipUk = pa.tier >= 2
+                    ? 'Антигістамін за схемою лікаря; вікна зачинити вранці; після вулиці — зміна одягу й душ; менше сушити білизну надворі.'
+                    : 'Слідкувати за симптомами; після прогулянки — помити обличчя/руки, за потреби змінити одяг.';
+                const tipEn = pa.tier >= 2
+                    ? 'Antihistamine as prescribed; keep windows closed in the morning; change clothes and shower after outdoors; avoid drying laundry outside.'
+                    : 'Watch symptoms; after a walk — wash face/hands, change clothes if needed.';
                 addF(pa.tier,
-                    isUk ? `Пилок: ${pa.name}` : `Pollen: ${pa.name}`,
+                    isUk ? `Пилок: ${pa.name} (${levelUk})` : `Pollen: ${pa.name} (${levelEn})`,
                     `${fmt(pa.v, 0)} ${isUk ? 'зерн/м³' : 'grains/m³'}`,
-                    isUk ? 'залежить від виду; умовно «увага» від ~половини сезонного порогу' : 'species-dependent; “watch” from ~half the seasonal threshold',
-                    isUk ? `Алергенний пилок (${pa.name}) у повітрі за моделлю CAMS.` : `Allergenic pollen (${pa.name}) in air per CAMS model.`,
-                    isUk ? 'Нежить, свербіж очей, гірше при астмі / сінній лихоманці.' : 'Runny nose, itchy eyes; worse with asthma / hay fever.',
-                    isUk ? 'Антигістамін за потреби, вікна вранці, після вулиці — зміна одягу/душ.' : 'Antihistamine if needed, morning windows closed, change clothes/shower after outdoors.'
+                    isUk
+                        ? `пороги: помірний ≥${b[0]}, високий ≥${b[1]}, дуже високий ≥${b[2]}`
+                        : `thresholds: moderate ≥${b[0]}, high ≥${b[1]}, very high ≥${b[2]}`,
+                    isUk ? `Алергенний пилок (${pa.name}) за моделлю CAMS.` : `Allergenic pollen (${pa.name}) per CAMS model.`,
+                    isUk ? 'Нежить, свербіж очей; гірше при астмі / сінній лихоманці.' : 'Runny nose, itchy eyes; worse with asthma / hay fever.',
+                    isUk ? tipUk : tipEn
                 );
             }
 
@@ -3238,13 +3277,16 @@ bot.on("callback_query:data", async (ctx) => {
                   meaning: isUk ? 'Чорна сажа (дизель, пічки, пожежі) — дрібні частинки, погані для легень і судин.' : 'Black soot (diesel, stoves, fires) — fine particles, hard on lungs and vessels.' },
             ];
             for (const pa of pollenActive) {
+                const b = pollenBands[pa.key] || [20, 50, 150];
                 extRows.push({
                     name: isUk ? `Пилок (${pa.name})` : `Pollen (${pa.name})`,
-                    val: fmt(pa.v, 0),
+                    val: pa.v == null ? '—' : fmt(pa.v, 0),
                     unit: isUk ? 'зерн/м³' : 'grains/m³',
                     badge: badgeTier(pa.tier),
-                    status: statusPoll(pa.tier),
-                    meaning: isUk ? 'Алергенний пилок цього виду (модель CAMS, Європа, у сезон). Може давати нежить і свербіж очей.' : 'Allergenic pollen of this type (CAMS, Europe, in season). May cause runny nose and itchy eyes.'
+                    status: statusPollen(pa.tier),
+                    meaning: isUk
+                        ? `Алергенний пилок (${pa.name}), CAMS. Помірний ≥${b[0]}, високий ≥${b[1]}, дуже високий ≥${b[2]} зерн/м³.`
+                        : `Allergenic pollen (${pa.name}), CAMS. Moderate ≥${b[0]}, high ≥${b[1]}, very high ≥${b[2]} grains/m³.`
                 });
             }
 
