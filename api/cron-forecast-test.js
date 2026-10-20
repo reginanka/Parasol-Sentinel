@@ -909,6 +909,7 @@ module.exports = async (req, res) => {
             const allIssues = nearEvents.flatMap(e => e.aqIssues || []).join(' ').toLowerCase();
             const hasPollen = /пилок|pollen/.test(allIssues);
             const hasDustOrPm = /пил|pm2\.5|pm10|dust|смог|smog|сажа|black carbon|пожеж|wildfire/.test(allIssues);
+            const hasAod = /aod|каламутн|імла|haze/.test(allIssues);
             const hasOzone = /озон|o₃|o3|ozone/.test(allIssues);
             const hasMethane = /метан|ch₄|ch4|methane/.test(allIssues);
             const hasNo2 = /no₂|no2|азот/.test(allIssues);
@@ -945,6 +946,11 @@ module.exports = async (req, res) => {
                 parts.push(isUk
                     ? 'Пил/смог: провітрювати краще після дощу або пізно ввечері/вночі; при сильному смогу — вікна зачинити.'
                     : 'Dust/smog: air rooms after rain or late evening/night; if heavy smog — keep windows closed.');
+            }
+            if (hasAod) {
+                parts.push(isUk
+                    ? 'Імла (каламутність): видимість гірша — зменште навантаження надворі; провітрювати після дощу або ввечері.'
+                    : 'Haze: poorer visibility — ease outdoor exertion; air rooms after rain or in the evening.');
             }
             if (hasOzone) {
                 parts.push(isUk
