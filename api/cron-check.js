@@ -690,9 +690,11 @@ module.exports = async (req, res) => {
                         const oldSFull = calcStats(oldByHour, 0);
                         const newSFull = calcStats(newByHour, 0);
 
-                        // No baseline for remaining (future) hours today → set silently
-                        // duration > 0 covers hours with precip=0 but prob > threshold
-                        const hasTodayBaseline = Object.keys(oldByHour).length > 0 && (oldS.total > 0 || oldS.duration > 0);
+                        // No baseline for today at all → set silently (first write of the day).
+                        // If evening already wrote hours for this date (even with precip=0),
+                        // treat it as a real baseline so cancellation vs evening plan works.
+                        // duration > 0 covers hours with precip=0 but prob > threshold.
+                        const hasTodayBaseline = Object.keys(oldByHour).length > 0;
                         if (!hasTodayBaseline) {
                             await mergeTodayBaseline();
                         } else {

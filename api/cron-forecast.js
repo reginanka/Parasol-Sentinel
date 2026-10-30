@@ -381,13 +381,14 @@ module.exports = async (req, res) => {
 
                 try {
                     const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${cityInfo.lat}&longitude=${cityInfo.lon}` +
-                        `&hourly=precipitation,soil_temperature_0cm,soil_temperature_6cm` +
+                        `&hourly=precipitation,precipitation_probability,soil_temperature_0cm,soil_temperature_6cm` +
                         `&daily=temperature_2m_mean` +
                         `&timezone=auto&forecast_days=7`;
                     const omRes = await fetchWithRetry(omUrl, { timeout: 18000 }, { retries: 2, baseDelayMs: 1500 });
                     if (omRes.data && omRes.data.hourly) {
                         const allTimes = omRes.data.hourly.time;
                         const allPrecip = omRes.data.hourly.precipitation;
+                        const allProb = omRes.data.hourly.precipitation_probability || [];
                         omSoilTimes = allTimes;
                         omSoil0 = omRes.data.hourly.soil_temperature_0cm || [];
                         omSoil6 = omRes.data.hourly.soil_temperature_6cm || [];
@@ -398,10 +399,15 @@ module.exports = async (req, res) => {
 
                         for (let i = 0; i < allTimes.length; i++) {
                             const t = allTimes[i];
+                            const row = {
+                                time: t,
+                                precip: allPrecip[i] || 0,
+                                prob: allProb[i] != null ? allProb[i] : 0
+                            };
                             if (t.startsWith(tomorrowStr)) {
-                                tomorrowHours.push({ time: t, precip: allPrecip[i] || 0 });
+                                tomorrowHours.push(row);
                             } else if (t.startsWith(todayLocal)) {
-                                todayHoursSeed.push({ time: t, precip: allPrecip[i] || 0 });
+                                todayHoursSeed.push(row);
                             }
                         }
 
